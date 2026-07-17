@@ -386,7 +386,7 @@ const RecentUploadsList: React.FC<{
       {/* Loads from this session, with live progress */}
       {hasActive && (
         <div className="space-y-2">
-          {activeTasks.map((task) => (
+          {[...activeTasks].sort((a, b) => b.id - a.id).map((task) => (
             <div key={task.id} className="p-3 rounded-xl border border-border/40 bg-surface">
               <div className="flex items-center gap-3">
                 {task.status === 'completed' ? (
@@ -921,14 +921,21 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
  className="hidden"
  aria-hidden="true"
  />
- <Button
- variant="ghost"
- size="icon"
- className="h-10 w-10 text-text-secondary hover:bg-muted/50 rounded-full transition-all hover:scale-110"
- onClick={handleOpenUploadDrawer}
- >
- <Upload className="h-5 w-5" />
- </Button>
+  <Tooltip>
+    <TooltipTrigger asChild>
+      <Button
+      variant="ghost"
+      size="icon"
+      className="h-10 w-10 text-text-secondary hover:bg-muted/50 rounded-full transition-all hover:scale-110"
+      onClick={handleOpenUploadDrawer}
+      >
+      <Upload className="h-5 w-5" />
+      </Button>
+    </TooltipTrigger>
+    <TooltipContent side="top">
+      <span>Cargar encuesta</span>
+    </TooltipContent>
+  </Tooltip>
  <Button variant="ghost" size="icon" className="h-10 w-10 text-text-secondary hover:bg-muted/50 rounded-full transition-all hover:scale-110"><RotateCw className="h-5 w-5" /></Button>
  <Button variant="ghost" size="icon" className="h-10 w-10 text-text-secondary hover:bg-muted/50 rounded-full transition-all hover:scale-110"><Filter className="h-5 w-5" /></Button>
  <Button variant="ghost" size="icon" className="h-10 w-10 text-text-secondary hover:bg-muted/50 rounded-full transition-all hover:scale-110"><LayoutGrid className="h-5 w-5" /></Button>
@@ -2103,7 +2110,7 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
 
     {!isUploadTrayMinimized && (
       <div className="px-4 py-3 space-y-3 max-h-[260px] overflow-y-auto">
-        {uploadTasks.map((task) => (
+        {[...uploadTasks].sort((a, b) => b.id - a.id).map((task) => (
           <div key={task.id} className="pb-3 border-b border-border/30 last:border-b-0 last:pb-0">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 flex-1 min-w-0">
