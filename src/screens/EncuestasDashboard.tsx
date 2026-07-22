@@ -24,11 +24,12 @@ import {
   Sparkles,
   Users,
   TrendingUp,
-  HelpCircle,
   Layers,
   PieChart,
   ChevronUp,
   ExternalLink,
+  AlertTriangle,
+  FileSearch,
 } from "lucide-react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/feedback/EmptyState";
@@ -42,7 +43,10 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { DatePicker } from "@/components/date/DatePicker";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import {
-  parseSurveyFiles,
+  analyzeUploaded,
+  findExistingDuplicate,
+  isEmptyAnalysis,
+  type AnalyzeOutcome,
   type DetectedSurveyAnalysis,
   type SurveyImportWarning,
 } from "@/lib/surveyImport";
@@ -112,7 +116,9 @@ interface UploadTaskState {
   id: number;
   name: string;
   progress: number;
-  status: 'loading' | 'completed';
+  status: 'loading' | 'completed' | 'failed';
+  /** Demo flag: this task's load is scripted to fail part-way through. */
+  willFail?: boolean;
 }
 
 interface RecentUpload {
@@ -263,28 +269,92 @@ const SummaryRow: React.FC<{
   </div>
 );
 
+// UBITS question taxonomy: tipo de pregunta → (si es escala) tipo de escala →
+// (si es Likert) tipo de valoración.
+type TipoPregunta =
+  | "Escala de valoración"
+  | "Pregunta abierta"
+  | "Opción única"
+  | "Múltiples respuestas"
+  | "Desplegable"
+  | "Sin reconocer";
+type EscalaTipo = "Likert" | "NPS" | "Estrellas" | "Emociones" | "Lineal" | "Likert (NOM 035)";
+type Valoracion = "Frecuencia" | "Satisfacción" | "Acuerdo" | "Probabilidad" | "Frecuencia (NOM 035)";
+
 interface QuestionMeta {
-  /** Broad question kind, e.g. "Escala de valoración". */
-  tipo: string;
-  /** Underlying scale family detected in the survey. */
-  escala: "Likert" | "NPS";
-  /** Human-readable range of the scale. */
-  valor: string;
+  /** UBITS question type. */
+  tipoPregunta: TipoPregunta;
+  /** Scale family, only for "Escala de valoración". */
+  escala?: EscalaTipo;
+  /** Rating subtype, only for Likert. */
+  valoracion?: Valoracion;
+  /** Whether the question maps to a supported UBITS type at all. */
+  recognized: boolean;
+  /** Human-readable range/detail, e.g. "Muy en desacuerdo a Muy de acuerdo". */
+  valor?: string;
 }
 
-// The recommendation question is the only NPS item in these Clima surveys; the
-// rest are Likert agreement questions on a "muy en desacuerdo → muy de acuerdo" scale.
-const NPS_QUESTION_HINTS = ["0 a un 10", "0 a 10", "recomiend", "probable es que"];
-
+/**
+ * Best-effort classifier that maps a question's text to the UBITS taxonomy.
+ * Purely presentational (badges/grouping/filter) — metrics come from the
+ * aggregated source, not from this. Order matters: the most specific cues win.
+ */
 function classifyQuestion(text: string): QuestionMeta {
-  const normalized = text.toLowerCase();
-  if (NPS_QUESTION_HINTS.some((hint) => normalized.includes(hint))) {
-    return { tipo: "Escala de valoración", escala: "NPS", valor: "0 a 10" };
+  const t = text.toLowerCase();
+  const has = (...words: string[]) => words.some((w) => t.includes(w));
+
+  // 1. Not a UBITS type at all (matrix / ranking / drag interactions).
+  if (has("ordena de mayor", "ordena las", "jerarquiza", "ranking", "clasifica de mayor", "arrastra", "distribuye", "matriz", "empareja")) {
+    return { tipoPregunta: "Sin reconocer", recognized: false };
   }
-  return { tipo: "Escala de valoración", escala: "Likert", valor: "Muy en desacuerdo a Muy de acuerdo" };
+  // 2. NPS (recommendation).
+  if (has("recomiend", "0 a 10", "0 a un 10", "probable es que recomien")) {
+    return { tipoPregunta: "Escala de valoración", escala: "NPS", recognized: true, valor: "0 a 10" };
+  }
+  // 3. Visual scales.
+  if (has("estrella")) {
+    return { tipoPregunta: "Escala de valoración", escala: "Estrellas", recognized: true, valor: "1 a 5 estrellas" };
+  }
+  if (has("cómo te sientes", "como te sientes", "emoji", "carita", "emoción", "emocion")) {
+    return { tipoPregunta: "Escala de valoración", escala: "Emociones", recognized: true, valor: "Escala visual de emociones" };
+  }
+  if (has("escala lineal", "escala de 1 a 7", "escala del 1 al 7", "en una escala de 1 a")) {
+    return { tipoPregunta: "Escala de valoración", escala: "Lineal", recognized: true, valor: "Escala lineal" };
+  }
+  // 4. Non-scale question types.
+  if (has("comentario", "describe", "explica", "sugerenc", "cuéntanos", "cuentanos", "qué opinas", "que opinas", "respuesta abierta", "en tus palabras")) {
+    return { tipoPregunta: "Pregunta abierta", recognized: true, valor: "Texto libre" };
+  }
+  if (has("selecciona todas", "marca todas", "las que apliquen", "todas las que")) {
+    return { tipoPregunta: "Múltiples respuestas", recognized: true, valor: "Selección múltiple" };
+  }
+  if (has("elige de la lista", "lista desplegable", "desplegable", "selecciona de la lista")) {
+    return { tipoPregunta: "Desplegable", recognized: true, valor: "Lista desplegable" };
+  }
+  if (has("selecciona una", "elige una", "selecciona tu", "elige tu", "cuál es tu", "cual es tu", "indica tu")) {
+    return { tipoPregunta: "Opción única", recognized: true, valor: "Una opción" };
+  }
+  // 5. Likert with rating subtype (default for agreement statements).
+  if (has("con qué frecuencia", "con que frecuencia", "nunca", "siempre", "frecuencia")) {
+    return { tipoPregunta: "Escala de valoración", escala: "Likert", valoracion: "Frecuencia", recognized: true, valor: "Nunca a Siempre" };
+  }
+  if (has("satisfech")) {
+    return { tipoPregunta: "Escala de valoración", escala: "Likert", valoracion: "Satisfacción", recognized: true, valor: "Insatisfecho a Satisfecho" };
+  }
+  if (has("qué tan probable", "que tan probable", "probable")) {
+    return { tipoPregunta: "Escala de valoración", escala: "Likert", valoracion: "Probabilidad", recognized: true, valor: "Nada probable a Muy probable" };
+  }
+  return { tipoPregunta: "Escala de valoración", escala: "Likert", valoracion: "Acuerdo", recognized: true, valor: "Muy en desacuerdo a Muy de acuerdo" };
 }
 
-/** One detected question: its text plus the inferred question type, scale family, and scale range. */
+/** The most specific label used for the type filter and for grouping. */
+function questionKind(meta: QuestionMeta): string {
+  if (!meta.recognized) return "Sin reconocer";
+  if (meta.tipoPregunta === "Escala de valoración" && meta.escala) return meta.escala;
+  return meta.tipoPregunta;
+}
+
+/** One detected question with its inferred UBITS type/scale/rating shown as badges. */
 const QuestionRow: React.FC<{ index: number; text: string }> = ({ index, text }) => {
   const meta = classifyQuestion(text);
   return (
@@ -293,17 +363,35 @@ const QuestionRow: React.FC<{ index: number; text: string }> = ({ index, text })
       <div className="min-w-0 flex-1">
         <p className="text-sm text-text-primary leading-snug">{text}</p>
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          <span
-            className={cn(
-              "px-2 py-0.5 rounded-md text-[11px] font-bold",
-              meta.escala === "NPS" ? "bg-info/10 text-info" : "bg-primary/10 text-primary"
-            )}
-          >
-            {meta.escala}
-          </span>
-          <span className="text-xs text-text-secondary/60 font-medium">
-            {meta.tipo} · {meta.valor}
-          </span>
+          {meta.recognized ? (
+            <>
+              <span className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-surface-muted text-text-secondary">
+                {meta.tipoPregunta}
+              </span>
+              {meta.escala && (
+                <span
+                  className={cn(
+                    "px-2 py-0.5 rounded-md text-[11px] font-bold",
+                    meta.escala === "NPS" ? "bg-info/10 text-info" : "bg-primary/10 text-primary"
+                  )}
+                >
+                  {meta.escala}
+                </span>
+              )}
+              {(meta.valoracion || meta.valor) && (
+                <span className="text-xs text-text-secondary/60 font-medium">
+                  {[meta.valoracion, meta.valor].filter(Boolean).join(" · ")}
+                </span>
+              )}
+            </>
+          ) : (
+            <>
+              <span className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-warning/10 text-warning inline-flex items-center gap-1">
+                <AlertTriangle className="h-3 w-3" strokeWidth={2.5} /> Sin reconocer
+              </span>
+              <span className="text-xs text-text-secondary/60 font-medium">Tipo no compatible con UBITS</span>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -349,7 +437,8 @@ const RecentUploadsList: React.FC<{
   activeTasks: UploadTaskState[];
   recentUploads: RecentUpload[];
   onViewSurvey: () => void;
-}> = ({ activeTasks, recentUploads, onViewSurvey }) => {
+  onRetry: (taskId: number) => void;
+}> = ({ activeTasks, recentUploads, onViewSurvey, onRetry }) => {
   const hasActive = activeTasks.length > 0;
   const anyLoading = activeTasks.some((task) => task.status === 'loading');
   const isEmpty = !hasActive && recentUploads.length === 0;
@@ -387,11 +476,21 @@ const RecentUploadsList: React.FC<{
       {hasActive && (
         <div className="space-y-2">
           {[...activeTasks].sort((a, b) => b.id - a.id).map((task) => (
-            <div key={task.id} className="p-3 rounded-xl border border-border/40 bg-surface">
+            <div
+              key={task.id}
+              className={cn(
+                "p-3 rounded-xl border bg-surface",
+                task.status === 'failed' ? "border-destructive/40 bg-destructive/5" : "border-border/40"
+              )}
+            >
               <div className="flex items-center gap-3">
                 {task.status === 'completed' ? (
                   <div className="h-9 w-9 rounded-lg bg-status-positive-bg text-status-positive flex items-center justify-center shrink-0">
                     <Check className="h-4 w-4" strokeWidth={3} />
+                  </div>
+                ) : task.status === 'failed' ? (
+                  <div className="h-9 w-9 rounded-lg bg-destructive/10 text-destructive flex items-center justify-center shrink-0">
+                    <AlertTriangle className="h-4 w-4" strokeWidth={2.5} />
                   </div>
                 ) : (
                   <div className="h-9 w-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
@@ -400,21 +499,41 @@ const RecentUploadsList: React.FC<{
                 )}
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-bold text-text-primary truncate">{task.name}</p>
-                  <p className="text-[10px] text-text-secondary/60 font-medium">
-                    {task.status === 'completed' ? "Encuesta cargada" : "Cargando encuesta…"}
+                  <p className={cn(
+                    "text-[10px] font-medium",
+                    task.status === 'failed' ? "text-destructive" : "text-text-secondary/60"
+                  )}>
+                    {task.status === 'completed'
+                      ? "Encuesta cargada"
+                      : task.status === 'failed'
+                        ? "No pudimos cargarla — problemas técnicos"
+                        : "Cargando encuesta…"}
                   </p>
                 </div>
                 {task.status === 'completed' ? (
                   <button onClick={onViewSurvey} className="text-xs font-bold text-primary hover:underline shrink-0">
                     Ver encuesta
                   </button>
+                ) : task.status === 'failed' ? (
+                  <button
+                    onClick={() => onRetry(task.id)}
+                    className="inline-flex items-center gap-1 text-xs font-bold text-destructive hover:underline shrink-0"
+                  >
+                    <RotateCw className="h-3.5 w-3.5" />
+                    Reintentar
+                  </button>
                 ) : (
                   <span className="text-sm font-bold text-primary tabular-nums shrink-0">{task.progress}%</span>
                 )}
               </div>
-              {task.status !== 'completed' && (
+              {task.status === 'loading' && (
                 <div className="mt-2 h-1 bg-muted rounded-full overflow-hidden">
                   <div className="h-full bg-primary transition-all duration-300" style={{ width: `${task.progress}%` }} />
+                </div>
+              )}
+              {task.status === 'failed' && (
+                <div className="mt-2 h-1 bg-destructive/15 rounded-full overflow-hidden">
+                  <div className="h-full bg-destructive/70" style={{ width: `${task.progress}%` }} />
                 </div>
               )}
             </div>
@@ -629,15 +748,22 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
  const [openSummarySection, setOpenSummarySection] = React.useState<string | undefined>(undefined);
  // Filters for the detected-questions list.
  const [questionSectionFilter, setQuestionSectionFilter] = React.useState<string>('all');
- const [questionScaleFilter, setQuestionScaleFilter] = React.useState<'all' | 'Likert' | 'NPS'>('all');
+ const [questionScaleFilter, setQuestionScaleFilter] = React.useState<string>('all');
  const [uploadFiles, setUploadFiles] = React.useState<File[]>([]);
  const [isAnalyzingFiles, setIsAnalyzingFiles] = React.useState(false);
  const [analyzeProgress, setAnalyzeProgress] = React.useState(35);
- const [uploadStep, setUploadStep] = React.useState<'dropzone' | 'select' | 'general' | 'summary' | 'loading'>('dropzone');
+ const [uploadStep, setUploadStep] = React.useState<'dropzone' | 'select' | 'general' | 'summary' | 'loading' | 'error' | 'empty'>('dropzone');
  const [reviewItems, setReviewItems] = React.useState<SurveyReviewItem[]>([]);
  const [selectedGroupKey, setSelectedGroupKey] = React.useState<string | null>(null);
  const [importWarnings, setImportWarnings] = React.useState<SurveyImportWarning[]>([]);
- const parsePromiseRef = React.useRef<ReturnType<typeof parseSurveyFiles> | null>(null);
+ // A blocking error surfaced while analyzing (unreadable/too-large/failed parse).
+ const [analyzeError, setAnalyzeError] = React.useState<{ title: string; detail: string } | null>(null);
+ // True when the detected structure was simulated from a PDF/image (mock extraction).
+ const [isSimulated, setIsSimulated] = React.useState(false);
+ // Set true only after the user hits "Siguiente" with a duplicate name — the
+ // duplicate check runs on submit, not proactively, so the button stays enabled.
+ const [nameErrorShown, setNameErrorShown] = React.useState(false);
+ const parsePromiseRef = React.useRef<Promise<AnalyzeOutcome> | null>(null);
  const uploadTriggerInputRef = React.useRef<HTMLInputElement>(null);
  // What the loading overlay is currently doing: reading the uploaded files, or
  // (once a survey has been chosen) preparing its general data and summary.
@@ -657,6 +783,9 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
    setReviewItems([]);
    setSelectedGroupKey(null);
    setImportWarnings([]);
+   setAnalyzeError(null);
+   setIsSimulated(false);
+   setNameErrorShown(false);
    parsePromiseRef.current = null;
  };
 
@@ -674,7 +803,7 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
    e.target.value = '';
    if (selectedFiles.length === 0) return;
 
-   const validation = validateFiles(selectedFiles, { accept: '.csv,.xls,.xlsx', multiple: true, maxSizeMB: 10 });
+   const validation = validateFiles(selectedFiles, { accept: '.csv,.xls,.xlsx,.pdf,.png,.jpg,.jpeg', multiple: true, maxSizeMB: 10 });
    if (!validation.isValid) {
      toast.error(validation.error || 'Selección de archivos inválida');
      return;
@@ -684,7 +813,7 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
    setIsUploadDrawerOpen(true);
    setAnalyzingPurpose('files');
    setIsAnalyzingFiles(true);
-   parsePromiseRef.current = parseSurveyFiles(selectedFiles);
+   parsePromiseRef.current = analyzeUploaded(selectedFiles);
  };
 
  const updateReviewItem = (groupKey: string, patch: Partial<SurveyReviewItem>) => {
@@ -716,16 +845,38 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
    let cancelled = false;
 
    const finishReadingFiles = async () => {
-     let result: Awaited<ReturnType<typeof parseSurveyFiles>> | null;
+     let outcome: AnalyzeOutcome | null;
      try {
-       result = await (parsePromiseRef.current ?? Promise.resolve(null));
+       outcome = await (parsePromiseRef.current ?? Promise.resolve(null));
      } catch {
-       result = null;
+       // A real failure in the parsing pipeline — surface it as a blocking error
+       // rather than silently pretending zero surveys were found.
+       outcome = {
+         kind: 'error',
+         variant: 'parse',
+         title: 'No pudimos procesar el archivo',
+         detail: 'Ocurrió un problema al leer el contenido. Revisa que el archivo sea un reporte válido e inténtalo de nuevo.',
+       };
      }
 
      if (cancelled) return;
 
      setIsAnalyzingFiles(false);
+
+     // Blocking error scenarios (unreadable / too large / failed parse).
+     if (outcome?.kind === 'error') {
+       setAnalyzeError({ title: outcome.title, detail: outcome.detail });
+       setIsSimulated(false);
+       setReviewItems([]);
+       setImportWarnings([]);
+       setUploadStep('error');
+       return;
+     }
+
+     const result = outcome?.result ?? null;
+     const simulated = outcome?.kind === 'result' && outcome.simulated === true;
+     setAnalyzeError(null);
+     setIsSimulated(simulated);
      setImportWarnings(result?.unrecognizedFiles ?? []);
      const groups = result?.groups ?? [];
      setReviewItems(
@@ -743,6 +894,13 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
        })
      );
      setSelectedGroupKey(groups[0]?.groupKey ?? null);
+     // A single survey with nothing usable in it → dedicated empty state that
+     // invites uploading another file, instead of a summary full of zeros.
+     const soleGroup = groups.length === 1 ? groups[0] : null;
+     if (soleGroup && isEmptyAnalysis(soleGroup.analysis)) {
+       setUploadStep('empty');
+       return;
+     }
      // Only one survey detected: skip straight to the general-data step. With
      // zero or multiple surveys, the selection screen decides what happens next.
      setUploadStep(groups.length === 1 ? 'general' : 'select');
@@ -769,7 +927,7 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
  const handleAnalyzeFiles = () => {
    setAnalyzingPurpose('files');
    setIsAnalyzingFiles(true);
-   parsePromiseRef.current = parseSurveyFiles(uploadFiles);
+   parsePromiseRef.current = analyzeUploaded(uploadFiles);
  };
 
  const handleAnalyzeSelectedSurvey = () => {
@@ -778,11 +936,68 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
  };
 
  const selectedReviewItem = reviewItems.find((item) => item.groupKey === selectedGroupKey);
+ // Sanity checks on the general-data form before letting the user continue.
+ const anonymityThresholdNum = Number(selectedReviewItem?.anonymityThreshold);
+ const isAnonymityValid =
+   !selectedReviewItem ||
+   (selectedReviewItem.anonymityThreshold.trim() !== '' &&
+     Number.isInteger(anonymityThresholdNum) &&
+     anonymityThresholdNum >= 1);
+ const isDateRangeValid =
+   !selectedReviewItem?.startDate ||
+   !selectedReviewItem?.endDate ||
+   selectedReviewItem.startDate <= selectedReviewItem.endDate;
+ // UBITS does not allow duplicate surveys. Recomputed live from the current name
+ // in the input, so renaming to a free name clears the error and unblocks.
+ const duplicateExisting = selectedReviewItem
+   ? findExistingDuplicate(selectedReviewItem.name, null)
+   : null;
+ // The duplicate check is NOT part of this — it runs when the user hits
+ // "Siguiente", so the button stays enabled and validates on submit.
  const canProceedFromGeneral =
-   !!selectedReviewItem && !!selectedReviewItem.name.trim() && !!selectedReviewItem.startDate && !!selectedReviewItem.endDate;
+   !!selectedReviewItem &&
+   !!selectedReviewItem.name.trim() &&
+   !!selectedReviewItem.startDate &&
+   !!selectedReviewItem.endDate &&
+   isDateRangeValid &&
+   isAnonymityValid;
+
+ const handleGeneralNext = () => {
+   if (duplicateExisting) {
+     setNameErrorShown(true);
+     return;
+   }
+   setNameErrorShown(false);
+   setUploadStep('summary');
+ };
+
+ // Drives a task's progress bar. If `willFail`, it gets stuck part-way and the
+ // task flips to 'failed' (shown inline in the loads list and the tray); the
+ // failure is never a full-screen error. Otherwise it completes at 100%.
+ const runUploadProgress = (taskId: number, willFail: boolean) => {
+   const failAt = willFail ? 62 + Math.random() * 18 : 100; // stuck ~62–80% on failure
+   let progress = 0;
+   const interval = setInterval(() => {
+     progress = Math.min(failAt, progress + Math.random() * 20);
+     const reached = progress >= failAt;
+     setUploadTasks((prev) =>
+       prev.map((task) =>
+         task.id === taskId
+           ? { ...task, progress: Math.round(progress), status: reached ? (willFail ? 'failed' : 'completed') : 'loading' }
+           : task
+       )
+     );
+     if (reached) clearInterval(interval);
+   }, 500);
+ };
 
  const handleFinalizeSurveyUpload = () => {
    if (!selectedReviewItem) return;
+
+   // Demo scenario: a specific file makes the load fail part-way (server/tech
+   // error), shown inline on the loads-list item — never full screen.
+   // Independent of every other case, triggered only by its filename.
+   const finalizeFails = selectedReviewItem.fileNames.some((n) => /falla-carga|error-carga/i.test(n));
 
    // The wizard's staged files are done with once the load starts, so clear
    // them — switching to "Nueva carga" from the loads list lands on an empty
@@ -790,23 +1005,20 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
    setUploadFiles([]);
 
    const taskId = Date.now();
-   setUploadTasks((prev) => [...prev, { id: taskId, name: selectedReviewItem.name, progress: 0, status: 'loading' }]);
+   setUploadTasks((prev) => [...prev, { id: taskId, name: selectedReviewItem.name, progress: 0, status: 'loading', willFail: finalizeFails }]);
    setShowUploadTray(true);
    setIsUploadTrayMinimized(false);
    setUploadStep('loading');
    setUploadTab('cargas');
 
-   let progress = 0;
-   const interval = setInterval(() => {
-     progress = Math.min(100, progress + Math.random() * 25);
-     const isDone = progress >= 100;
-     setUploadTasks((prev) =>
-       prev.map((task) =>
-         task.id === taskId ? { ...task, progress: Math.round(progress), status: isDone ? 'completed' : 'loading' } : task
-       )
-     );
-     if (isDone) clearInterval(interval);
-   }, 500);
+   runUploadProgress(taskId, finalizeFails);
+ };
+
+ const retryUpload = (taskId: number) => {
+   const task = uploadTasks.find((t) => t.id === taskId);
+   if (!task) return;
+   setUploadTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, progress: 0, status: 'loading' } : t)));
+   runUploadProgress(taskId, task.willFail ?? false);
  };
 
  const handleCloseUploadTray = () => {
@@ -915,7 +1127,7 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
  <input
  ref={uploadTriggerInputRef}
  type="file"
- accept=".csv,.xls,.xlsx"
+ accept=".csv,.xls,.xlsx,.pdf,.png,.jpg,.jpeg"
  multiple
  onChange={handleUploadTriggerFilesPicked}
  className="hidden"
@@ -1399,6 +1611,8 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
   title={
     uploadStep === 'dropzone' ? "Cargar encuestas"
     : uploadStep === 'loading' ? "Cargando encuesta"
+    : uploadStep === 'error' ? "No pudimos continuar"
+    : uploadStep === 'empty' ? "No encontramos información"
     : uploadStep === 'select' ? "Selecciona la encuesta"
     : uploadStep === 'general' ? "Confirma los datos generales"
     : "Estructura"
@@ -1406,6 +1620,8 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
   description={
     uploadStep === 'dropzone' ? "Sube nuevos archivos o revisa tus cargas recientes."
     : uploadStep === 'loading' ? "Estamos guardando la información de tu encuesta."
+    : uploadStep === 'error' ? "Revisa el archivo e inténtalo de nuevo."
+    : uploadStep === 'empty' ? "No pudimos detectar datos de encuesta en este archivo."
     : uploadStep === 'select' ? "Detectamos varias encuestas en tus archivos. Elige cuál quieres cargar."
     : uploadStep === 'general' ? "Verifica los datos que identificamos y ajústalos si lo necesitas."
     : "Revisa la información que encontramos antes de cargar la encuesta."
@@ -1463,11 +1679,25 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
         {uploadStep === 'general' && (
           <Button
             disabled={!canProceedFromGeneral}
-            onClick={() => setUploadStep('summary')}
+            onClick={handleGeneralNext}
             className="flex-1 gap-2.5 h-11 text-xs font-bold tracking-tight shadow-lg shadow-primary/20 rounded-xl transition-all hover:scale-[1.01] active:scale-[0.98] disabled:opacity-30 disabled:grayscale"
           >
             <span>Siguiente</span>
             <ChevronRight className="h-4 w-4" />
+          </Button>
+        )}
+
+        {(uploadStep === 'error' || uploadStep === 'empty') && (
+          <Button
+            onClick={() => {
+              setAnalyzeError(null);
+              setUploadFiles([]);
+              setUploadStep('dropzone');
+            }}
+            className="flex-1 gap-2.5 h-11 text-xs font-bold tracking-tight shadow-lg shadow-primary/20 rounded-xl transition-all hover:scale-[1.01] active:scale-[0.98]"
+          >
+            <Upload className="h-4 w-4" />
+            <span>{uploadStep === 'empty' ? 'Subir otra encuesta' : 'Subir otro archivo'}</span>
           </Button>
         )}
 
@@ -1615,11 +1845,11 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
           <UploadZone
             value={uploadFiles}
             onChange={setUploadFiles}
-            accept=".csv,.xls,.xlsx"
+            accept=".csv,.xls,.xlsx,.pdf,.png,.jpg,.jpeg"
             multiple
             maxSizeMB={10}
             idleText="Arrastra tus archivos aquí o haz clic para buscar"
-            description="Formatos soportados: CSV, XLS, XLSX (máx. 10MB)"
+            description="Formatos soportados: Excel, CSV, PDF e imágenes (máx. 10MB)"
             className="[&>div:first-of-type]:min-h-[200px]"
           />
         </div>
@@ -1630,9 +1860,44 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
           activeTasks={uploadTasks}
           recentUploads={RECENT_UPLOADS}
           onViewSurvey={handleViewLoadedSurvey}
+          onRetry={retryUpload}
         />
       </TabsContent>
     </Tabs>
+  )}
+
+  {/* Blocking error: file could not be read / too large / failed to process */}
+  {uploadStep === 'error' && (
+    <div className="flex flex-col items-center justify-center flex-1 text-center px-8 py-12 gap-4">
+      <div className="h-14 w-14 rounded-2xl bg-destructive/10 text-destructive flex items-center justify-center">
+        <AlertTriangle className="h-7 w-7" strokeWidth={2.25} />
+      </div>
+      <div className="space-y-1.5 max-w-sm">
+        <h3 className="text-base font-bold text-text-primary tracking-tight">
+          {analyzeError?.title ?? 'No pudimos procesar el archivo'}
+        </h3>
+        <p className="text-[13px] text-text-secondary/70 font-medium leading-relaxed">
+          {analyzeError?.detail ?? 'Revisa que el archivo sea un reporte válido e inténtalo de nuevo.'}
+        </p>
+      </div>
+    </div>
+  )}
+
+  {/* Recognized file, but nothing usable inside — invite trying another survey */}
+  {uploadStep === 'empty' && (
+    <div className="flex flex-col items-center justify-center flex-1 text-center px-8 py-12 gap-4">
+      <div className="h-16 w-16 rounded-2xl bg-surface-muted text-text-secondary/60 flex items-center justify-center">
+        <FileSearch className="h-8 w-8" strokeWidth={1.75} />
+      </div>
+      <div className="space-y-1.5 max-w-sm">
+        <h3 className="text-base font-bold text-text-primary tracking-tight">
+          No encontramos datos de encuesta
+        </h3>
+        <p className="text-[13px] text-text-secondary/70 font-medium leading-relaxed">
+          No detectamos indicadores, secciones ni preguntas en este archivo. Asegúrate de subir un reporte de Clima, Cultura o NPS, y prueba con otra encuesta.
+        </p>
+      </div>
+    </div>
   )}
 
   {/* Review wizard: pick the detected survey, confirm its general data, then review a summary before loading it */}
@@ -1663,7 +1928,8 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
           </Button>
         )}
 
-        {uploadStep === 'select' && importWarnings.length > 0 && (
+        {/* Excluded files — shown on every review step, not only when several surveys were detected */}
+        {importWarnings.length > 0 && (
           <Alert variant="warning">
             <Info className="h-4 w-4" />
             <AlertTitle className="text-xs font-bold">Algunos archivos fueron excluidos</AlertTitle>
@@ -1673,6 +1939,17 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
                   <span className="font-bold">{warning.fileName}</span>: {warning.reason}
                 </div>
               ))}
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Simulated extraction (from a PDF/image) — honest disclosure that the structure is estimated */}
+        {isSimulated && (uploadStep === 'general' || uploadStep === 'summary') && (
+          <Alert variant="info">
+            <Sparkles className="h-4 w-4" />
+            <AlertTitle className="text-xs font-bold">Estructura estimada (simulada)</AlertTitle>
+            <AlertDescription className="text-[11px]">
+              Extrajimos esta estructura a partir de un PDF/imagen. Revisa con atención los datos, secciones y preguntas antes de cargar.
             </AlertDescription>
           </Alert>
         )}
@@ -1746,8 +2023,18 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
               <Field label="Nombre de la encuesta" required>
                 <Input
                   value={selectedReviewItem.name}
-                  onChange={(e) => updateReviewItem(selectedReviewItem.groupKey, { name: e.target.value })}
+                  onChange={(e) => {
+                    setNameErrorShown(false);
+                    updateReviewItem(selectedReviewItem.groupKey, { name: e.target.value });
+                  }}
+                  aria-invalid={nameErrorShown && !!duplicateExisting}
+                  className={cn((nameErrorShown && duplicateExisting) && "!border-destructive ring-2 ring-destructive/40 focus-visible:!border-destructive")}
                 />
+                {nameErrorShown && duplicateExisting && (
+                  <p className="text-[13px] font-medium text-destructive mt-1.5">
+                    Ya existe una encuesta llamada "{duplicateExisting}". Usa otro nombre para continuar.
+                  </p>
+                )}
               </Field>
 
               <Field label="Visibilidad de la encuesta" required>
@@ -1788,6 +2075,11 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
                     value={selectedReviewItem.anonymityThreshold}
                     onChange={(e) => updateReviewItem(selectedReviewItem.groupKey, { anonymityThreshold: e.target.value })}
                   />
+                  {!isAnonymityValid && (
+                    <p className="text-[11px] text-destructive font-medium mt-1">
+                      Ingresa un número entero mayor o igual a 1.
+                    </p>
+                  )}
                 </Field>
               )}
 
@@ -1808,6 +2100,17 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
                   />
                 </Field>
               </div>
+              {!isDateRangeValid && (
+                <p className="text-[11px] text-destructive font-medium">
+                  La fecha de cierre no puede ser anterior a la de inicio.
+                </p>
+              )}
+
+              {selectedGroupKey === 'unknown-year' && (
+                <p className="text-[11px] text-text-secondary/60 font-medium">
+                  No detectamos el año de la encuesta en el archivo. Revisa el nombre y las fechas antes de continuar.
+                </p>
+              )}
             </div>
           </div>
         )}
@@ -1844,26 +2147,81 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
             ? a.sectionDetails
             : a.sections.map((name) => ({ name, questionCount: 0 }));
 
-          // Question list, with each entry classified and (optionally) filtered
-          // by its section and scale family.
+          // Question list, each entry classified against the UBITS taxonomy.
           const questionItems = (a.questionDetails.length > 0
             ? a.questionDetails
             : a.questions.map((text) => ({ text, section: null }))
           ).map((q) => ({ ...q, meta: classifyQuestion(q.text) }));
 
-          const questionSectionOptions = Array.from(
-            new Set(questionItems.map((q) => q.section).filter((s): s is string => !!s))
+          // Filter by "kind" (the most specific label: escala, tipo de pregunta,
+          // or "Sin reconocer").
+          const matchesKind = (meta: QuestionMeta) =>
+            questionScaleFilter === 'all' || questionKind(meta) === questionScaleFilter;
+
+          // Questions that don't map to any UBITS type are pulled out into their
+          // own group regardless of section (with a warning), so section groups
+          // only hold recognized questions.
+          const recognizedItems = questionItems.filter((q) => q.meta.recognized);
+          const unrecognizedItems = questionItems.filter((q) => !q.meta.recognized);
+
+          const knownSectionNames = new Set(sectionDetails.map((s) => s.name));
+          const orphanQuestions = recognizedItems.filter(
+            (q) => !q.section || !knownSectionNames.has(q.section)
           );
+          // Section-less NPS items are the eNPS driver, so they get their own
+          // "eNPS" group rather than being lumped into "Sin sección". Whatever is
+          // left is a genuinely standalone question that does not feed any metric.
+          const npsOrphans = orphanQuestions.filter((q) => q.meta.escala === 'NPS');
+          const otherOrphans = orphanQuestions.filter((q) => q.meta.escala !== 'NPS');
+
+          const questionGroups: {
+            name: string;
+            icon: typeof Layers;
+            note?: string;
+            questions: typeof questionItems;
+          }[] = [
+            ...sectionDetails.map((section) => ({
+              name: section.name,
+              icon: Layers,
+              questions: recognizedItems.filter((q) => q.section === section.name),
+            })),
+            ...(npsOrphans.length > 0
+              ? [{ name: 'eNPS', icon: TrendingUp, questions: npsOrphans }]
+              : []),
+            ...(otherOrphans.length > 0
+              ? [{
+                  name: 'Sin sección',
+                  icon: Layers,
+                  note: 'Estas preguntas no afectan las métricas detectadas: se registran como preguntas independientes.',
+                  questions: otherOrphans,
+                }]
+              : []),
+            // "Sin reconocer" is rendered as its OWN accordion (below), not here,
+            // for better visibility and a more prominent warning.
+          ].filter((g) => g.questions.length > 0);
+
+          // Section filter options come from the groups that actually hold questions.
+          const questionSectionOptions = questionGroups.map((g) => g.name);
           // Guard against a stale filter left over from a previously reviewed survey.
           const activeSectionFilter =
             questionSectionFilter !== 'all' && questionSectionOptions.includes(questionSectionFilter)
               ? questionSectionFilter
               : 'all';
-          const filteredQuestions = questionItems.filter(
-            (q) =>
-              (activeSectionFilter === 'all' || q.section === activeSectionFilter) &&
-              (questionScaleFilter === 'all' || q.meta.escala === questionScaleFilter)
-          );
+
+          // Type/kind filter options, derived from the recognized questions in
+          // this accordion (the unrecognized ones live in their own accordion).
+          const questionKindOptions = Array.from(new Set(recognizedItems.map((q) => questionKind(q.meta))));
+          const activeKindFilter =
+            questionScaleFilter !== 'all' && questionKindOptions.includes(questionScaleFilter)
+              ? questionScaleFilter
+              : 'all';
+
+          // Groups to render, after applying both the section and type filters.
+          const filteredGroups = questionGroups
+            .filter((g) => activeSectionFilter === 'all' || g.name === activeSectionFilter)
+            .map((g) => ({ ...g, questions: g.questions.filter((q) => matchesKind(q.meta)) }))
+            .filter((g) => g.questions.length > 0);
+          const visibleQuestionCount = filteredGroups.reduce((acc, g) => acc + g.questions.length, 0);
 
           return (
           <div className="space-y-5">
@@ -1884,6 +2242,11 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
 
               <Accordion type="single" collapsible value={openSummarySection} onValueChange={setOpenSummarySection} className="gap-2.5">
                 <SummaryAccordionItem value="participacion" icon={Users} title="Participación" headline={participationHeadline}>
+                  {a.participationRate != null && a.participationRate > 100 && (
+                    <p className="text-[11px] text-warning font-medium pb-1">
+                      La participación supera el 100% (más respuestas que invitados). Revisa las cifras del archivo.
+                    </p>
+                  )}
                   {responded != null && notResponded != null ? (
                     <>
                       <SummaryRow label="Respondieron" value={String(responded)} dotClass={POSITIVE} />
@@ -1954,25 +2317,16 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
                   )}
                 </SummaryAccordionItem>
 
-                <SummaryAccordionItem value="secciones" icon={Layers} title="Secciones" headline={String(sectionDetails.length)}>
-                  {sectionDetails.length > 0 ? (
-                    sectionDetails.map((section) => (
-                      <SummaryRow
-                        key={section.name}
-                        label={section.name}
-                        value={section.questionCount > 0 ? `${section.questionCount} preg.` : undefined}
-                      />
-                    ))
-                  ) : (
-                    <p className="text-xs text-text-secondary/50 font-medium py-1">No se detectaron secciones.</p>
-                  )}
-                </SummaryAccordionItem>
-
-                <SummaryAccordionItem value="preguntas" icon={HelpCircle} title="Preguntas" headline={String(a.questionsCount)}>
-                  {questionItems.length > 0 ? (
-                    <div className="space-y-2.5">
+                <SummaryAccordionItem
+                  value="secciones-preguntas"
+                  icon={Layers}
+                  title="Secciones y preguntas"
+                  headline={`${sectionDetails.length} · ${a.questionsCount}`}
+                >
+                  {questionGroups.length > 0 ? (
+                    <div className="space-y-2.5 pt-1">
                       {/* Filters: by section and by scale family */}
-                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <div className="flex flex-wrap items-center gap-2">
                         {questionSectionOptions.length > 0 && (
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
@@ -2009,35 +2363,55 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
                               className="h-8 px-2.5 gap-1.5 text-[11px] font-bold rounded-lg border-border/60 bg-surface"
                             >
                               <BarChart3 className="h-3 w-3 shrink-0 text-text-secondary/60" />
-                              <span>{questionScaleFilter === 'all' ? 'Toda escala' : questionScaleFilter}</span>
+                              <span className="truncate max-w-[130px]">{activeKindFilter === 'all' ? 'Todos los tipos' : activeKindFilter}</span>
                               <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
                             </Button>
                           </DropdownMenuTrigger>
-                          <DropdownMenuContent align="start" className="w-40 bg-surface border border-border/40 shadow-drawer rounded-lg p-1.5">
-                            <DropdownMenuRadioGroup value={questionScaleFilter} onValueChange={(v) => setQuestionScaleFilter(v as 'all' | 'Likert' | 'NPS')}>
+                          <DropdownMenuContent align="start" className="w-52 max-h-64 overflow-y-auto bg-surface border border-border/40 shadow-drawer rounded-lg p-1.5">
+                            <DropdownMenuRadioGroup value={activeKindFilter} onValueChange={setQuestionScaleFilter}>
                               <DropdownMenuRadioItem value="all" className="text-[11px] font-bold tracking-tight p-2 rounded-md focus:bg-brand/5 focus:text-brand cursor-pointer">
-                                Toda escala
+                                Todos los tipos
                               </DropdownMenuRadioItem>
-                              <DropdownMenuRadioItem value="Likert" className="text-[11px] font-bold tracking-tight p-2 rounded-md focus:bg-brand/5 focus:text-brand cursor-pointer">
-                                Likert
-                              </DropdownMenuRadioItem>
-                              <DropdownMenuRadioItem value="NPS" className="text-[11px] font-bold tracking-tight p-2 rounded-md focus:bg-brand/5 focus:text-brand cursor-pointer">
-                                NPS
-                              </DropdownMenuRadioItem>
+                              {questionKindOptions.map((kind) => (
+                                <DropdownMenuRadioItem key={kind} value={kind} className="text-[11px] font-bold tracking-tight p-2 rounded-md focus:bg-brand/5 focus:text-brand cursor-pointer">
+                                  {kind}
+                                </DropdownMenuRadioItem>
+                              ))}
                             </DropdownMenuRadioGroup>
                           </DropdownMenuContent>
                         </DropdownMenu>
 
                         <span className="text-[11px] text-text-secondary/50 font-medium ml-auto">
-                          {filteredQuestions.length} de {questionItems.length}
+                          {visibleQuestionCount} de {recognizedItems.length}
                         </span>
                       </div>
 
-                      {filteredQuestions.length > 0 ? (
-                        <div className="max-h-72 overflow-y-auto pr-1">
-                          {filteredQuestions.map((q, idx) => (
-                            <QuestionRow key={`${idx}-${q.text.slice(0, 12)}`} index={idx + 1} text={q.text} />
-                          ))}
+                      {/* Flat grouped list: section header, then its questions listed below */}
+                      {filteredGroups.length > 0 ? (
+                        <div className="max-h-80 overflow-y-auto pr-1">
+                          {filteredGroups.map((group) => {
+                            const GroupIcon = group.icon;
+                            return (
+                            <div key={group.name} className="mb-1.5 last:mb-0">
+                              <div className="flex items-center gap-2 py-2 sticky top-0 bg-surface z-10">
+                                <GroupIcon className="h-3.5 w-3.5 shrink-0 text-primary" strokeWidth={2.5} />
+                                <span className="text-[13px] font-bold text-text-primary tracking-tight">{group.name}</span>
+                                <span className="text-[11px] font-bold text-text-secondary/50 tabular-nums">· {group.questions.length}</span>
+                              </div>
+                              {group.note && (
+                                <div className="flex items-start gap-1.5 rounded-lg bg-surface-muted/50 px-2.5 py-1.5 mb-1">
+                                  <Info className="h-3.5 w-3.5 shrink-0 text-text-secondary/50 mt-px" strokeWidth={2.25} />
+                                  <p className="text-[11px] text-text-secondary/70 font-medium leading-snug">{group.note}</p>
+                                </div>
+                              )}
+                              <div className="border-t border-border/30">
+                                {group.questions.map((q, idx) => (
+                                  <QuestionRow key={`${group.name}-${idx}-${q.text.slice(0, 12)}`} index={idx + 1} text={q.text} />
+                                ))}
+                              </div>
+                            </div>
+                            );
+                          })}
                         </div>
                       ) : (
                         <p className="text-xs text-text-secondary/50 font-medium py-2">
@@ -2046,10 +2420,40 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
                       )}
                     </div>
                   ) : (
-                    <p className="text-xs text-text-secondary/50 font-medium py-1">No se detectaron preguntas.</p>
+                    <p className="text-xs text-text-secondary/50 font-medium py-1">No se detectaron secciones ni preguntas.</p>
                   )}
                 </SummaryAccordionItem>
               </Accordion>
+
+              {/* Unrecognized questions — their OWN accordion + a prominent warning */}
+              {unrecognizedItems.length > 0 && (
+                <div className="space-y-2.5 pt-1">
+                  <Alert variant="warning">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertTitle className="text-xs font-bold">
+                      {unrecognizedItems.length} pregunta{unrecognizedItems.length > 1 ? 's' : ''} sin reconocer
+                    </AlertTitle>
+                    <AlertDescription className="text-[11px] leading-relaxed">
+                      No coinciden con los tipos de UBITS. Si cargas la encuesta así, estas preguntas no aportarán a las métricas (favorabilidad/eNPS) ni podrán filtrarse ni segmentarse.
+                    </AlertDescription>
+                  </Alert>
+
+                  <Accordion type="single" collapsible value={openSummarySection} onValueChange={setOpenSummarySection} className="gap-2.5">
+                    <SummaryAccordionItem
+                      value="sin-reconocer"
+                      icon={AlertTriangle}
+                      title="Preguntas sin reconocer"
+                      headline={String(unrecognizedItems.length)}
+                    >
+                      <div className="max-h-72 overflow-y-auto pr-1">
+                        {unrecognizedItems.map((q, idx) => (
+                          <QuestionRow key={`sin-reconocer-${idx}-${q.text.slice(0, 12)}`} index={idx + 1} text={q.text} />
+                        ))}
+                      </div>
+                    </SummaryAccordionItem>
+                  </Accordion>
+                </div>
+              )}
             </div>
           </div>
           );
@@ -2067,9 +2471,11 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
         <p className="text-sm font-bold text-text-primary tracking-tight">
           {uploadTasks.some((task) => task.status === 'loading')
             ? "Cargando encuesta..."
-            : uploadTasks.some((task) => task.status === 'completed')
-              ? "Carga completada"
-              : "Cargas"}
+            : uploadTasks.some((task) => task.status === 'failed')
+              ? "No se pudo cargar"
+              : uploadTasks.some((task) => task.status === 'completed')
+                ? "Carga completada"
+                : "Cargas"}
         </p>
         {!isUploadTrayMinimized && uploadTasks.some((task) => task.status === 'loading') && (
           <p className="text-[11px] text-text-secondary/60">
@@ -2118,10 +2524,19 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
                   <div className="h-5 w-5 rounded-full bg-status-positive flex items-center justify-center shrink-0">
                     <Check className="h-3 w-3 text-white" strokeWidth={3} />
                   </div>
+                ) : task.status === 'failed' ? (
+                  <div className="h-5 w-5 rounded-full bg-destructive flex items-center justify-center shrink-0">
+                    <AlertTriangle className="h-3 w-3 text-white" strokeWidth={2.5} />
+                  </div>
                 ) : (
                   <div className="h-5 w-5 rounded-full border-2 border-primary/20 border-t-primary animate-spin shrink-0" />
                 )}
-                <p className="text-sm text-text-primary truncate">{task.name}</p>
+                <div className="min-w-0">
+                  <p className="text-sm text-text-primary truncate">{task.name}</p>
+                  {task.status === 'failed' && (
+                    <p className="text-[10px] text-destructive font-medium">Problemas técnicos</p>
+                  )}
+                </div>
               </div>
               {task.status === 'completed' ? (
                 <button
@@ -2130,13 +2545,26 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
                 >
                   Ver encuesta
                 </button>
+              ) : task.status === 'failed' ? (
+                <button
+                  onClick={() => retryUpload(task.id)}
+                  className="inline-flex items-center gap-1 text-xs font-bold text-destructive hover:underline shrink-0"
+                >
+                  <RotateCw className="h-3.5 w-3.5" />
+                  Reintentar
+                </button>
               ) : (
                 <span className="text-xs font-bold text-primary shrink-0">{task.progress}%</span>
               )}
             </div>
-            {task.status !== 'completed' && (
+            {task.status === 'loading' && (
               <div className="mt-1.5 h-1 bg-muted rounded-full overflow-hidden ml-7">
                 <div className="h-full bg-primary transition-all duration-300" style={{ width: `${task.progress}%` }} />
+              </div>
+            )}
+            {task.status === 'failed' && (
+              <div className="mt-1.5 h-1 bg-destructive/15 rounded-full overflow-hidden ml-7">
+                <div className="h-full bg-destructive/70" style={{ width: `${task.progress}%` }} />
               </div>
             )}
           </div>

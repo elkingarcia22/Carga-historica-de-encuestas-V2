@@ -34,20 +34,20 @@ export function validateFiles(
 
   // 1. Check quantity
   if (!multiple && files.length > 1) {
-    return { isValid: false, error: 'Only one file is allowed.' }
+    return { isValid: false, error: 'Solo se permite un archivo.' }
   }
 
   if (maxFiles && currentCount + files.length > maxFiles) {
-    return { isValid: false, error: `Maximum ${maxFiles} files allowed.` }
+    return { isValid: false, error: `Máximo ${maxFiles} archivos permitidos.` }
   }
 
   // 2. Validate each file
   for (const file of files) {
     // Check size
     if (maxSizeMB && file.size > maxSizeMB * 1024 * 1024) {
-      return { 
-        isValid: false, 
-        error: `File "${file.name}" exceeds the ${maxSizeMB}MB limit.` 
+      return {
+        isValid: false,
+        error: `"${file.name}" supera el límite de ${maxSizeMB} MB.`
       }
     }
 
@@ -69,9 +69,9 @@ export function validateFiles(
       })
 
       if (!isAccepted) {
-        return { 
-          isValid: false, 
-          error: `File type "${extension}" is not allowed.` 
+        return {
+          isValid: false,
+          error: `El tipo de archivo "${extension}" no está permitido. Acepta Excel, CSV, PDF o imágenes.`
         }
       }
     }
