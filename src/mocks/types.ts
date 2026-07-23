@@ -182,5 +182,9 @@ export interface SurveyListItem {
   endDate: string;
   participants: string;
   progress: number;
+  /** Whether the survey was loaded from an external file or created inside UBITS. */
+  origin: 'externa' | 'interna';
+  /** Links this row to an in-progress upload task so its status/progress stay live. */
+  uploadTaskId?: number;
 }
 

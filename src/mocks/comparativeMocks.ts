@@ -8,29 +8,29 @@ import type { SurveyListItem } from './types';
 
 export const COMPARATIVE_SURVEYS_LIST: SurveyListItem[] = [
   // Clima (Added 2025/2026)
-  { id: "c2026-1", name: "Clima Organizacional - Q1 2026", type: "Clima", status: "Finalizado", statusVariant: "positive", startDate: "15 ene 2026", endDate: "30 ene 2026", participants: "520", progress: 100 },
-  { id: "c2025-4", name: "Clima Organizacional - Q4 2025", type: "Clima", status: "Finalizado", statusVariant: "positive", startDate: "10 oct 2025", endDate: "25 oct 2025", participants: "505", progress: 100 },
-  { id: "c2025-3", name: "Clima Organizacional - Q3 2025", type: "Clima", status: "Finalizado", statusVariant: "positive", startDate: "12 jul 2025", endDate: "28 jul 2025", participants: "495", progress: 100 },
-  { id: "c2025-2", name: "Clima Organizacional - Q2 2025", type: "Clima", status: "Finalizado", statusVariant: "positive", startDate: "05 abr 2025", endDate: "20 abr 2025", participants: "480", progress: 100 },
-  { id: "c2025-1", name: "Clima Organizacional - Q1 2025", type: "Clima", status: "Finalizado", statusVariant: "positive", startDate: "15 ene 2025", endDate: "30 ene 2025", participants: "470", progress: 100 },
-  
+  { id: "c2026-1", name: "Clima Organizacional - Q1 2026", type: "Clima", status: "Finalizado", statusVariant: "positive", startDate: "15 ene 2026", endDate: "30 ene 2026", participants: "520", progress: 100, origin: "externa" },
+  { id: "c2025-4", name: "Clima Organizacional - Q4 2025", type: "Clima", status: "Finalizado", statusVariant: "positive", startDate: "10 oct 2025", endDate: "25 oct 2025", participants: "505", progress: 100, origin: "externa" },
+  { id: "c2025-3", name: "Clima Organizacional - Q3 2025", type: "Clima", status: "Finalizado", statusVariant: "positive", startDate: "12 jul 2025", endDate: "28 jul 2025", participants: "495", progress: 100, origin: "interna" },
+  { id: "c2025-2", name: "Clima Organizacional - Q2 2025", type: "Clima", status: "Finalizado", statusVariant: "positive", startDate: "05 abr 2025", endDate: "20 abr 2025", participants: "480", progress: 100, origin: "interna" },
+  { id: "c2025-1", name: "Clima Organizacional - Q1 2025", type: "Clima", status: "Finalizado", statusVariant: "positive", startDate: "15 ene 2025", endDate: "30 ene 2025", participants: "470", progress: 100, origin: "externa" },
+
   // Clima (2024 items)
-  { id: "c2", name: "Clima Organizacional - Q4 2024", type: "Clima", status: "Finalizado", statusVariant: "positive", startDate: "10 oct 2024", endDate: "25 oct 2024", participants: "432", progress: 100 },
-  { id: "c3", name: "Clima Organizacional - Q3 2024", type: "Clima", status: "Finalizado", statusVariant: "positive", startDate: "12 jul 2024", endDate: "28 jul 2024", participants: "415", progress: 100 },
-  { id: "c4", name: "Clima Organizacional - Q2 2024", type: "Clima", status: "Finalizado", statusVariant: "positive", startDate: "05 abr 2024", endDate: "20 abr 2024", participants: "390", progress: 100 },
-  { id: "c5", name: "Clima Organizacional - Q1 2024", type: "Clima", status: "Finalizado", statusVariant: "positive", startDate: "15 ene 2024", endDate: "30 ene 2024", participants: "385", progress: 100 },
-  
+  { id: "c2", name: "Clima Organizacional - Q4 2024", type: "Clima", status: "Finalizado", statusVariant: "positive", startDate: "10 oct 2024", endDate: "25 oct 2024", participants: "432", progress: 100, origin: "externa" },
+  { id: "c3", name: "Clima Organizacional - Q3 2024", type: "Clima", status: "Finalizado", statusVariant: "positive", startDate: "12 jul 2024", endDate: "28 jul 2024", participants: "415", progress: 100, origin: "interna" },
+  { id: "c4", name: "Clima Organizacional - Q2 2024", type: "Clima", status: "Finalizado", statusVariant: "positive", startDate: "05 abr 2024", endDate: "20 abr 2024", participants: "390", progress: 100, origin: "interna" },
+  { id: "c5", name: "Clima Organizacional - Q1 2024", type: "Clima", status: "Finalizado", statusVariant: "positive", startDate: "15 ene 2024", endDate: "30 ene 2024", participants: "385", progress: 100, origin: "externa" },
+
   // Cultura (Added 2025/2026)
-  { id: "cu2026", name: "Cultura y Valores - 2026", type: "Cultura", status: "Finalizado", statusVariant: "positive", startDate: "01 mar 2026", endDate: "15 mar 2026", participants: "550", progress: 100 },
-  { id: "cu2025", name: "Cultura y Valores - 2025", type: "Cultura", status: "Finalizado", statusVariant: "positive", startDate: "01 mar 2025", endDate: "15 mar 2025", participants: "530", progress: 100 },
-  { id: "cu1", name: "Cultura y Valores - 2024", type: "Cultura", status: "Finalizado", statusVariant: "positive", startDate: "01 mar 2024", endDate: "15 mar 2024", participants: "510", progress: 100 },
-  { id: "cu4", name: "Alineación de Propósito - 2024", type: "Cultura", status: "Finalizado", statusVariant: "positive", startDate: "10 nov 2024", endDate: "25 nov 2024", participants: "445", progress: 100 },
-  
+  { id: "cu2026", name: "Cultura y Valores - 2026", type: "Cultura", status: "Finalizado", statusVariant: "positive", startDate: "01 mar 2026", endDate: "15 mar 2026", participants: "550", progress: 100, origin: "externa" },
+  { id: "cu2025", name: "Cultura y Valores - 2025", type: "Cultura", status: "Finalizado", statusVariant: "positive", startDate: "01 mar 2025", endDate: "15 mar 2025", participants: "530", progress: 100, origin: "interna" },
+  { id: "cu1", name: "Cultura y Valores - 2024", type: "Cultura", status: "Finalizado", statusVariant: "positive", startDate: "01 mar 2024", endDate: "15 mar 2024", participants: "510", progress: 100, origin: "interna" },
+  { id: "cu4", name: "Alineación de Propósito - 2024", type: "Cultura", status: "Finalizado", statusVariant: "positive", startDate: "10 nov 2024", endDate: "25 nov 2024", participants: "445", progress: 100, origin: "externa" },
+
   // NPS (Added 2025/2026)
-  { id: "n2026-1", name: "NPS Clientes Premium Q1 2026", type: "NPS", status: "Finalizado", statusVariant: "positive", startDate: "01 feb 2026", endDate: "15 feb 2026", participants: "950", progress: 100 },
-  { id: "n2025-4", name: "NPS Clientes Premium Q4 2025", type: "NPS", status: "Finalizado", statusVariant: "positive", startDate: "01 nov 2025", endDate: "15 nov 2025", participants: "920", progress: 100 },
-  { id: "n2", name: "NPS Clientes Premium Q4 2024", type: "NPS", status: "Finalizado", statusVariant: "positive", startDate: "01 nov 2024", endDate: "15 nov 2024", participants: "820", progress: 100 },
-  { id: "n3", name: "NPS Clientes Premium Q3 2024", type: "NPS", status: "Finalizado", statusVariant: "positive", startDate: "01 ago 2024", endDate: "15 ago 2024", participants: "780", progress: 100 },
+  { id: "n2026-1", name: "NPS Clientes Premium Q1 2026", type: "NPS", status: "Finalizado", statusVariant: "positive", startDate: "01 feb 2026", endDate: "15 feb 2026", participants: "950", progress: 100, origin: "externa" },
+  { id: "n2025-4", name: "NPS Clientes Premium Q4 2025", type: "NPS", status: "Finalizado", statusVariant: "positive", startDate: "01 nov 2025", endDate: "15 nov 2025", participants: "920", progress: 100, origin: "interna" },
+  { id: "n2", name: "NPS Clientes Premium Q4 2024", type: "NPS", status: "Finalizado", statusVariant: "positive", startDate: "01 nov 2024", endDate: "15 nov 2024", participants: "820", progress: 100, origin: "interna" },
+  { id: "n3", name: "NPS Clientes Premium Q3 2024", type: "NPS", status: "Finalizado", statusVariant: "positive", startDate: "01 ago 2024", endDate: "15 ago 2024", participants: "780", progress: 100, origin: "externa" },
 ];
 
 

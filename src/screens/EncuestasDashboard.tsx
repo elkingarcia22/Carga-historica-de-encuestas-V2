@@ -46,6 +46,7 @@ import {
   analyzeUploaded,
   findExistingDuplicate,
   isEmptyAnalysis,
+  resolveDemoScenario,
   type AnalyzeOutcome,
   type DetectedSurveyAnalysis,
   type SurveyImportWarning,
@@ -83,6 +84,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { COMPARATIVE_SURVEYS_LIST } from "@/mocks/comparativeMocks";
+import type { SurveyListItem } from "@/mocks/types";
 
 
 /**
@@ -105,11 +107,6 @@ interface SurveyReviewItem {
   endDate: Date | undefined;
   fileNames: string[];
   analysis: DetectedSurveyAnalysis;
-}
-
-interface WizardStepDef {
-  id: number;
-  label: string;
 }
 
 interface UploadTaskState {
@@ -197,59 +194,36 @@ function getAnalyzingCopy(
   };
 }
 
-const UploadWizardStepper: React.FC<{ steps: WizardStepDef[]; activeStep: number }> = ({ steps, activeStep }) => (
-  <div className="flex items-center justify-between relative max-w-[320px] mx-auto">
-    <div className="absolute top-3.5 left-4 right-4 h-[1.5px] bg-status-positive/10 z-0" />
-    <div
-      className="absolute top-3.5 left-4 right-4 h-[1.5px] bg-status-positive transition-all duration-700 ease-in-out z-0 origin-left"
-      style={{
-        transform: `scaleX(${(activeStep - 1) / (steps.length - 1)})`,
-        boxShadow: '0 0 10px hsl(var(--color-positive-hsl) / 0.3)',
-      }}
-    />
+/**
+ * Catches validation-type problems (e.g. file too large) that are knowable
+ * right when files are picked, so the dropzone can reject them immediately
+ * instead of waiting through the "analizando archivos" step. Parse-type
+ * failures (corrupt file) genuinely require reading the file, so those still
+ * surface after analysis.
+ */
+function getImmediateValidationError(files: File[]): string | null {
+  const scenario = resolveDemoScenario(files);
+  if (scenario?.kind === 'error' && scenario.variant === 'validation') return scenario.detail;
+  return null;
+}
 
-    {steps.map((step) => {
-      const isActive = step.id === activeStep;
-      const isCompleted = step.id < activeStep;
-      const isLocked = step.id > activeStep;
+const SHORT_MONTH_NAMES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 
-      return (
-        <div key={step.id} className="flex flex-col items-center relative z-10">
-          <div className={cn(
-            "h-7 w-7 rounded-full flex items-center justify-center transition-all duration-500 border-[1.5px] font-bold text-[11px] relative z-10",
-            isCompleted
-              ? "bg-surface border-status-positive text-status-positive shadow-sm"
-              : isActive
-                ? "bg-primary border-primary text-text-inverse shadow-sm"
-                : "bg-surface-muted border-border-strong/30 text-text-secondary"
-          )}>
-            {isCompleted && <div className="absolute inset-0 bg-status-positive/5 rounded-full" />}
-            {isActive && <div className="absolute inset-[-3px] rounded-full border border-primary/20 animate-pulse" />}
+/** Formats a date to match the mock survey list's style, e.g. "15 ene 2026". */
+function formatShortDate(date: Date | undefined): string {
+  if (!date) return '';
+  const day = date.getDate().toString().padStart(2, '0');
+  return `${day} ${SHORT_MONTH_NAMES[date.getMonth()]} ${date.getFullYear()}`;
+}
 
-            <div className="relative z-10 flex items-center justify-center">
-              {isCompleted ? (
-                <Check className="h-3 w-3" strokeWidth={4} />
-              ) : isLocked ? (
-                <Lock className="h-3 w-3 opacity-30" />
-              ) : (
-                <span>{step.id}</span>
-              )}
-            </div>
-          </div>
-
-          <div className="absolute top-8 flex flex-col items-center w-24">
-            <span className={cn(
-              "text-[10px] font-bold tracking-tight text-center transition-colors duration-500",
-              isActive ? "text-primary" : isCompleted ? "text-status-positive" : "text-text-secondary/40"
-            )}>
-              {step.label}
-            </span>
-          </div>
-        </div>
-      );
-    })}
-  </div>
-);
+/** Best-effort survey type from its name, for the "Tipo" column of a freshly loaded survey. */
+function inferSurveyType(name: string): string {
+  const n = name.toLowerCase();
+  if (n.includes('clima')) return 'Clima';
+  if (n.includes('cultura')) return 'Cultura';
+  if (n.includes('nps') || n.includes('promotor')) return 'NPS';
+  return 'Otro';
+}
 
 /** One line inside a summary accordion: an optional color dot / index, a label, and an optional right-aligned value. */
 const SummaryRow: React.FC<{
@@ -442,6 +416,11 @@ const RecentUploadsList: React.FC<{
   const hasActive = activeTasks.length > 0;
   const anyLoading = activeTasks.some((task) => task.status === 'loading');
   const isEmpty = !hasActive && recentUploads.length === 0;
+  // Only the most recently finished upload keeps the "just completed" check —
+  // earlier ones fall back to the plain file icon, like any other past load.
+  const latestCompletedId = [...activeTasks]
+    .filter((task) => task.status === 'completed')
+    .sort((a, b) => b.id - a.id)[0]?.id;
 
   if (isEmpty) {
     return (
@@ -484,9 +463,13 @@ const RecentUploadsList: React.FC<{
               )}
             >
               <div className="flex items-center gap-3">
-                {task.status === 'completed' ? (
+                {task.status === 'completed' && task.id === latestCompletedId ? (
                   <div className="h-9 w-9 rounded-lg bg-status-positive-bg text-status-positive flex items-center justify-center shrink-0">
                     <Check className="h-4 w-4" strokeWidth={3} />
+                  </div>
+                ) : task.status === 'completed' ? (
+                  <div className="h-9 w-9 rounded-lg bg-surface-muted text-text-secondary/50 flex items-center justify-center shrink-0">
+                    <FileText className="h-4 w-4" strokeWidth={2} />
                   </div>
                 ) : task.status === 'failed' ? (
                   <div className="h-9 w-9 rounded-lg bg-destructive/10 text-destructive flex items-center justify-center shrink-0">
@@ -570,6 +553,34 @@ const RecentUploadsList: React.FC<{
         ))}
       </div>
     </div>
+  );
+};
+
+/** Where a survey row came from: uploaded from an external file, or created inside UBITS. */
+const SURVEY_ORIGIN_META: Record<SurveyListItem['origin'], { label: string; short: string; className: string }> = {
+  externa: { label: "Carga externa", short: "Externa", className: "bg-info/10 text-info" },
+  interna: { label: "Creación interna UBITS", short: "UBITS", className: "bg-primary/10 text-primary" },
+};
+
+/** Text-only pill for the "Origen" column marking a row as an external load or a UBITS-native creation. */
+const SurveyOriginBadge: React.FC<{ origin: SurveyListItem['origin'] }> = ({ origin }) => {
+  const meta = SURVEY_ORIGIN_META[origin];
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={cn(
+            "inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 cursor-default",
+            meta.className
+          )}
+        >
+          {meta.short}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        <span>{meta.label}</span>
+      </TooltipContent>
+    </Tooltip>
   );
 };
 
@@ -809,6 +820,12 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
      return;
    }
 
+   const immediateError = getImmediateValidationError(selectedFiles);
+   if (immediateError) {
+     toast.error(immediateError);
+     return;
+   }
+
    setUploadFiles(selectedFiles);
    setIsUploadDrawerOpen(true);
    setAnalyzingPurpose('files');
@@ -935,6 +952,18 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
    setIsAnalyzingFiles(true);
  };
 
+ // Lets the user return to the dropzone to swap/add files — keeps the files
+ // already picked (so they're still there to edit) but drops the stale
+ // analysis, since it no longer matches whatever gets analyzed next.
+ const handleBackToDropzone = () => {
+   setUploadStep('dropzone');
+   setReviewItems([]);
+   setSelectedGroupKey(null);
+   setImportWarnings([]);
+   setIsSimulated(false);
+   setNameErrorShown(false);
+ };
+
  const selectedReviewItem = reviewItems.find((item) => item.groupKey === selectedGroupKey);
  // Sanity checks on the general-data form before letting the user continue.
  const anonymityThresholdNum = Number(selectedReviewItem?.anonymityThreshold);
@@ -1011,6 +1040,25 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
    setUploadStep('loading');
    setUploadTab('cargas');
 
+   // Surfaces the new survey at the top of the home table right away, tagged as
+   // an external load; its status/progress will track the upload task live.
+   setSurveys((prev) => [
+     {
+       id: `up-${taskId}`,
+       name: selectedReviewItem.name,
+       type: inferSurveyType(selectedReviewItem.name),
+       status: 'Cargando',
+       statusVariant: 'info',
+       startDate: formatShortDate(selectedReviewItem.startDate),
+       endDate: formatShortDate(selectedReviewItem.endDate),
+       participants: String(selectedReviewItem.analysis.totalRespondents ?? 0),
+       progress: 0,
+       origin: 'externa',
+       uploadTaskId: taskId,
+     },
+     ...prev,
+   ]);
+
    runUploadProgress(taskId, finalizeFails);
  };
 
@@ -1033,8 +1081,24 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
    resetUploadDrawer();
  };
 
- // Mock data
- const surveys = COMPARATIVE_SURVEYS_LIST;
+ // Survey list: seeded from mock data, with newly finalized uploads prepended to the front.
+ const [surveys, setSurveys] = React.useState<SurveyListItem[]>(COMPARATIVE_SURVEYS_LIST);
+
+ // Rows still tied to an active upload task reflect that task's live progress/status
+ // instead of the frozen values they were created with.
+ const displayedSurveys = React.useMemo(() => {
+   return surveys.map((survey) => {
+     if (survey.uploadTaskId == null) return survey;
+     const task = uploadTasks.find((t) => t.id === survey.uploadTaskId);
+     if (!task) return survey;
+     return {
+       ...survey,
+       progress: task.status === 'completed' ? 100 : task.progress,
+       status: task.status === 'failed' ? 'Error' : task.status === 'completed' ? 'Finalizado' : 'Cargando',
+       statusVariant: task.status === 'failed' ? 'negative' : task.status === 'completed' ? 'positive' : 'info',
+     } satisfies SurveyListItem;
+   });
+ }, [surveys, uploadTasks]);
 
 
   const surveyTypes = [
@@ -1207,6 +1271,7 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
           <TableHead className="w-[40px] px-8"><Checkbox className="border-border/60" /></TableHead>
           <TableHead className="w-[30px] p-0"></TableHead>
           <TableHead className="text-[11px] font-bold text-text-secondary tracking-tight py-4">Nombre</TableHead>
+          <TableHead className="text-[11px] font-bold text-text-secondary tracking-tight py-4">Origen</TableHead>
           <TableHead className="text-[11px] font-bold text-text-secondary tracking-tight py-4">Tipo</TableHead>
           <TableHead className="text-[11px] font-bold text-text-secondary tracking-tight py-4">Estado</TableHead>
           <TableHead className="text-[11px] font-bold text-text-secondary tracking-tight py-4">Inicio</TableHead>
@@ -1217,18 +1282,20 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {surveys.map((survey) => (
+        {displayedSurveys.map((survey) => (
           <TableRow key={survey.id} className="border-b border-border/40 transition-all group">
             <TableCell className="px-8 py-4"><Checkbox className="border-border/60" /></TableCell>
             <TableCell className="p-0"><GripVertical className="h-4 w-4 text-text-secondary opacity-20 group-hover:opacity-50 transition-opacity cursor-grab" /></TableCell>
             <TableCell className="py-4 text-[12px] font-bold text-text-primary">{survey.name}</TableCell>
+            <TableCell><SurveyOriginBadge origin={survey.origin} /></TableCell>
             <TableCell className="text-[11px] font-bold text-text-secondary/70">{survey.type}</TableCell>
             <TableCell>
               <Badge variant="outline" className={cn(
                 "text-[10px] font-bold border-none px-2 py-0.5 rounded-full pointer-events-none",
                 survey.statusVariant === "info" && "bg-info/10 text-info",
                 survey.statusVariant === "positive" && "bg-status-positive-bg text-status-positive",
-                survey.statusVariant === "warning" && "bg-status-warning-light/20 text-status-warning"
+                survey.statusVariant === "warning" && "bg-status-warning-light/20 text-status-warning",
+                survey.statusVariant === "negative" && "bg-destructive/10 text-destructive"
               )}>
                 {survey.status}
               </Badge>
@@ -1725,16 +1792,27 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
         );
 
         return (
-        <div className="absolute inset-0 z-[60] flex flex-col items-center justify-center bg-ai-fuzzy-overlay shimmer-mirror animate-in fade-in duration-300 select-none">
-          <div className="w-full max-w-md p-8 mx-4 text-center text-white flex flex-col items-center">
-            {/* Pulsing UBITS AI Icon */}
-            <div className="relative w-20 h-20 flex items-center justify-center mb-2">
-              <div className="absolute w-12 h-12 bg-white/25 rounded-full blur-xl animate-pulse" />
-              <svg width="44" height="44" viewBox="0 0 24 24" className="text-white relative">
+        // Inverted, lighter loader: fills the whole panel respecting the drawer's
+        // p-4 margins, but the gradient + shimmer live on the BORDER only while
+        // the fill stays on the panel background. The `bg-ai-gradient` ring with
+        // `shimmer-mirror` shows the sweep along the 2px edge; the inner card
+        // (relative z-10) sits on top so the sweep never washes over the content.
+        <div className="absolute inset-4 z-[60] rounded-3xl bg-ai-gradient p-[2px] shimmer-mirror shadow-sm animate-in fade-in duration-300 select-none">
+          <div className="relative z-10 h-full w-full rounded-[22px] bg-background flex flex-col items-center justify-center text-center px-10">
+            {/* Pulsing UBITS AI Icon — tinted with the gradient */}
+            <div className="relative w-16 h-16 flex items-center justify-center mb-3">
+              <div className="absolute w-11 h-11 rounded-full bg-ai-gradient opacity-20 blur-xl animate-pulse" />
+              <svg width="42" height="42" viewBox="0 0 24 24" className="relative">
+                <defs>
+                  <linearGradient id="aiLoaderIconGrad" x1="0" y1="0" x2="1" y2="1">
+                    <stop offset="0%" stopColor="hsl(var(--ai-gradient-start))" />
+                    <stop offset="100%" stopColor="hsl(var(--ai-gradient-end))" />
+                  </linearGradient>
+                </defs>
                 <path
                   d="M12,3 Q12,12 3,12 Q12,12 12,21 Q12,12 21,12 Q12,12 12,3 Z"
                   fill="none"
-                  stroke="currentColor"
+                  stroke="url(#aiLoaderIconGrad)"
                   strokeWidth="2.5"
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -1742,39 +1820,39 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
                 />
                 <path
                   d="M19,5 Q19,7 17,7 Q19,7 19,9 Q19,7 21,7 Q19,7 19,5 Z"
-                  fill="currentColor"
+                  fill="url(#aiLoaderIconGrad)"
                   className="animate-[pulse_1.3s_infinite_ease-in-out] [animation-delay:0.3s]"
                 />
                 <circle
                   cx="5.5"
                   cy="18.5"
                   r="1.75"
-                  fill="currentColor"
+                  fill="url(#aiLoaderIconGrad)"
                   className="animate-[pulse_1.5s_infinite_ease-in-out] [animation-delay:0.6s]"
                 />
               </svg>
             </div>
 
-            <h3 className="text-xl font-bold tracking-tight mb-2 text-white">
+            <h3 className="text-lg font-bold tracking-tight mb-1 text-ai-gradient">
               {copy.title}
             </h3>
 
-            <div className="w-full mt-6 space-y-3">
-              <div className="flex justify-between text-xs text-white/80 font-sans font-bold px-1">
+            <div className="w-full max-w-[300px] mt-6 space-y-2.5">
+              <div className="flex justify-between text-xs text-text-secondary font-bold px-1">
                 <span>{copy.status}</span>
-                <span>{analyzeProgress}%</span>
+                <span className="text-ai-gradient">{analyzeProgress}%</span>
               </div>
 
-              {/* Shimmer progress bar */}
-              <div className="h-2 w-full bg-white/20 rounded-full overflow-hidden relative">
+              {/* Gradient progress bar on a light track */}
+              <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden relative">
                 <div
-                  className="h-full bg-white rounded-full shimmer-mirror transition-all duration-300"
+                  className="h-full bg-ai-gradient rounded-full transition-all duration-300"
                   style={{ width: `${analyzeProgress}%` }}
                 />
               </div>
             </div>
 
-            <p className="text-xs text-white/60 mt-8">
+            <p className="text-xs text-text-secondary/60 mt-6 max-w-[300px]">
               {copy.footer}
             </p>
           </div>
@@ -1826,8 +1904,9 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
                 Solo puedes cargar encuestas de tipo{" "}
                 <span className="font-bold text-text-primary">Clima</span>,{" "}
                 <span className="font-bold text-text-primary">Cultura</span> o{" "}
-                <span className="font-bold text-text-primary">NPS</span>. Analizaremos tus archivos y detectaremos
-                automáticamente su estructura:
+                <span className="font-bold text-text-primary">NPS</span>, y solo puedes cargar{" "}
+                <span className="font-bold text-text-primary">una encuesta a la vez</span>. Analizaremos tus archivos
+                y detectaremos automáticamente su estructura:
               </p>
             </div>
             <div className="flex flex-wrap gap-1.5 pl-6">
@@ -1848,6 +1927,7 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
             accept=".csv,.xls,.xlsx,.pdf,.png,.jpg,.jpeg"
             multiple
             maxSizeMB={10}
+            validate={getImmediateValidationError}
             idleText="Arrastra tus archivos aquí o haz clic para buscar"
             description="Formatos soportados: Excel, CSV, PDF e imágenes (máx. 10MB)"
             className="[&>div:first-of-type]:min-h-[200px]"
@@ -1903,28 +1983,16 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
   {/* Review wizard: pick the detected survey, confirm its general data, then review a summary before loading it */}
   {(uploadStep === 'select' || uploadStep === 'general' || uploadStep === 'summary') && (
     <div className="flex flex-col flex-1 -m-4">
-      {(uploadStep === 'general' || uploadStep === 'summary') && (
-        <div className="px-6 py-6 bg-background sticky top-0 z-20">
-          <UploadWizardStepper
-            steps={[
-              { id: 1, label: "Datos generales" },
-              { id: 2, label: "Estructura" },
-            ]}
-            activeStep={uploadStep === 'general' ? 1 : 2}
-          />
-        </div>
-      )}
-
-      <div className="flex-1 px-4 pb-4 pt-[31px] space-y-4">
-        {uploadStep === 'summary' && (
+      <div className="flex-1 px-4 pb-4 pt-4 space-y-4">
+        {(uploadStep === 'select' || uploadStep === 'general' || uploadStep === 'summary') && (
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setUploadStep('general')}
+            onClick={() => (uploadStep === 'summary' ? setUploadStep('general') : handleBackToDropzone())}
             className="gap-2 text-primary font-bold tracking-tight text-[10px] h-8 px-3 rounded-full bg-primary/5 hover:bg-primary/10 transition-all w-fit"
           >
             <ChevronLeft className="h-4 w-4" />
-            <span>Volver</span>
+            <span>{uploadStep === 'summary' ? 'Volver' : 'Volver a la carga de archivos'}</span>
           </Button>
         )}
 

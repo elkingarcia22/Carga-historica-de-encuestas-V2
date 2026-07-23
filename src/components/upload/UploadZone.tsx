@@ -24,6 +24,12 @@ export interface UploadZoneProps {
   description?: string
   /** Error message */
   error?: string
+  /**
+   * Extra synchronous check run after the built-in accept/size validation
+   * passes. Return an error message to reject the selection and show it
+   * inline instead of adding the files; return null/undefined to accept.
+   */
+  validate?: (files: File[]) => string | null | undefined
   /** Text shown in idle state */
   idleText?: string
   /** Text shown in active drag state */
@@ -54,6 +60,7 @@ export function UploadZone({
   label,
   description,
   error,
+  validate,
   idleText = 'Drag and drop files here or click to browse',
   activeText = 'Drop files here...',
   className,
@@ -86,6 +93,12 @@ export function UploadZone({
 
     if (!validation.isValid) {
       setLocalError(validation.error || 'Invalid file selection')
+      return
+    }
+
+    const extraError = validate?.(selectedFiles)
+    if (extraError) {
+      setLocalError(extraError)
       return
     }
 
