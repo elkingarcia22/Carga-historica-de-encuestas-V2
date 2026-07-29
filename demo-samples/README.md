@@ -38,13 +38,35 @@ Archivos reales de Quillayes Surlat (formato de exportación real). Se parsean d
 ## Acto 3 — Casos atípicos
 | Archivo | Qué demuestra | Real/Mock |
 |---------|----------------|-----------|
-| `Clima 2024.xlsx` + `Clima 2025.xlsx` (juntos) | Varias encuestas detectadas → paso "Selecciona la encuesta". | REAL |
+| `Clima 2024.xlsx` + `Clima 2025.xlsx` (juntos) | Varias encuestas detectadas → paso "Selecciona la encuesta". Al cargar una, aparece el estado intermedio **"Carga iniciada"** con tres caminos: cargar la otra encuesta del lote / ver el estado de la carga actual / cargar una nueva. Las ya cargadas quedan con check y "Ya la cargaste". | REAL |
 | `preguntas-sin-seccion.xlsx` | Preguntas que no mapean a una dimensión → grupos `eNPS` y `Sin sección` con nota aclaratoria. | REAL |
 | `Encuesta tipos variados 2025.xlsx` | **Match completo de la taxonomía UBITS**: detecta tipo de pregunta / escala / valoración (Likert Acuerdo·Frecuencia·Satisfacción·Probabilidad, NPS, Estrellas, Emociones, Lineal, Abierta, Opción única, Múltiples, Desplegable). Las 2 preguntas de ranking/matriz caen en el grupo **"Sin reconocer"** con aviso de que no aportan a métricas ni se pueden filtrar/segmentar. | REAL |
 | `reporte-clima.pdf` / `encuesta.png` | Extracción **simulada** desde PDF/imagen (banner "Estructura estimada (simulada)"). | MOCK |
 | `Clima Organizacional - Q1 2025.xlsx` | Choca con una encuesta ya cargada → el campo "Nombre de la encuesta" queda en error y bloquea "Siguiente" hasta usar otro nombre (UBITS no permite duplicados). | REAL contra mock |
 
+## Acto 4 — Participantes y visibilidad (pública vs. anónima)
+
+La visibilidad **no la elige libremente el usuario**: una encuesta solo puede cargarse como
+**Pública** si los archivos traen **una fila por persona con las respuestas de esa persona**.
+El criterio de match con UBITS es el **username**, que puede ser el correo, el número de
+documento o un username asignado.
+
+| Archivo | Qué demuestra | Real/Mock |
+|---------|----------------|-----------|
+| `Clima con participantes 2025.xlsx` | Hoja `participantes` con **1 fila por persona + sus respuestas**. Se detecta automáticamente como **Pública** (queda preseleccionada) y aparece la sección **PARTICIPANTES DETECTADOS · 28** con 3 acordeones: **Hacen match con UBITS** (18, su identificador es un username), **Posibles match** (4, mismo nombre y apellido que un usuario pero identificador desconocido → confirmar o crear aparte) y **Nuevos en la encuesta** (6, con **autocomplete** para vincularlos a mano a cualquier usuario del directorio). | forzado por token |
+| `Clima participantes sin respuestas 2025.xlsx` | Hoja `participantes` **sin columnas de respuesta**: sabemos quiénes participaron, pero no qué respondió cada uno. La opción **Pública queda deshabilitada** con el mensaje de por qué, se fuerza **Anónima** y aparece el "Umbral de anonimato". La sección de participantes se muestra igual (con la nota de anonimato). | forzado por token |
+| Cualquier otro archivo de este README | Ningún archivo agregado trae participantes con respuestas individuales, así que **todos** bloquean la opción Pública con el mensaje "Los archivos traen resultados agregados…". | REAL |
+
+> Tokens en el nombre: `participantes` activa el caso público; si además contiene
+> `sin respuestas` / `sin-respuestas` / `anonima`, activa el caso anónimo forzado.
+> La regla vive en `src/lib/surveyImport/visibility.ts` (`publicVisibilityBlock`); el roster de
+> participantes y el directorio de UBITS que alimenta el autocomplete, en
+> `src/mocks/participantsMocks.ts` (`DEMO_PARTICIPANT_ROSTER` y `UBITS_DIRECTORY`).
+
 ## Notas
 - Los `.xlsx` reales (`Clima 2025`, `Clima 2024`, `preguntas-sin-seccion`, `Clima Organizacional - Q1 2025`) se parsean de verdad.
+- Los dos archivos de participantes traen el roster real de 24 personas en la hoja `participantes`,
+  así que abrir el `.xlsx` corrobora lo que muestra la UI. El roster está espejado entre
+  `src/mocks/participantsMocks.ts` y `scripts/generate-demo-samples.cjs`: si editas uno, edita el otro.
 - `pesado`/`corrupto` tienen contenido válido pero se fuerzan por el token del nombre, para que la demo sea robusta en vivo.
 - El PDF y el PNG tienen contenido mínimo: la estructura mostrada es un mock rotulado como simulado.

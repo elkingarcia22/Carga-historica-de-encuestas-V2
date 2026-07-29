@@ -11,6 +11,10 @@
  *  - name contains "pesado"     → "file too large" error
  *  - name contains "corrupto"   → "could not read file" error
  *  - name contains "sin-estructura" / "vacio" → recognized but no structure
+ *  - name contains "participantes" + "sin respuestas" → participant roster with
+ *    no per-person answers → forced anonymous (public option blocked)
+ *  - name contains "participantes"  → participants WITH their own answers →
+ *    public by default, plus the UBITS match breakdown
  *  - anything else              → null (run the real pipeline)
  *
  * Genuinely unsupported types (zip, docx, …) are already blocked earlier by
@@ -18,6 +22,7 @@
  */
 import { getFileKind } from "@/components/upload/uploadUtils";
 import { COMPARATIVE_SURVEYS_LIST } from "@/mocks/comparativeMocks";
+import { DEMO_PARTICIPANT_ROSTER } from "@/mocks/participantsMocks";
 import type {
   DetectedSurveyAnalysis,
   DetectedSurveyGroup,
@@ -43,7 +48,8 @@ export function isEmptyAnalysis(a: DetectedSurveyAnalysis): boolean {
     a.participationRate == null &&
     a.totalRespondents == null &&
     a.favorability == null &&
-    a.enps == null
+    a.enps == null &&
+    a.participants == null
   );
 }
 
@@ -83,6 +89,7 @@ function makeAnalysis(partial: Partial<DetectedSurveyAnalysis>): DetectedSurveyA
     npsBreakdown: partial.npsBreakdown ?? null,
     sectionDetails: partial.sectionDetails ?? sectionDetailsFrom(questionDetails),
     questionDetails,
+    participants: partial.participants ?? null,
   };
 }
 
@@ -152,6 +159,96 @@ export function buildEmptyStructureResult(fileName: string): SurveyImportResult 
 }
 
 /**
+ * Clima structure shared by both participant-level scenarios, so the only
+ * difference between them is whether the answers are tied to each person.
+ * Mirrors the question set written into the generated .xlsx files.
+ */
+const PARTICIPANT_QUESTION_DETAILS: QuestionDetail[] = [
+  { text: "Mi jefatura me entrega retroalimentación oportuna sobre mi trabajo.", section: "Liderazgo" },
+  { text: "Confío en las decisiones que toma el equipo directivo.", section: "Liderazgo" },
+  { text: "Mi jefatura reconoce el trabajo bien hecho.", section: "Liderazgo" },
+  { text: "La comunicación entre áreas es clara y oportuna.", section: "Comunicación" },
+  { text: "Recibo la información que necesito para hacer bien mi trabajo.", section: "Comunicación" },
+  { text: "Tengo oportunidades reales de crecimiento en la empresa.", section: "Desarrollo" },
+  { text: "Recibo capacitación suficiente para mi rol.", section: "Desarrollo" },
+  { text: "Mi carga de trabajo me permite mantener un buen equilibrio de vida.", section: "Bienestar" },
+  { text: "Me siento seguro y respetado en mi entorno de trabajo.", section: "Bienestar" },
+  // Section-less eNPS driver + one standalone open question.
+  { text: "En una escala de 0 a 10, ¿qué tan probable es que recomiendes a la empresa como un buen lugar para trabajar?", section: null },
+  { text: "Cuéntanos con tus palabras qué mejorarías de la empresa (comentario).", section: null },
+];
+
+/**
+ * Files that bring one row per person **with that person's own answers**. This
+ * is the only shape that supports a public (named) load, so the summary gains a
+ * "Participantes" block and the visibility defaults to pública.
+ *
+ * Because the answers are per-person, participation and eNPS are exact rather
+ * than approximated from aggregated buckets.
+ */
+export function buildParticipantsWithAnswersResult(fileName: string): SurveyImportResult {
+  const analysis = makeAnalysis({
+    participationRate: 87.5,
+    totalRespondents: DEMO_PARTICIPANT_ROSTER.length,
+    totalInvited: 32,
+    enps: 50,
+    enpsIsApproximate: false,
+    favorability: 74,
+    demographics: ["Área", "Cargo", "Sede", "Antigüedad"],
+    questionDetails: PARTICIPANT_QUESTION_DETAILS,
+    favorabilityBreakdown: { desfavorable: 9, neutral: 17, favorable: 74 },
+    // 18 promotores / 6 neutrales / 4 detractores sobre 28 respuestas → eNPS 50.
+    npsBreakdown: { detractores: 14.3, neutrales: 21.4, promotores: 64.3 },
+    participants: { answersLinked: true, participants: DEMO_PARTICIPANT_ROSTER },
+  });
+
+  const group: DetectedSurveyGroup = {
+    groupKey: "2025",
+    suggestedSurveyName: "Encuesta de Clima con participantes 2025",
+    surveyYear: 2025,
+    suggestedStartDate: new Date(2025, 2, 3),
+    suggestedEndDate: new Date(2025, 2, 21),
+    fileNames: [fileName],
+    analysis,
+  };
+
+  return { groups: [group], unrecognizedFiles: [] };
+}
+
+/**
+ * Files that list the participants but keep the results aggregated — nothing
+ * ties a given answer back to a given person. The roster is still detected (and
+ * still matched against UBITS), but the survey can only be loaded as anonymous.
+ */
+export function buildParticipantsWithoutAnswersResult(fileName: string): SurveyImportResult {
+  const analysis = makeAnalysis({
+    participationRate: 87.5,
+    totalRespondents: DEMO_PARTICIPANT_ROSTER.length,
+    totalInvited: 32,
+    enps: 40,
+    enpsIsApproximate: true,
+    favorability: 71,
+    demographics: ["Área", "Cargo", "Sede"],
+    questionDetails: PARTICIPANT_QUESTION_DETAILS,
+    favorabilityBreakdown: { desfavorable: 11, neutral: 18, favorable: 71 },
+    npsBreakdown: { detractores: 18, neutrales: 24, promotores: 58 },
+    participants: { answersLinked: false, participants: DEMO_PARTICIPANT_ROSTER },
+  });
+
+  const group: DetectedSurveyGroup = {
+    groupKey: "2025",
+    suggestedSurveyName: "Encuesta de Clima sin respuestas por persona 2025",
+    surveyYear: 2025,
+    suggestedStartDate: new Date(2025, 2, 3),
+    suggestedEndDate: new Date(2025, 2, 21),
+    fileNames: [fileName],
+    analysis,
+  };
+
+  return { groups: [group], unrecognizedFiles: [] };
+}
+
+/**
  * Returns the name of an already-loaded survey that matches, or null.
  * A match is either an exact (normalized) name, or the same survey family
  * (name minus year/quarter) for the same year. Renaming to a genuinely
@@ -207,6 +304,19 @@ export function resolveDemoScenario(files: File[]): AnalyzeOutcome | null {
 
   if (nameHas(files, "sin-estructura") || nameHas(files, "sinestructura") || nameHas(files, "vacio") || nameHas(files, "vacío")) {
     return { kind: "result", result: buildEmptyStructureResult(files[0].name) };
+  }
+
+  // Participant-level files. The "no per-person answers" variant is checked
+  // first: its name also contains "participantes", so the order decides.
+  if (nameHas(files, "participantes")) {
+    const withoutAnswers =
+      nameHas(files, "sin respuestas") || nameHas(files, "sin-respuestas") || nameHas(files, "anonima") || nameHas(files, "anónima");
+    return {
+      kind: "result",
+      result: withoutAnswers
+        ? buildParticipantsWithoutAnswersResult(files[0].name)
+        : buildParticipantsWithAnswersResult(files[0].name),
+    };
   }
 
   if (hasKind(files, "pdf", "image")) {

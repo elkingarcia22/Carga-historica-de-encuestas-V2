@@ -6,10 +6,26 @@ export {
   resolveDemoScenario,
   buildMockExtractionResult,
   buildEmptyStructureResult,
+  buildParticipantsWithAnswersResult,
+  buildParticipantsWithoutAnswersResult,
   findExistingDuplicate,
   isEmptyAnalysis,
 } from "./demoScenarios";
 export type { AnalyzeOutcome } from "./demoScenarios";
+export {
+  publicVisibilityBlock,
+  PUBLIC_VISIBILITY_BLOCK_MESSAGE,
+  splitParticipantsByMatch,
+  effectiveMatchStatus,
+  linkedUsernames,
+  identifierTypeLabel,
+} from "./visibility";
+export type {
+  PublicVisibilityBlock,
+  ParticipantMatchSplit,
+  ParticipantResolution,
+  ParticipantResolutions,
+} from "./visibility";
 
 import type { SurveyImportResult } from "./types";
 import { parseSurveyFile } from "./parseFile";

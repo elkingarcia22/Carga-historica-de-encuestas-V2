@@ -30,6 +30,9 @@ import {
   ExternalLink,
   AlertTriangle,
   FileSearch,
+  UserCheck,
+  UserPlus,
+  UserSearch,
 } from "lucide-react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/feedback/EmptyState";
@@ -39,18 +42,29 @@ import { validateFiles } from "@/components/upload/uploadUtils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/forms/Field";
+import { SearchableSelect } from "@/components/forms/SearchableSelect";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { DatePicker } from "@/components/date/DatePicker";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import {
   analyzeUploaded,
   findExistingDuplicate,
+  identifierTypeLabel,
   isEmptyAnalysis,
+  linkedUsernames,
+  publicVisibilityBlock,
   resolveDemoScenario,
+  splitParticipantsByMatch,
+  PUBLIC_VISIBILITY_BLOCK_MESSAGE,
   type AnalyzeOutcome,
+  type DetectedParticipant,
   type DetectedSurveyAnalysis,
+  type ParticipantResolution,
+  type ParticipantResolutions,
   type SurveyImportWarning,
+  type UbitsDirectoryUser,
 } from "@/lib/surveyImport";
+import { UBITS_DIRECTORY } from "@/mocks/participantsMocks";
 import { 
  Table, 
  TableBody, 
@@ -372,6 +386,150 @@ const QuestionRow: React.FC<{ index: number; text: string }> = ({ index, text })
   );
 };
 
+/** The decision taken on a participant, shown as a chip with a way to undo it. */
+const ResolutionChip: React.FC<{
+  resolution: ParticipantResolution;
+  linkedUser?: UbitsDirectoryUser;
+  onClear: () => void;
+}> = ({ resolution, linkedUser, onClear }) => (
+  <div className="flex flex-wrap items-center gap-2">
+    {resolution.kind === 'linked' ? (
+      <span className="px-2 py-0.5 rounded-md text-[11px] font-bold inline-flex items-center gap-1 bg-status-positive/10 text-status-positive max-w-full">
+        <Check className="h-3 w-3 shrink-0" strokeWidth={3} />
+        <span className="truncate">Vinculada a {linkedUser?.name ?? resolution.username}</span>
+      </span>
+    ) : (
+      <span className="px-2 py-0.5 rounded-md text-[11px] font-bold inline-flex items-center gap-1 bg-surface-muted text-text-secondary">
+        <UserPlus className="h-3 w-3 shrink-0" strokeWidth={2.5} /> Se crea en la encuesta
+      </span>
+    )}
+    <button type="button" onClick={onClear} className="text-[11px] font-bold text-primary hover:underline shrink-0">
+      Deshacer
+    </button>
+  </div>
+);
+
+/**
+ * One detected participant: the name found in the file plus the identifier we
+ * looked them up with, so the reviewer can see exactly why a person did or
+ * didn't resolve to a UBITS user.
+ *
+ * What it offers depends on how the person resolved:
+ *  - `matched` by username → nothing to decide.
+ *  - `possible` → the UBITS user we suspect they are, with enough context to
+ *    tell homonyms apart, plus confirm / reject. Never linked automatically.
+ *  - `unmatched` → a directory search to link them to any user by hand.
+ */
+const ParticipantRow: React.FC<{
+  index: number;
+  participant: DetectedParticipant;
+  /** Directory to search when linking by hand. */
+  directory: UbitsDirectoryUser[];
+  /** Usernames already tied to somebody else in this batch. */
+  takenUsernames: Set<string>;
+  resolution?: ParticipantResolution;
+  onResolve: (decision: ParticipantResolution | null) => void;
+}> = ({ index, participant, directory, takenUsernames, resolution, onResolve }) => {
+  const suggestion = participant.suggestion;
+  const linkedUser =
+    resolution?.kind === 'linked' ? directory.find((u) => u.username === resolution.username) : undefined;
+  // Search by hand when the person isn't linked yet — but not while a suggestion
+  // is still awaiting its yes/no, so that decision stays the only thing to make.
+  const canPickFromDirectory =
+    participant.matchStatus !== 'matched' && resolution?.kind !== 'linked' && !(suggestion && !resolution);
+
+  const directoryOptions = React.useMemo(
+    () =>
+      directory.map((user) => ({
+        value: user.username,
+        label: user.name,
+        description: takenUsernames.has(user.username)
+          ? `${user.username} · ya vinculado a otro participante`
+          : `${user.username} · ${user.context}`,
+        disabled: takenUsernames.has(user.username),
+      })),
+    [directory, takenUsernames]
+  );
+
+  return (
+    <div className="flex gap-2.5 py-2.5 border-b border-border/25 last:border-b-0">
+      <span className="text-sm font-bold text-text-secondary/40 tabular-nums shrink-0 mt-0.5">{index}.</span>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm text-text-primary leading-snug truncate">{participant.name ?? participant.identifier}</p>
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          <span className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-surface-muted text-text-secondary max-w-full truncate">
+            {participant.identifier}
+          </span>
+          <span className="text-xs text-text-secondary/60 font-medium">
+            {identifierTypeLabel(participant.identifierType)}
+            {participant.matchStatus !== 'matched' && " · no existe en UBITS"}
+          </span>
+        </div>
+
+        {/* Name-only candidate: who we think they are + the two decisions */}
+        {suggestion && (
+          <div className="mt-2 rounded-xl border border-warning/30 bg-warning/5 p-2.5 space-y-2">
+            <div className="min-w-0">
+              <p className="text-[11px] text-text-secondary/70 font-medium leading-snug">
+                Mismo nombre y apellido que un usuario de UBITS:
+              </p>
+              <p className="text-[13px] font-bold text-text-primary tracking-tight truncate mt-0.5">
+                {suggestion.name}
+              </p>
+              <p className="text-[11px] text-text-secondary/60 font-medium truncate">
+                {suggestion.username} · {suggestion.context}
+              </p>
+            </div>
+
+            {resolution ? (
+              <ResolutionChip resolution={resolution} linkedUser={linkedUser} onClear={() => onResolve(null)} />
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => onResolve({ kind: 'linked', username: suggestion.username })}
+                  className="h-7 px-2.5 text-[11px] font-bold tracking-tight rounded-lg"
+                >
+                  Sí, es la misma persona
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => onResolve({ kind: 'separate' })}
+                  className="h-7 px-2.5 text-[11px] font-bold tracking-tight rounded-lg"
+                >
+                  No, crear en la encuesta
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Decision on someone with no suggestion (linked by hand, or kept apart) */}
+        {!suggestion && resolution && (
+          <div className="mt-2">
+            <ResolutionChip resolution={resolution} linkedUser={linkedUser} onClear={() => onResolve(null)} />
+          </div>
+        )}
+
+        {/* Link to any directory user by hand */}
+        {canPickFromDirectory && (
+          <div className="mt-2">
+            <SearchableSelect
+              options={directoryOptions}
+              onValueChange={(username) => onResolve({ kind: 'linked', username })}
+              placeholder="Vincular con un usuario de UBITS"
+              searchPlaceholder="Busca por nombre o username..."
+              emptyMessage="Ningún usuario coincide."
+              className="h-8 rounded-lg text-[11px] font-bold px-2.5"
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 /**
  * A single consistent, self-contained accordion card used across the whole
  * summary — both the detected indicators and the detected structure share this
@@ -405,6 +563,43 @@ const SummaryAccordionItem: React.FC<{
       <div className="border-t border-border/40 pt-1">{children}</div>
     </AccordionContent>
   </AccordionItem>
+);
+
+/**
+ * One way forward on the post-load step. `emphasis` marks the recommended
+ * action (continuing with the batch) so the three options aren't equal weight.
+ */
+const NextActionCard: React.FC<{
+  icon: any;
+  title: string;
+  description: string;
+  emphasis?: boolean;
+  onClick: () => void;
+}> = ({ icon: Icon, title, description, emphasis, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className={cn(
+      "w-full flex items-center gap-3 p-4 rounded-2xl border text-left transition-all hover:scale-[1.01] active:scale-[0.99]",
+      emphasis
+        ? "border-primary/40 bg-primary/5 hover:border-primary shadow-sm"
+        : "border-border/50 bg-surface hover:border-border-strong/40"
+    )}
+  >
+    <div
+      className={cn(
+        "h-10 w-10 rounded-xl flex items-center justify-center shrink-0",
+        emphasis ? "bg-primary text-white" : "bg-surface-muted text-text-secondary/60"
+      )}
+    >
+      <Icon className="h-4.5 w-4.5" strokeWidth={2.25} />
+    </div>
+    <div className="min-w-0 flex-1">
+      <p className={cn("text-sm font-bold tracking-tight", emphasis ? "text-primary" : "text-text-primary")}>{title}</p>
+      <p className="text-[11px] text-text-secondary/60 font-medium leading-snug mt-0.5">{description}</p>
+    </div>
+    <ChevronRight className="h-4 w-4 shrink-0 text-text-secondary/40" />
+  </button>
 );
 
 const RecentUploadsList: React.FC<{
@@ -763,9 +958,16 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
  const [uploadFiles, setUploadFiles] = React.useState<File[]>([]);
  const [isAnalyzingFiles, setIsAnalyzingFiles] = React.useState(false);
  const [analyzeProgress, setAnalyzeProgress] = React.useState(35);
- const [uploadStep, setUploadStep] = React.useState<'dropzone' | 'select' | 'general' | 'summary' | 'loading' | 'error' | 'empty'>('dropzone');
+ const [uploadStep, setUploadStep] = React.useState<'dropzone' | 'select' | 'general' | 'summary' | 'next-action' | 'loading' | 'error' | 'empty'>('dropzone');
  const [reviewItems, setReviewItems] = React.useState<SurveyReviewItem[]>([]);
  const [selectedGroupKey, setSelectedGroupKey] = React.useState<string | null>(null);
+ // Surveys from this batch whose load has already been started. Only one survey
+ // can be loaded at a time, so the rest stay pending and are offered again from
+ // the post-load step instead of being silently dropped.
+ const [loadedGroupKeys, setLoadedGroupKeys] = React.useState<string[]>([]);
+ // Decisions taken on participants that only matched by name, keyed by the
+ // participant's identifier. Name matches are never resolved automatically.
+ const [participantResolutions, setParticipantResolutions] = React.useState<ParticipantResolutions>({});
  const [importWarnings, setImportWarnings] = React.useState<SurveyImportWarning[]>([]);
  // A blocking error surfaced while analyzing (unreadable/too-large/failed parse).
  const [analyzeError, setAnalyzeError] = React.useState<{ title: string; detail: string } | null>(null);
@@ -793,6 +995,8 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
    setUploadStep('dropzone');
    setReviewItems([]);
    setSelectedGroupKey(null);
+   setLoadedGroupKeys([]);
+   setParticipantResolutions({});
    setImportWarnings([]);
    setAnalyzeError(null);
    setIsSimulated(false);
@@ -831,6 +1035,22 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
    setAnalyzingPurpose('files');
    setIsAnalyzingFiles(true);
    parsePromiseRef.current = analyzeUploaded(selectedFiles);
+ };
+
+ /**
+  * Records what the user decided about a participant the system didn't link on
+  * its own — linking them to a UBITS user, or keeping them inside the survey.
+  * A `null` decision drops the record, putting the person back where detection
+  * left them.
+  */
+ const resolveParticipant = (identifier: string, decision: ParticipantResolution | null) => {
+   setParticipantResolutions((prev) => {
+     if (decision === null) {
+       const { [identifier]: _dropped, ...rest } = prev;
+       return rest;
+     }
+     return { ...prev, [identifier]: decision };
+   });
  };
 
  const updateReviewItem = (groupKey: string, patch: Partial<SurveyReviewItem>) => {
@@ -895,13 +1115,21 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
      setAnalyzeError(null);
      setIsSimulated(simulated);
      setImportWarnings(result?.unrecognizedFiles ?? []);
+     // A fresh file analysis starts a fresh batch: nothing here has been loaded
+     // yet, even if a previous batch reused the same group keys (e.g. "2025"),
+     // and any name-match decisions belonged to the previous roster.
+     setLoadedGroupKeys([]);
+     setParticipantResolutions({});
      const groups = result?.groups ?? [];
      setReviewItems(
        groups.map((group) => {
          return {
            groupKey: group.groupKey,
            name: group.suggestedSurveyName,
-           visibility: 'anonima',
+           // Public only when the files tie each participant to their own
+           // answers; otherwise anonymous is the only option (and the form
+           // blocks the choice, so this default is also the final value).
+           visibility: publicVisibilityBlock(group.analysis) == null ? 'publica' : 'anonima',
            anonymityThreshold: '5',
            startDate: group.suggestedStartDate ?? undefined,
            endDate: group.suggestedEndDate ?? undefined,
@@ -959,12 +1187,16 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
    setUploadStep('dropzone');
    setReviewItems([]);
    setSelectedGroupKey(null);
+   setLoadedGroupKeys([]);
    setImportWarnings([]);
    setIsSimulated(false);
    setNameErrorShown(false);
  };
 
  const selectedReviewItem = reviewItems.find((item) => item.groupKey === selectedGroupKey);
+ // Why the "Pública" option is unavailable for this survey, or null when it is
+ // available. Drives both the disabled radio and its explanation.
+ const publicBlock = selectedReviewItem ? publicVisibilityBlock(selectedReviewItem.analysis) : null;
  // Sanity checks on the general-data form before letting the user continue.
  const anonymityThresholdNum = Number(selectedReviewItem?.anonymityThreshold);
  const isAnonymityValid =
@@ -1020,6 +1252,10 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
    }, 500);
  };
 
+ // Surveys from this batch still waiting to be loaded. Drives the post-load step:
+ // with something pending we offer it explicitly, otherwise the batch is done.
+ const pendingReviewItems = reviewItems.filter((item) => !loadedGroupKeys.includes(item.groupKey));
+
  const handleFinalizeSurveyUpload = () => {
    if (!selectedReviewItem) return;
 
@@ -1037,8 +1273,20 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
    setUploadTasks((prev) => [...prev, { id: taskId, name: selectedReviewItem.name, progress: 0, status: 'loading', willFail: finalizeFails }]);
    setShowUploadTray(true);
    setIsUploadTrayMinimized(false);
-   setUploadStep('loading');
-   setUploadTab('cargas');
+
+   // Only one survey loads at a time. If the batch still holds others, land on
+   // the post-load step so the pending ones stay reachable — dropping straight
+   // into the loads list would bury them. With nothing pending, go there.
+   const stillPending = reviewItems.filter(
+     (item) => item.groupKey !== selectedReviewItem.groupKey && !loadedGroupKeys.includes(item.groupKey)
+   );
+   setLoadedGroupKeys((prev) => [...prev, selectedReviewItem.groupKey]);
+   if (stillPending.length > 0) {
+     setUploadStep('next-action');
+   } else {
+     setUploadStep('loading');
+     setUploadTab('cargas');
+   }
 
    // Surfaces the new survey at the top of the home table right away, tagged as
    // an external load; its status/progress will track the upload task live.
@@ -1060,6 +1308,64 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
    ]);
 
    runUploadProgress(taskId, finalizeFails);
+ };
+
+ // --- Post-load step: the three ways forward after a load has been started ---
+
+ /**
+  * Continue with a survey from the same batch. With several still pending the
+  * user picks from the selection step; with exactly one left we go straight to
+  * it, replaying the same "preparing your survey" beat as the normal flow.
+  */
+ const handleLoadPendingSurvey = () => {
+   const next = pendingReviewItems[0];
+   if (!next) return;
+   setNameErrorShown(false);
+   setSelectedGroupKey(next.groupKey);
+   if (pendingReviewItems.length > 1) {
+     setUploadStep('select');
+     return;
+   }
+   handleAnalyzeSelectedSurvey();
+ };
+
+ /**
+  * Back out of a review step. Once something from this batch has been loaded,
+  * "back" returns to the post-load hub — going all the way to the dropzone
+  * would throw away the surveys still pending from the same files.
+  */
+ const handleReviewBack = () => {
+   if (uploadStep === 'summary') {
+     setUploadStep('general');
+     return;
+   }
+   if (loadedGroupKeys.length > 0) {
+     setUploadStep('next-action');
+     return;
+   }
+   handleBackToDropzone();
+ };
+
+ const reviewBackLabel =
+   uploadStep === 'summary'
+     ? 'Volver'
+     : loadedGroupKeys.length > 0
+       ? 'Volver a las opciones'
+       : 'Volver a la carga de archivos';
+
+ /** Show the loads list, where the running load reports its live progress. */
+ const handleViewCurrentLoad = () => {
+   setUploadStep('loading');
+   setUploadTab('cargas');
+ };
+
+ /**
+  * Start over with different files. The pending surveys from the previous batch
+  * are dropped on purpose: they belong to files the user is replacing.
+  */
+ const handleStartNewUpload = () => {
+   resetUploadDrawer();
+   setUploadTab('nueva');
  };
 
  const retryUpload = (taskId: number) => {
@@ -1678,6 +1984,7 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
   title={
     uploadStep === 'dropzone' ? "Cargar encuestas"
     : uploadStep === 'loading' ? "Cargando encuesta"
+    : uploadStep === 'next-action' ? "Carga iniciada"
     : uploadStep === 'error' ? "No pudimos continuar"
     : uploadStep === 'empty' ? "No encontramos información"
     : uploadStep === 'select' ? "Selecciona la encuesta"
@@ -1687,6 +1994,7 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
   description={
     uploadStep === 'dropzone' ? "Sube nuevos archivos o revisa tus cargas recientes."
     : uploadStep === 'loading' ? "Estamos guardando la información de tu encuesta."
+    : uploadStep === 'next-action' ? "Tu encuesta se está cargando en segundo plano. Elige cómo quieres continuar."
     : uploadStep === 'error' ? "Revisa el archivo e inténtalo de nuevo."
     : uploadStep === 'empty' ? "No pudimos detectar datos de encuesta en este archivo."
     : uploadStep === 'select' ? "Detectamos varias encuestas en tus archivos. Elige cuál quieres cargar."
@@ -1709,6 +2017,16 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
             className="w-full gap-2.5 h-11 text-xs font-bold tracking-tight shadow-lg shadow-primary/20 rounded-xl transition-all hover:scale-[1.01] active:scale-[0.98]"
           >
             <span>Minimizar y continuar</span>
+          </Button>
+        ) : uploadStep === 'next-action' ? (
+          // The ways forward are the cards in the body, so the footer stays
+          // secondary: leave the panel and let the load finish in the tray.
+          <Button
+            variant="outline"
+            onClick={() => setIsUploadDrawerOpen(false)}
+            className="w-full h-11 text-xs font-bold tracking-tight rounded-xl"
+          >
+            Cerrar por ahora
           </Button>
         ) : (
         <>
@@ -1734,7 +2052,7 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
 
         {uploadStep === 'select' && (
           <Button
-            disabled={!selectedGroupKey}
+            disabled={!selectedGroupKey || loadedGroupKeys.includes(selectedGroupKey)}
             onClick={handleAnalyzeSelectedSurvey}
             className="flex-1 gap-2.5 h-11 text-xs font-bold tracking-tight shadow-lg shadow-primary/20 rounded-xl transition-all hover:scale-[1.01] active:scale-[0.98] disabled:opacity-30 disabled:grayscale"
           >
@@ -1936,6 +2254,35 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
       </TabsContent>
 
       <TabsContent value="cargas" className="flex-1 min-h-0 overflow-y-auto mt-0 focus-visible:outline-none">
+        {/* Surveys from the last batch that haven't been loaded yet stay one
+             click away — the loads list is otherwise a dead end for them. */}
+        {pendingReviewItems.length > 0 && (
+          <div className="mb-4 rounded-2xl border border-primary/30 bg-primary/5 p-3.5 flex items-center gap-3">
+            <div className="h-9 w-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
+              <Upload className="h-4 w-4" strokeWidth={2.25} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[13px] font-bold text-text-primary tracking-tight">
+                {pendingReviewItems.length === 1
+                  ? '1 encuesta pendiente'
+                  : `${pendingReviewItems.length} encuestas pendientes`}
+              </p>
+              <p className="text-[11px] text-text-secondary/60 font-medium truncate">
+                {pendingReviewItems.length === 1
+                  ? pendingReviewItems[0].name
+                  : 'De los archivos que subiste'}
+              </p>
+            </div>
+            <Button
+              size="sm"
+              onClick={handleLoadPendingSurvey}
+              className="h-8 px-3 text-[11px] font-bold tracking-tight rounded-lg shrink-0"
+            >
+              Continuar
+            </Button>
+          </div>
+        )}
+
         <RecentUploadsList
           activeTasks={uploadTasks}
           recentUploads={RECENT_UPLOADS}
@@ -1945,6 +2292,62 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
       </TabsContent>
     </Tabs>
   )}
+
+  {/* Post-load hub: a load is running and the batch still has surveys pending.
+       Only one survey loads at a time, so this is where the user decides whether
+       to continue with the batch, watch the running load, or start over. */}
+  {uploadStep === 'next-action' && (() => {
+    const nextPending = pendingReviewItems[0];
+
+    return (
+      <div className="flex flex-col flex-1 gap-5">
+        <div className="space-y-1">
+          <h3 className="text-base font-bold text-text-primary tracking-tight leading-tight">
+            ¿Qué quieres hacer ahora?
+          </h3>
+          <p className="text-[11px] text-text-secondary/60 font-medium leading-relaxed">
+            {pendingReviewItems.length === 1
+              ? 'Todavía tienes una encuesta pendiente de los archivos que subiste. Se carga una a la vez.'
+              : `Todavía tienes ${pendingReviewItems.length} encuestas pendientes de los archivos que subiste. Se carga una a la vez.`}
+          </p>
+        </div>
+
+        <div className="space-y-2.5">
+          {nextPending && (
+            <NextActionCard
+              icon={Upload}
+              emphasis
+              title={
+                pendingReviewItems.length === 1
+                  ? `Cargar "${nextPending.name}"`
+                  : `Cargar otra encuesta (${pendingReviewItems.length} pendientes)`
+              }
+              description={
+                pendingReviewItems.length === 1
+                  ? `${nextPending.fileNames.length} archivo${nextPending.fileNames.length > 1 ? 's' : ''} · continúa con los datos generales`
+                  : 'Elige cuál de las encuestas pendientes quieres cargar ahora'
+              }
+              onClick={handleLoadPendingSurvey}
+            />
+          )}
+
+          <NextActionCard
+            icon={Gauge}
+            title="Ver el estado de la carga actual"
+            description="Revisa el progreso y el historial de tus cargas recientes"
+            onClick={handleViewCurrentLoad}
+          />
+
+          <NextActionCard
+            icon={Plus}
+            title="Cargar una nueva encuesta"
+            description="Empieza de cero con otros archivos. Se descartan las encuestas pendientes"
+            onClick={handleStartNewUpload}
+          />
+        </div>
+      </div>
+    );
+  })()}
 
   {/* Blocking error: file could not be read / too large / failed to process */}
   {uploadStep === 'error' && (
@@ -1988,11 +2391,11 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => (uploadStep === 'summary' ? setUploadStep('general') : handleBackToDropzone())}
+            onClick={handleReviewBack}
             className="gap-2 text-primary font-bold tracking-tight text-[10px] h-8 px-3 rounded-full bg-primary/5 hover:bg-primary/10 transition-all w-fit"
           >
             <ChevronLeft className="h-4 w-4" />
-            <span>{uploadStep === 'summary' ? 'Volver' : 'Volver a la carga de archivos'}</span>
+            <span>{reviewBackLabel}</span>
           </Button>
         )}
 
@@ -2027,7 +2430,11 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
           <div className="space-y-3">
             <div className="text-center space-y-1">
               <h3 className="text-base font-bold text-text-primary tracking-tight leading-tight">
-                {reviewItems.length > 1 ? `Detectamos ${reviewItems.length} encuestas` : "Encuesta detectada"}
+                {loadedGroupKeys.length > 0
+                  ? `Te ${pendingReviewItems.length === 1 ? 'queda 1 encuesta' : `quedan ${pendingReviewItems.length} encuestas`} por cargar`
+                  : reviewItems.length > 1
+                    ? `Detectamos ${reviewItems.length} encuestas`
+                    : "Encuesta detectada"}
               </h3>
               <p className="text-[11px] text-text-secondary/60 font-medium px-4 leading-relaxed">
                 Elige la encuesta que quieres cargar. Solo puedes cargar una a la vez.
@@ -2043,33 +2450,53 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
               />
             ) : (
               reviewItems.map((item) => {
-                const isSelected = item.groupKey === selectedGroupKey;
+                // Already-loaded surveys stay listed for context but can't be
+                // picked again — one load per survey, and it's already running.
+                const isLoaded = loadedGroupKeys.includes(item.groupKey);
+                const isSelected = !isLoaded && item.groupKey === selectedGroupKey;
                 return (
                   <div
                     key={item.groupKey}
-                    onClick={() => setSelectedGroupKey(item.groupKey)}
+                    onClick={() => !isLoaded && setSelectedGroupKey(item.groupKey)}
+                    aria-disabled={isLoaded}
                     className={cn(
-                      "flex items-center gap-3 p-3 rounded-xl border bg-surface cursor-pointer transition-all",
-                      isSelected ? "border-primary shadow-sm" : "border-border/40 hover:border-border-strong/30"
+                      "flex items-center gap-3 p-3 rounded-xl border transition-all",
+                      isLoaded
+                        ? "cursor-not-allowed border-border/30 bg-surface-muted/40"
+                        : isSelected
+                          ? "cursor-pointer border-primary bg-surface shadow-sm"
+                          : "cursor-pointer border-border/40 bg-surface hover:border-border-strong/30"
                     )}
                   >
-                    <div className="h-9 w-9 rounded-lg bg-surface-muted text-text-secondary/50 flex items-center justify-center shrink-0">
-                      <FileText className="h-4 w-4" strokeWidth={2} />
+                    <div className={cn(
+                      "h-9 w-9 rounded-lg flex items-center justify-center shrink-0",
+                      isLoaded ? "bg-status-positive/10 text-status-positive" : "bg-surface-muted text-text-secondary/50"
+                    )}>
+                      {isLoaded ? <Check className="h-4 w-4" strokeWidth={3} /> : <FileText className="h-4 w-4" strokeWidth={2} />}
                     </div>
 
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-bold text-text-primary truncate">{item.name}</p>
+                      <p className={cn(
+                        "text-sm font-bold truncate",
+                        isLoaded ? "text-text-secondary/50" : "text-text-primary"
+                      )}>
+                        {item.name}
+                      </p>
                       <p className="text-[10px] text-text-secondary/50 font-medium truncate">
-                        {item.fileNames.length} archivo{item.fileNames.length > 1 ? "s" : ""}
+                        {isLoaded
+                          ? "Ya la cargaste"
+                          : `${item.fileNames.length} archivo${item.fileNames.length > 1 ? "s" : ""}`}
                       </p>
                     </div>
 
-                    <div className={cn(
-                      "h-5 w-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-all",
-                      isSelected ? "border-primary" : "border-border-strong/40"
-                    )}>
-                      {isSelected && <div className="h-2.5 w-2.5 rounded-full bg-primary" />}
-                    </div>
+                    {!isLoaded && (
+                      <div className={cn(
+                        "h-5 w-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-all",
+                        isSelected ? "border-primary" : "border-border-strong/40"
+                      )}>
+                        {isSelected && <div className="h-2.5 w-2.5 rounded-full bg-primary" />}
+                      </div>
+                    )}
                   </div>
                 );
               })
@@ -2112,12 +2539,17 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
                   className="grid grid-cols-2 gap-3"
                 >
                   <label
+                    aria-disabled={publicBlock != null}
                     className={cn(
-                      "flex items-center gap-2 p-3 rounded-xl border-2 cursor-pointer transition-all text-xs font-bold",
-                      selectedReviewItem.visibility === 'publica' ? "border-primary bg-primary/5 text-primary" : "border-border/40 text-text-primary"
+                      "flex items-center gap-2 p-3 rounded-xl border-2 transition-all text-xs font-bold",
+                      publicBlock != null
+                        ? "cursor-not-allowed border-border/30 bg-surface-muted/40 text-text-secondary/40"
+                        : selectedReviewItem.visibility === 'publica'
+                          ? "cursor-pointer border-primary bg-primary/5 text-primary"
+                          : "cursor-pointer border-border/40 text-text-primary"
                     )}
                   >
-                    <RadioGroupItem value="publica" />
+                    <RadioGroupItem value="publica" disabled={publicBlock != null} />
                     <span>Pública</span>
                   </label>
                   <label
@@ -2130,6 +2562,15 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
                     <span>Anónima</span>
                   </label>
                 </RadioGroup>
+
+                {publicBlock != null && (
+                  <div className="flex items-start gap-1.5 rounded-lg bg-surface-muted/60 px-2.5 py-2 mt-2">
+                    <Lock className="h-3.5 w-3.5 shrink-0 text-text-secondary/50 mt-px" strokeWidth={2.25} />
+                    <p className="text-[11px] text-text-secondary/70 font-medium leading-snug">
+                      {PUBLIC_VISIBILITY_BLOCK_MESSAGE[publicBlock]}
+                    </p>
+                  </div>
+                )}
               </Field>
 
               {selectedReviewItem.visibility === 'anonima' && (
@@ -2214,6 +2655,43 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
           const sectionDetails = a.sectionDetails.length > 0
             ? a.sectionDetails
             : a.sections.map((name) => ({ name, questionCount: 0 }));
+
+          // Participants, grouped into the three match scenarios and honoring the
+          // decisions already taken. Only present when the files actually carried
+          // individual people; each group gets its own accordion.
+          const detectedParticipants = a.participants?.participants ?? [];
+          const participantSplit = a.participants
+            ? splitParticipantsByMatch(detectedParticipants, participantResolutions)
+            : null;
+          const pendingPossibleCount = participantSplit?.possible.length ?? 0;
+          // Stops the same UBITS user being linked to two different participants.
+          const takenUsernames = linkedUsernames(detectedParticipants, participantResolutions);
+
+          const participantGroups = participantSplit
+            ? [
+                {
+                  value: 'participantes-match',
+                  title: 'Hacen match con UBITS',
+                  icon: UserCheck,
+                  note: 'Su identificador es un username de UBITS, así que los vinculamos automáticamente. Sus respuestas suman a los reportes y segmentaciones de UBITS.',
+                  people: participantSplit.matched,
+                },
+                {
+                  value: 'participantes-posibles',
+                  title: 'Posibles match',
+                  icon: UserSearch,
+                  note: 'Su identificador no existe en UBITS, pero su nombre y apellido son idénticos a los de un usuario. No los vinculamos solos: decide si es la misma persona o si se crea aparte en la encuesta.',
+                  people: participantSplit.possible,
+                },
+                {
+                  value: 'participantes-nuevos',
+                  title: 'Nuevos en la encuesta',
+                  icon: UserPlus,
+                  note: 'No encontramos su username ni un nombre igual en UBITS, así que se crean como participantes de esta encuesta. Si sabes a quién corresponden, puedes vincularlos a un usuario de UBITS buscándolo.',
+                  people: participantSplit.unmatched,
+                },
+              ]
+            : [];
 
           // Question list, each entry classified against the UBITS taxonomy.
           const questionItems = (a.questionDetails.length > 0
@@ -2370,6 +2848,92 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
               </Accordion>
             </div>
 
+            {/* Detected participants — its own section, one accordion per match
+                 scenario, mirroring how indicators and structure are separated. */}
+            {participantSplit && (
+              <div className="space-y-2">
+                <div className="text-[11px] font-bold text-text-secondary/50 uppercase tracking-wide px-1">
+                  Participantes detectados · {participantSplit.total}
+                </div>
+
+                {/* How the automatic match works — the reason a person landed in
+                     one group or another. Only a public survey shows people by
+                     name, so that's where the criterion matters most. */}
+                <div className="flex items-start gap-1.5 rounded-lg bg-surface-muted/50 px-2.5 py-2">
+                  <Info className="h-3.5 w-3.5 shrink-0 text-text-secondary/50 mt-px" strokeWidth={2.25} />
+                  <p className="text-[11px] text-text-secondary/70 font-medium leading-snug">
+                    {a.participants?.answersLinked ? (
+                      <>
+                        Como la encuesta es <span className="font-bold">pública</span>, cada respuesta queda asociada a una
+                        persona. El match automático se hace por el <span className="font-bold">username de UBITS</span>: el
+                        correo, el número de documento o un username asignado. El nombre nunca vincula solo.
+                      </>
+                    ) : (
+                      <>
+                        El match se hace por el <span className="font-bold">username de UBITS</span>: el correo, el número de
+                        documento o un username asignado. En este archivo las respuestas no están asociadas a cada persona,
+                        así que la encuesta solo puede cargarse como anónima.
+                      </>
+                    )}
+                  </p>
+                </div>
+
+                {/* Name-only candidates need a human call before loading. */}
+                {pendingPossibleCount > 0 && (
+                  <Alert variant="warning">
+                    <UserSearch className="h-4 w-4" />
+                    <AlertTitle className="text-xs font-bold">
+                      {pendingPossibleCount} posible{pendingPossibleCount > 1 ? 's' : ''} match por nombre
+                    </AlertTitle>
+                    <AlertDescription className="text-[11px] leading-relaxed">
+                      Su nombre coincide con el de un usuario de UBITS, pero su identificador no. Revísalos en{" "}
+                      <span className="font-bold">Posibles match</span>: si no decides, se crean solo dentro de la encuesta.
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                <Accordion type="single" collapsible value={openSummarySection} onValueChange={setOpenSummarySection} className="gap-2.5">
+                  {participantGroups.map((group) => (
+                    <SummaryAccordionItem
+                      key={group.value}
+                      value={group.value}
+                      icon={group.icon}
+                      title={group.title}
+                      headline={String(group.people.length)}
+                    >
+                      <div className="flex items-start gap-1.5 rounded-lg bg-surface-muted/50 px-2.5 py-1.5 mt-1.5">
+                        <group.icon className="h-3.5 w-3.5 shrink-0 text-text-secondary/50 mt-px" strokeWidth={2.25} />
+                        <p className="text-[11px] text-text-secondary/70 font-medium leading-snug">{group.note}</p>
+                      </div>
+
+                      {group.people.length > 0 ? (
+                        <div className="max-h-80 overflow-y-auto pr-1 mt-1 border-t border-border/30">
+                          {group.people.map((person, idx) => (
+                            <ParticipantRow
+                              key={person.identifier}
+                              index={idx + 1}
+                              participant={person}
+                              directory={UBITS_DIRECTORY}
+                              takenUsernames={takenUsernames}
+                              // A resolved participant keeps its decision visible (and
+                              // reversible) in whichever group it landed in, so it's
+                              // always clear why that person is there.
+                              resolution={participantResolutions[person.identifier]}
+                              onResolve={(decision) => resolveParticipant(person.identifier, decision)}
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-text-secondary/50 font-medium py-3">
+                          No hay participantes en este grupo.
+                        </p>
+                      )}
+                    </SummaryAccordionItem>
+                  ))}
+                </Accordion>
+              </div>
+            )}
+
             {/* Detected structure — identical accordion pattern */}
             <div className="space-y-2">
               <div className="text-[11px] font-bold text-text-secondary/50 uppercase tracking-wide px-1">
@@ -2377,6 +2941,7 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
               </div>
 
               <Accordion type="single" collapsible value={openSummarySection} onValueChange={setOpenSummarySection} className="gap-2.5">
+
                 <SummaryAccordionItem value="demograficos" icon={PieChart} title="Demográficos" headline={String(a.demographics.length)}>
                   {a.demographics.length > 0 ? (
                     a.demographics.map((demo) => <SummaryRow key={demo} label={demo} />)

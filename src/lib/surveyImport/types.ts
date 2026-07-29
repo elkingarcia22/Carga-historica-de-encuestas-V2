@@ -38,6 +38,58 @@ export interface QuestionDetail {
   section: string | null;
 }
 
+/**
+ * Kind of value a participant row used to identify the person. All three are
+ * valid UBITS usernames — the username is the only thing we match on
+ * automatically.
+ */
+export type ParticipantIdentifierType = "correo" | "numero" | "username";
+
+/**
+ * How a participant resolved against UBITS:
+ *  - `matched`: their username exists in UBITS → linked automatically.
+ *  - `possible`: the username is unknown, but their full name is identical to a
+ *    UBITS user's. Never linked automatically — a person decides.
+ *  - `unmatched`: nothing to link to; created inside the survey only.
+ */
+export type ParticipantMatchStatus = "matched" | "possible" | "unmatched";
+
+/**
+ * A user from the UBITS directory. Used both as the candidate behind a
+ * name-only match and as an option when linking a participant by hand.
+ */
+export interface UbitsDirectoryUser {
+  name: string;
+  /** That user's UBITS username. */
+  username: string;
+  identifierType: ParticipantIdentifierType;
+  /** Área · cargo · sede, so homonyms can be told apart before confirming. */
+  context: string;
+}
+
+/** One participant found in the uploaded files, resolved against UBITS. */
+export interface DetectedParticipant {
+  /** Name as it appears in the file, when the file carries one. */
+  name: string | null;
+  /** The value the file used to identify the person. */
+  identifier: string;
+  identifierType: ParticipantIdentifierType;
+  matchStatus: ParticipantMatchStatus;
+  /** Only set when `matchStatus` is `possible`: who we think this person is. */
+  suggestion?: UbitsDirectoryUser;
+}
+
+/**
+ * Participant-level detection for a survey wave. Only present when the files
+ * carry individual people; `answersLinked` says whether each participant comes
+ * with their own answers, which is what makes a public (named) load possible.
+ * Participants without a UBITS match are created inside the survey only.
+ */
+export interface ParticipantsDetection {
+  answersLinked: boolean;
+  participants: DetectedParticipant[];
+}
+
 export interface ParsedSurveyFile {
   fileName: string;
   format: SurveyFileFormat;
@@ -104,6 +156,11 @@ export interface DetectedSurveyAnalysis {
   sectionDetails: SectionDetail[];
   /** Each detected question with the section it belongs to, for filtering */
   questionDetails: QuestionDetail[];
+  /**
+   * Individual participants found in the files, or null when the sources only
+   * carry aggregated results. Gates whether the survey can be loaded as public.
+   */
+  participants: ParticipantsDetection | null;
 }
 
 export interface SurveyImportWarning {

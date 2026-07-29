@@ -212,6 +212,10 @@ function buildGroup(groupKey: string, groupFiles: ParsedSurveyFile[]): DetectedS
       npsBreakdown,
       sectionDetails,
       questionDetails,
+      // Every format the real pipeline reads today is aggregated: the reports
+      // carry no roster, and the raw export's rows are already anonymized. With
+      // no participant tied to their own answers, the survey can't be public.
+      participants: null,
     },
   };
 }
