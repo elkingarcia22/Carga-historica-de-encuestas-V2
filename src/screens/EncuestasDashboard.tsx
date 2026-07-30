@@ -396,11 +396,11 @@ const ResolutionChip: React.FC<{
     {resolution.kind === 'linked' ? (
       <span className="px-2 py-0.5 rounded-md text-[11px] font-bold inline-flex items-center gap-1 bg-status-positive/10 text-status-positive max-w-full">
         <Check className="h-3 w-3 shrink-0" strokeWidth={3} />
-        <span className="truncate">Vinculada a {linkedUser?.name ?? resolution.username}</span>
+        <span className="truncate">Vinculado a {linkedUser?.name ?? resolution.username}</span>
       </span>
     ) : (
       <span className="px-2 py-0.5 rounded-md text-[11px] font-bold inline-flex items-center gap-1 bg-surface-muted text-text-secondary">
-        <UserPlus className="h-3 w-3 shrink-0" strokeWidth={2.5} /> Se crea en la encuesta
+        <UserPlus className="h-3 w-3 shrink-0" strokeWidth={2.5} /> Sin usuario · se crea en la encuesta
       </span>
     )}
     <button type="button" onClick={onClear} className="text-[11px] font-bold text-primary hover:underline shrink-0">
@@ -411,14 +411,14 @@ const ResolutionChip: React.FC<{
 
 /**
  * One detected participant: the name found in the file plus the identifier we
- * looked them up with, so the reviewer can see exactly why a person did or
- * didn't resolve to a UBITS user.
+ * looked it up with, so the reviewer can see exactly why it did or didn't
+ * resolve to a UBITS user.
  *
- * What it offers depends on how the person resolved:
- *  - `matched` by username → nothing to decide.
- *  - `possible` → the UBITS user we suspect they are, with enough context to
- *    tell homonyms apart, plus confirm / reject. Never linked automatically.
- *  - `unmatched` → a directory search to link them to any user by hand.
+ * Every row can be corrected — an automatic match is a strong guess, not a fact:
+ *  - `matched` → reject the match, or point it at a different user.
+ *  - `possible` → the UBITS user we suspect it is, with enough context to tell
+ *    homonyms apart: confirm, reject, or pick another. Never linked on its own.
+ *  - `unmatched` → link it to any user by hand.
  */
 const ParticipantRow: React.FC<{
   index: number;
@@ -433,10 +433,15 @@ const ParticipantRow: React.FC<{
   const suggestion = participant.suggestion;
   const linkedUser =
     resolution?.kind === 'linked' ? directory.find((u) => u.username === resolution.username) : undefined;
-  // Search by hand when the person isn't linked yet — but not while a suggestion
-  // is still awaiting its yes/no, so that decision stays the only thing to make.
-  const canPickFromDirectory =
-    participant.matchStatus !== 'matched' && resolution?.kind !== 'linked' && !(suggestion && !resolution);
+  // Linking to another user in the directory: the same two-step gesture on every
+  // row — the trigger opens a search in place of the buttons, and nothing is
+  // committed until "Asociar" is pressed.
+  const [isAssociating, setIsAssociating] = React.useState(false);
+  const [pendingUsername, setPendingUsername] = React.useState<string>();
+  // A pending suggestion owns the row: its yes/no stays the only thing to decide,
+  // and a decision already taken shows as a chip you undo first. Everything else
+  // offers the corrections that apply to it.
+  const showRowActions = !resolution && !suggestion;
 
   const directoryOptions = React.useMemo(
     () =>
@@ -451,6 +456,62 @@ const ParticipantRow: React.FC<{
     [directory, takenUsernames]
   );
 
+  const closeAssociate = () => {
+    setIsAssociating(false);
+    setPendingUsername(undefined);
+  };
+
+  /** Search + confirm + back out, laid out as a single row. */
+  const associateRow = (
+    <div className="flex items-center gap-2">
+      <SearchableSelect
+        options={directoryOptions}
+        value={pendingUsername}
+        onValueChange={setPendingUsername}
+        placeholder="Busca el usuario de UBITS"
+        searchPlaceholder="Busca por nombre o username..."
+        emptyMessage="Ningún usuario coincide."
+        className="h-7 flex-1 min-w-0 rounded-md text-[11px] font-bold px-2.5"
+      />
+      <Button
+        size="sm"
+        disabled={!pendingUsername}
+        onClick={() => {
+          if (!pendingUsername) return;
+          onResolve({ kind: 'linked', username: pendingUsername });
+          closeAssociate();
+        }}
+        className="h-7 px-2.5 text-[11px] font-bold tracking-tight rounded-md shrink-0 disabled:opacity-40"
+      >
+        Asociar
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        aria-label="Cancelar asociación"
+        onClick={closeAssociate}
+        className="h-7 w-7 p-0 rounded-md shrink-0 text-text-secondary/60"
+      >
+        <X className="h-3.5 w-3.5" />
+      </Button>
+    </div>
+  );
+
+  const associateTrigger = (extraClassName?: string) => (
+    <Button
+      size="sm"
+      variant="ghost"
+      onClick={() => setIsAssociating(true)}
+      className={cn(
+        "h-7 px-2.5 text-[11px] font-bold tracking-tight rounded-md text-primary hover:bg-primary/5",
+        extraClassName
+      )}
+    >
+      <UserPlus className="h-3.5 w-3.5" />
+      Asociar usuario
+    </Button>
+  );
+
   return (
     <div className="flex gap-2.5 py-2.5 border-b border-border/25 last:border-b-0">
       <span className="text-sm font-bold text-text-secondary/40 tabular-nums shrink-0 mt-0.5">{index}.</span>
@@ -462,13 +523,15 @@ const ParticipantRow: React.FC<{
           </span>
           <span className="text-xs text-text-secondary/60 font-medium">
             {identifierTypeLabel(participant.identifierType)}
-            {participant.matchStatus !== 'matched' && " · no existe en UBITS"}
+            {participant.matchStatus !== 'matched' && " · sin coincidencia en UBITS"}
           </span>
         </div>
 
-        {/* Name-only candidate: who we think they are + the two decisions */}
-        {suggestion && (
-          <div className="mt-2 rounded-xl border border-warning/30 bg-warning/5 p-2.5 space-y-2">
+        {/* Name-only candidate: which user we think it is + the ways out. Only
+             while the decision is pending — once taken, the candidate's details
+             stop being relevant and the row collapses to its outcome chip. */}
+        {suggestion && !resolution && (
+          <div className="mt-2 rounded-md border border-border/50 bg-surface-muted/40 p-2.5 space-y-2.5">
             <div className="min-w-0">
               <p className="text-[11px] text-text-secondary/70 font-medium leading-snug">
                 Mismo nombre y apellido que un usuario de UBITS:
@@ -481,48 +544,59 @@ const ParticipantRow: React.FC<{
               </p>
             </div>
 
-            {resolution ? (
-              <ResolutionChip resolution={resolution} linkedUser={linkedUser} onClear={() => onResolve(null)} />
+            {isAssociating ? (
+              associateRow
             ) : (
-              <div className="flex flex-wrap gap-2">
+              <div className="flex items-center gap-2">
                 <Button
                   size="sm"
                   onClick={() => onResolve({ kind: 'linked', username: suggestion.username })}
-                  className="h-7 px-2.5 text-[11px] font-bold tracking-tight rounded-lg"
+                  className="h-7 px-2.5 text-[11px] font-bold tracking-tight rounded-md"
                 >
-                  Sí, es la misma persona
+                  Sí, es el mismo usuario
                 </Button>
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={() => onResolve({ kind: 'separate' })}
-                  className="h-7 px-2.5 text-[11px] font-bold tracking-tight rounded-lg"
+                  className="h-7 px-2.5 text-[11px] font-bold tracking-tight rounded-md"
                 >
-                  No, crear en la encuesta
+                  Dejar sin match
                 </Button>
+                {associateTrigger("ml-auto shrink-0")}
               </div>
             )}
           </div>
         )}
 
-        {/* Decision on someone with no suggestion (linked by hand, or kept apart) */}
-        {!suggestion && resolution && (
+        {/* Decision taken — same plain chip for every row, suggestion or not */}
+        {resolution && (
           <div className="mt-2">
             <ResolutionChip resolution={resolution} linkedUser={linkedUser} onClear={() => onResolve(null)} />
           </div>
         )}
 
-        {/* Link to any directory user by hand */}
-        {canPickFromDirectory && (
+        {/* Corrections available on this row: an automatic match can be rejected,
+             and any row can be pointed at a specific user from the directory. */}
+        {showRowActions && (
           <div className="mt-2">
-            <SearchableSelect
-              options={directoryOptions}
-              onValueChange={(username) => onResolve({ kind: 'linked', username })}
-              placeholder="Vincular con un usuario de UBITS"
-              searchPlaceholder="Busca por nombre o username..."
-              emptyMessage="Ningún usuario coincide."
-              className="h-8 rounded-lg text-[11px] font-bold px-2.5"
-            />
+            {isAssociating ? (
+              associateRow
+            ) : (
+              <div className="flex items-center gap-2">
+                {participant.matchStatus === 'matched' && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onResolve({ kind: 'separate' })}
+                    className="h-7 px-2.5 text-[11px] font-bold tracking-tight rounded-md"
+                  >
+                    Dejar sin match
+                  </Button>
+                )}
+                {associateTrigger()}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -602,6 +676,83 @@ const NextActionCard: React.FC<{
   </button>
 );
 
+/**
+ * A load from this session, with its live progress. Shared by the loads list
+ * and the post-load step so the running load looks the same in both places.
+ */
+const UploadTaskCard: React.FC<{
+  task: UploadTaskState;
+  /** Only the most recently finished load keeps the "just completed" check. */
+  showCompletedCheck?: boolean;
+  onViewSurvey: () => void;
+  onRetry: (taskId: number) => void;
+}> = ({ task, showCompletedCheck, onViewSurvey, onRetry }) => (
+  <div
+    className={cn(
+      "p-3 rounded-xl border bg-surface",
+      task.status === 'failed' ? "border-destructive/40 bg-destructive/5" : "border-border/40"
+    )}
+  >
+    <div className="flex items-center gap-3">
+      {task.status === 'completed' && showCompletedCheck ? (
+        <div className="h-9 w-9 rounded-lg bg-status-positive-bg text-status-positive flex items-center justify-center shrink-0">
+          <Check className="h-4 w-4" strokeWidth={3} />
+        </div>
+      ) : task.status === 'completed' ? (
+        <div className="h-9 w-9 rounded-lg bg-surface-muted text-text-secondary/50 flex items-center justify-center shrink-0">
+          <FileText className="h-4 w-4" strokeWidth={2} />
+        </div>
+      ) : task.status === 'failed' ? (
+        <div className="h-9 w-9 rounded-lg bg-destructive/10 text-destructive flex items-center justify-center shrink-0">
+          <AlertTriangle className="h-4 w-4" strokeWidth={2.5} />
+        </div>
+      ) : (
+        <div className="h-9 w-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+          <div className="h-4 w-4 rounded-full border-2 border-primary/20 border-t-primary animate-spin" />
+        </div>
+      )}
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-bold text-text-primary truncate">{task.name}</p>
+        <p className={cn(
+          "text-[10px] font-medium",
+          task.status === 'failed' ? "text-destructive" : "text-text-secondary/60"
+        )}>
+          {task.status === 'completed'
+            ? "Encuesta cargada"
+            : task.status === 'failed'
+              ? "No pudimos cargarla — problemas técnicos"
+              : "Cargando encuesta…"}
+        </p>
+      </div>
+      {task.status === 'completed' ? (
+        <button onClick={onViewSurvey} className="text-xs font-bold text-primary hover:underline shrink-0">
+          Ver encuesta
+        </button>
+      ) : task.status === 'failed' ? (
+        <button
+          onClick={() => onRetry(task.id)}
+          className="inline-flex items-center gap-1 text-xs font-bold text-destructive hover:underline shrink-0"
+        >
+          <RotateCw className="h-3.5 w-3.5" />
+          Reintentar
+        </button>
+      ) : (
+        <span className="text-sm font-bold text-primary tabular-nums shrink-0">{task.progress}%</span>
+      )}
+    </div>
+    {task.status === 'loading' && (
+      <div className="mt-2 h-1 bg-muted rounded-full overflow-hidden">
+        <div className="h-full bg-primary transition-all duration-300" style={{ width: `${task.progress}%` }} />
+      </div>
+    )}
+    {task.status === 'failed' && (
+      <div className="mt-2 h-1 bg-destructive/15 rounded-full overflow-hidden">
+        <div className="h-full bg-destructive/70" style={{ width: `${task.progress}%` }} />
+      </div>
+    )}
+  </div>
+);
+
 const RecentUploadsList: React.FC<{
   activeTasks: UploadTaskState[];
   recentUploads: RecentUpload[];
@@ -650,71 +801,13 @@ const RecentUploadsList: React.FC<{
       {hasActive && (
         <div className="space-y-2">
           {[...activeTasks].sort((a, b) => b.id - a.id).map((task) => (
-            <div
+            <UploadTaskCard
               key={task.id}
-              className={cn(
-                "p-3 rounded-xl border bg-surface",
-                task.status === 'failed' ? "border-destructive/40 bg-destructive/5" : "border-border/40"
-              )}
-            >
-              <div className="flex items-center gap-3">
-                {task.status === 'completed' && task.id === latestCompletedId ? (
-                  <div className="h-9 w-9 rounded-lg bg-status-positive-bg text-status-positive flex items-center justify-center shrink-0">
-                    <Check className="h-4 w-4" strokeWidth={3} />
-                  </div>
-                ) : task.status === 'completed' ? (
-                  <div className="h-9 w-9 rounded-lg bg-surface-muted text-text-secondary/50 flex items-center justify-center shrink-0">
-                    <FileText className="h-4 w-4" strokeWidth={2} />
-                  </div>
-                ) : task.status === 'failed' ? (
-                  <div className="h-9 w-9 rounded-lg bg-destructive/10 text-destructive flex items-center justify-center shrink-0">
-                    <AlertTriangle className="h-4 w-4" strokeWidth={2.5} />
-                  </div>
-                ) : (
-                  <div className="h-9 w-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                    <div className="h-4 w-4 rounded-full border-2 border-primary/20 border-t-primary animate-spin" />
-                  </div>
-                )}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-bold text-text-primary truncate">{task.name}</p>
-                  <p className={cn(
-                    "text-[10px] font-medium",
-                    task.status === 'failed' ? "text-destructive" : "text-text-secondary/60"
-                  )}>
-                    {task.status === 'completed'
-                      ? "Encuesta cargada"
-                      : task.status === 'failed'
-                        ? "No pudimos cargarla — problemas técnicos"
-                        : "Cargando encuesta…"}
-                  </p>
-                </div>
-                {task.status === 'completed' ? (
-                  <button onClick={onViewSurvey} className="text-xs font-bold text-primary hover:underline shrink-0">
-                    Ver encuesta
-                  </button>
-                ) : task.status === 'failed' ? (
-                  <button
-                    onClick={() => onRetry(task.id)}
-                    className="inline-flex items-center gap-1 text-xs font-bold text-destructive hover:underline shrink-0"
-                  >
-                    <RotateCw className="h-3.5 w-3.5" />
-                    Reintentar
-                  </button>
-                ) : (
-                  <span className="text-sm font-bold text-primary tabular-nums shrink-0">{task.progress}%</span>
-                )}
-              </div>
-              {task.status === 'loading' && (
-                <div className="mt-2 h-1 bg-muted rounded-full overflow-hidden">
-                  <div className="h-full bg-primary transition-all duration-300" style={{ width: `${task.progress}%` }} />
-                </div>
-              )}
-              {task.status === 'failed' && (
-                <div className="mt-2 h-1 bg-destructive/15 rounded-full overflow-hidden">
-                  <div className="h-full bg-destructive/70" style={{ width: `${task.progress}%` }} />
-                </div>
-              )}
-            </div>
+              task={task}
+              showCompletedCheck={task.id === latestCompletedId}
+              onViewSurvey={onViewSurvey}
+              onRetry={onRetry}
+            />
           ))}
         </div>
       )}
@@ -1352,12 +1445,6 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
      : loadedGroupKeys.length > 0
        ? 'Volver a las opciones'
        : 'Volver a la carga de archivos';
-
- /** Show the loads list, where the running load reports its live progress. */
- const handleViewCurrentLoad = () => {
-   setUploadStep('loading');
-   setUploadTab('cargas');
- };
 
  /**
   * Start over with different files. The pending surveys from the previous batch
@@ -2298,9 +2385,34 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
        to continue with the batch, watch the running load, or start over. */}
   {uploadStep === 'next-action' && (() => {
     const nextPending = pendingReviewItems[0];
+    // The load that was just started — shown inline with live progress so the
+    // user doesn't need a separate "ver el estado" step to follow it.
+    const currentTask = [...uploadTasks].sort((a, b) => b.id - a.id)[0];
 
     return (
       <div className="flex flex-col flex-1 gap-5">
+        {currentTask && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between px-1">
+              <h3 className="text-sm font-bold text-text-primary tracking-tight">
+                {currentTask.status === 'loading' ? 'Carga en curso' : 'Última carga'}
+              </h3>
+              {currentTask.status === 'loading' && (
+                <span className="px-2 py-1 bg-primary/5 text-primary rounded text-[10px] font-bold uppercase tracking-wide">
+                  En segundo plano
+                </span>
+              )}
+            </div>
+
+            <UploadTaskCard
+              task={currentTask}
+              showCompletedCheck
+              onViewSurvey={handleViewLoadedSurvey}
+              onRetry={retryUpload}
+            />
+          </div>
+        )}
+
         <div className="space-y-1">
           <h3 className="text-base font-bold text-text-primary tracking-tight leading-tight">
             ¿Qué quieres hacer ahora?
@@ -2330,13 +2442,6 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
               onClick={handleLoadPendingSurvey}
             />
           )}
-
-          <NextActionCard
-            icon={Gauge}
-            title="Ver el estado de la carga actual"
-            description="Revisa el progreso y el historial de tus cargas recientes"
-            onClick={handleViewCurrentLoad}
-          />
 
           <NextActionCard
             icon={Plus}
@@ -2658,12 +2763,11 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
 
           // Participants, grouped into the three match scenarios and honoring the
           // decisions already taken. Only present when the files actually carried
-          // individual people; each group gets its own accordion.
+          // individual participants; each group gets its own accordion.
           const detectedParticipants = a.participants?.participants ?? [];
           const participantSplit = a.participants
             ? splitParticipantsByMatch(detectedParticipants, participantResolutions)
             : null;
-          const pendingPossibleCount = participantSplit?.possible.length ?? 0;
           // Stops the same UBITS user being linked to two different participants.
           const takenUsernames = linkedUsernames(detectedParticipants, participantResolutions);
 
@@ -2673,21 +2777,21 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
                   value: 'participantes-match',
                   title: 'Hacen match con UBITS',
                   icon: UserCheck,
-                  note: 'Su identificador es un username de UBITS, así que los vinculamos automáticamente. Sus respuestas suman a los reportes y segmentaciones de UBITS.',
+                  note: 'Su identificador coincide con el username o el correo de un usuario de UBITS, así que los vinculamos automáticamente. Sus respuestas suman a los reportes y segmentaciones de UBITS. Si alguno quedó mal vinculado, puedes corregirlo.',
                   people: participantSplit.matched,
                 },
                 {
                   value: 'participantes-posibles',
                   title: 'Posibles match',
                   icon: UserSearch,
-                  note: 'Su identificador no existe en UBITS, pero su nombre y apellido son idénticos a los de un usuario. No los vinculamos solos: decide si es la misma persona o si se crea aparte en la encuesta.',
+                  note: 'Su identificador no coincide con el username ni con el correo de ningún usuario de UBITS, pero su nombre y apellido son idénticos a los de uno. No los vinculamos solos: decide si es el mismo usuario, si es otro, o si se crea sin usuario en la encuesta.',
                   people: participantSplit.possible,
                 },
                 {
                   value: 'participantes-nuevos',
-                  title: 'Nuevos en la encuesta',
+                  title: 'Sin match en UBITS',
                   icon: UserPlus,
-                  note: 'No encontramos su username ni un nombre igual en UBITS, así que se crean como participantes de esta encuesta. Si sabes a quién corresponden, puedes vincularlos a un usuario de UBITS buscándolo.',
+                  note: 'Su identificador no coincide con el username ni con el correo de ningún usuario de UBITS, y tampoco hay un nombre igual, así que se crean como participantes solo de esta encuesta. Si sabes a qué usuario corresponden, usa "Asociar usuario".',
                   people: participantSplit.unmatched,
                 },
               ]
@@ -2856,41 +2960,27 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
                   Participantes detectados · {participantSplit.total}
                 </div>
 
-                {/* How the automatic match works — the reason a person landed in
-                     one group or another. Only a public survey shows people by
-                     name, so that's where the criterion matters most. */}
+                {/* Why each participant landed in one group or another. The kind
+                     of identifier each file brought is already labelled per row,
+                     so this only needs to state what we match it against. */}
                 <div className="flex items-start gap-1.5 rounded-lg bg-surface-muted/50 px-2.5 py-2">
                   <Info className="h-3.5 w-3.5 shrink-0 text-text-secondary/50 mt-px" strokeWidth={2.25} />
                   <p className="text-[11px] text-text-secondary/70 font-medium leading-snug">
                     {a.participants?.answersLinked ? (
                       <>
-                        Como la encuesta es <span className="font-bold">pública</span>, cada respuesta queda asociada a una
-                        persona. El match automático se hace por el <span className="font-bold">username de UBITS</span>: el
-                        correo, el número de documento o un username asignado. El nombre nunca vincula solo.
+                        Como la encuesta es <span className="font-bold">pública</span>, cada respuesta queda asociada a un
+                        usuario. Vinculamos por <span className="font-bold">username</span> o{" "}
+                        <span className="font-bold">correo</span> de UBITS. El nombre nunca vincula solo.
                       </>
                     ) : (
                       <>
-                        El match se hace por el <span className="font-bold">username de UBITS</span>: el correo, el número de
-                        documento o un username asignado. En este archivo las respuestas no están asociadas a cada persona,
-                        así que la encuesta solo puede cargarse como anónima.
+                        Vinculamos por <span className="font-bold">username</span> o{" "}
+                        <span className="font-bold">correo</span> de UBITS. El nombre nunca vincula solo. Aquí las respuestas
+                        no están asociadas a cada participante, así que la encuesta solo puede cargarse como anónima.
                       </>
                     )}
                   </p>
                 </div>
-
-                {/* Name-only candidates need a human call before loading. */}
-                {pendingPossibleCount > 0 && (
-                  <Alert variant="warning">
-                    <UserSearch className="h-4 w-4" />
-                    <AlertTitle className="text-xs font-bold">
-                      {pendingPossibleCount} posible{pendingPossibleCount > 1 ? 's' : ''} match por nombre
-                    </AlertTitle>
-                    <AlertDescription className="text-[11px] leading-relaxed">
-                      Su nombre coincide con el de un usuario de UBITS, pero su identificador no. Revísalos en{" "}
-                      <span className="font-bold">Posibles match</span>: si no decides, se crean solo dentro de la encuesta.
-                    </AlertDescription>
-                  </Alert>
-                )}
 
                 <Accordion type="single" collapsible value={openSummarySection} onValueChange={setOpenSummarySection} className="gap-2.5">
                   {participantGroups.map((group) => (

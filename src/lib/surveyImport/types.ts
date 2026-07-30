@@ -46,10 +46,13 @@ export interface QuestionDetail {
 export type ParticipantIdentifierType = "correo" | "numero" | "username";
 
 /**
- * How a participant resolved against UBITS:
- *  - `matched`: their username exists in UBITS → linked automatically.
- *  - `possible`: the username is unknown, but their full name is identical to a
- *    UBITS user's. Never linked automatically — a person decides.
+ * How a participant resolved against UBITS. The file's identifier is compared
+ * against a user's username and, failing that, against their registered email —
+ * so a participant identified by email still matches a user whose username is
+ * something else:
+ *  - `matched`: the identifier hit a UBITS user → linked automatically.
+ *  - `possible`: nothing matched, but the full name is identical to a UBITS
+ *    user's. Never linked automatically — the reviewer decides.
  *  - `unmatched`: nothing to link to; created inside the survey only.
  */
 export type ParticipantMatchStatus = "matched" | "possible" | "unmatched";

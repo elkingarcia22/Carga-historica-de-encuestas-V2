@@ -8,19 +8,34 @@
 
 ## 0. Novedades de la última iteración
 
-Tres bloques nuevos respecto a la versión anterior de este documento:
-
 1. **Visibilidad Pública vs. Anónima como regla, no como elección** (§6 bis). Una encuesta solo
-   puede ser pública si los archivos traen las respuestas de cada persona; en cualquier otro caso la
-   opción se deshabilita y se explica por qué. Dos archivos demo nuevos:
+   puede ser pública si los archivos traen las respuestas de cada participante; en cualquier otro caso la
+   opción se deshabilita y se explica por qué. Dos archivos demo:
    `Clima con participantes 2025.xlsx` y `Clima participantes sin respuestas 2025.xlsx`.
 2. **Participantes detectados con tres escenarios de match** (§6 bis): hacen match, posibles match
-   por nombre (requieren decisión humana) y nuevos que se crean en la encuesta (con **autocomplete**
-   para vincularlos a mano a un usuario de UBITS). Sección propia en el resumen, con un acordeón por
-   escenario.
-3. **Estado intermedio tras iniciar una carga** (F4b, §5): cuando el lote trae más encuestas sin
-   cargar, ya no se cae al tab "Cargas"; aparece "Carga iniciada" con tres caminos para que las
-   pendientes no queden inalcanzables.
+   por nombre (requieren decisión humana) y **sin match en UBITS**, que se crean solo en la encuesta.
+   Sección propia en el resumen, con un acordeón por escenario.
+3. **El match automático es por `username` o por `correo`** (§6 bis). Antes se documentaba y se
+   comunicaba en la UI como "solo por username" (presentando el correo como *una forma de* username).
+   La regla correcta: el identificador del archivo se compara con el username del usuario y, si no
+   coincide, con su **correo registrado** — aunque su username sea otro.
+4. **Toda fila se puede corregir, incluido un match automático** (§6 bis). Un match automático es una
+   suposición fuerte, no un hecho: cada participante ofrece **Dejar sin match** y **Asociar usuario**.
+   Rechazar o re-apuntar un match **libera** el usuario que tenía tomado, para que quede disponible
+   para otro participante.
+5. **Asociar usuario en dos pasos, igual en los tres acordeones** (§6 bis). El botón abre —en la misma
+   fila— un autocomplete del directorio más un botón **Asociar**: seleccionar no vincula, solo
+   confirmar vincula. Antes el grupo sin match tenía un select suelto que vinculaba al instante.
+   **Bug corregido de paso:** el autocomplete filtraba solo por `username`, así que buscar "isidora"
+   devolvía *"Ningún usuario coincide"* aunque esa usuaria existiera. Ahora el filtro corre sobre el
+   nombre visible **y** el username (`SearchableSelect`, usado también fuera de este flujo).
+6. **Estado intermedio tras iniciar una carga** (F4b, §5): cuando el lote trae más encuestas sin
+   cargar, ya no se cae al tab "Cargas"; aparece "Carga iniciada" con la **carga en curso y su
+   progreso arriba** y dos caminos, para que las pendientes no queden inalcanzables.
+7. **Lenguaje unificado** (transversal). Se eliminó "persona" del producto y de este documento. Se
+   distingue **usuario** (existe en UBITS) de **participante** (fila detectada en el archivo, que puede
+   no tener usuario detrás): llamar "usuario" a un participante sin match sería falso justo donde
+   importa.
 
 ---
 
@@ -30,8 +45,8 @@ Permite **cargar encuestas históricas** (de tipo Clima, Cultura o NPS) subiendo
 
 1. Recibe los archivos y los **valida** (tipo y tamaño).
 2. **Analiza y detecta** automáticamente la estructura: participación, favorabilidad, eNPS, demográficos, secciones (dimensiones) y preguntas (con su **tipo/escala/valoración** según la taxonomía UBITS).
-3. Cuando los archivos traen personas, **detecta los participantes** y los resuelve contra UBITS por username: match automático, posible match por nombre (requiere decisión) o nuevo en la encuesta (§6 bis).
-4. **Deriva la visibilidad**: solo puede ser pública si hay respuestas por persona; si no, se fuerza anónima y se explica el motivo (§6 bis).
+3. Cuando los archivos traen participantes, **los detecta** y los resuelve contra UBITS por username o correo: match automático, posible match por nombre (requiere decisión) o sin match (§6 bis).
+4. **Deriva la visibilidad**: solo puede ser pública si hay respuestas por participante; si no, se fuerza anónima y se explica el motivo (§6 bis).
 5. Agrupa por **ola/año** (una encuesta por año; nunca mezcla años distintos).
 6. Presenta un **asistente (wizard)** para confirmar datos generales y revisar indicadores, participantes y estructura antes de cargar.
 7. Ejecuta la **carga** mostrando progreso, con manejo de éxito y de error. Si el lote trae más encuestas sin cargar, ofrece un **estado intermedio** para continuar con ellas (F4b).
@@ -45,8 +60,8 @@ dropzone → [analizando…] → select (si hay varias encuestas)
                      │ ¿quedan encuestas del mismo lote?                        │
                      ▼ sí                                                       ▼ no
               next-action (estado intermedio)                             loading (tab "Cargas")
+              │  (arriba: la carga en curso con su progreso en vivo)
               ├─ Cargar otra encuesta  → select (si ≥2) | general (si queda 1)
-              ├─ Ver el estado de la carga actual → loading (tab "Cargas")
               └─ Cargar una nueva encuesta → dropzone (descarta las pendientes)
 
 Estados transversales: error (bloqueante de análisis) · empty (nada detectado)
@@ -61,11 +76,13 @@ Estados transversales: error (bloqueante de análisis) · empty (nada detectado)
 | Orquestación de análisis | `src/lib/surveyImport/index.ts` → `analyzeUploaded()` | Decide escenario demo o pipeline real; devuelve `AnalyzeOutcome`. |
 | Escenarios demo | `src/lib/surveyImport/demoScenarios.ts` | Dispara casos por nombre/tipo de archivo; helpers `resolveDemoScenario`, `buildMockExtractionResult`, `buildEmptyStructureResult`, `buildParticipantsWithAnswersResult`, `buildParticipantsWithoutAnswersResult`, `findExistingDuplicate`, `isEmptyAnalysis`. |
 | Visibilidad y participantes | `src/lib/surveyImport/visibility.ts` | Decide si la encuesta puede ser Pública (`publicVisibilityBlock`) y sus mensajes de bloqueo; agrupa los participantes en los tres escenarios de match (`splitParticipantsByMatch`, `effectiveMatchStatus`) y evita vincular un mismo usuario dos veces (`linkedUsernames`). |
-| Mocks de personas | `src/mocks/participantsMocks.ts` | `DEMO_PARTICIPANT_ROSTER` (los 28 participantes de los archivos demo) y `UBITS_DIRECTORY` (directorio que alimenta el autocomplete). |
+| Mocks de participantes | `src/mocks/participantsMocks.ts` | `DEMO_PARTICIPANT_ROSTER` (los 28 participantes de los archivos demo) y `UBITS_DIRECTORY` (directorio que alimenta el autocomplete). |
 | Parseo real | `src/lib/surveyImport/parseFile.ts` (`detectFormat`), `parseGerenciaReport.ts`, `parseRawFormat.ts` | Lee el Excel y extrae la estructura. |
-| Agregación | `src/lib/surveyImport/aggregate.ts` → `aggregateParsedFiles()` | Agrupa por año, combina archivos, calcula métricas ponderadas. Deja `participants: null` (ningún formato agregado trae personas). |
+| Agregación | `src/lib/surveyImport/aggregate.ts` → `aggregateParsedFiles()` | Agrupa por año, combina archivos, calcula métricas ponderadas. Deja `participants: null` (ningún formato agregado trae participantes). |
 | Validación de archivos | `src/components/upload/uploadUtils.ts` → `validateFiles()`, `getFileKind()` | Tipo y tamaño; mensajes en español. |
 | UI del flujo | `src/screens/EncuestasDashboard.tsx` | Wizard y sus estados (incluido `next-action`), clasificación de preguntas (`classifyQuestion`), secciones del resumen, `ParticipantRow`, lista/tray de cargas. |
+| Tarjeta de carga | `src/screens/EncuestasDashboard.tsx` → `UploadTaskCard` | Una carga de esta sesión con su progreso en vivo. **Compartida** por el tab "Cargas" y el estado intermedio (F4b), para que la carga en curso se vea igual en los dos sitios. |
+| Autocomplete | `src/components/forms/SearchableSelect.tsx` | Combobox con búsqueda. El filtro corre sobre `label + value`, así que se busca **por nombre o por username** (antes solo matcheaba el `value`, de modo que buscar por nombre no encontraba nada). |
 
 **Pipeline real:** `parseSurveyFiles` → `parseSurveyFile` → `detectFormat` → `parseGerenciaReport` | `parseRawFormat` → `aggregateParsedFiles`.
 
@@ -80,7 +97,7 @@ Estados transversales: error (bloqueante de análisis) · empty (nada detectado)
 - **Limitaciones conocidas (deuda para producción):**
   - **CSV** se acepta pero **no se reconoce** (el parser identifica el formato por nombres de hoja). → HU: soportar CSV real.
   - **PDF / imágenes** se aceptan pero la extracción es **simulada** (mock). → HU: extracción real (OCR/IA).
-  - **Hoja `participantes`** (una fila por persona con su username y sus respuestas): los dos archivos
+  - **Hoja `participantes`** (una fila por participante con su identificador y sus respuestas): los dos archivos
     demo de §6 bis la traen con datos reales y consistentes, pero **hoy no se parsea** — esos casos se
     disparan por el nombre del archivo. → HU: parser real de este formato, que es el único que
     habilita la carga pública.
@@ -96,12 +113,12 @@ Estados transversales: error (bloqueante de análisis) · empty (nada detectado)
 2. Arrastra o selecciona el/los archivo(s) → clic en **Analizar archivos**.
 3. Pantalla **"Analizando archivos"** (progreso).
 4. **Datos generales**: nombre, visibilidad (Pública/Anónima — derivada, ver §6 bis), umbral de anonimato, fechas de inicio/cierre (pre-rellenados, editables) → **Siguiente**.
-5. **Estructura**: el resumen se lee en tres secciones — **Indicadores detectados**, **Participantes detectados** (solo si los archivos traen personas) y **Estructura detectada** → **Cargar encuesta**.
+5. **Estructura**: el resumen se lee en tres secciones — **Indicadores detectados**, **Participantes detectados** (solo si los archivos traen participantes) y **Estructura detectada** → **Cargar encuesta**.
 6. **Cargando** con barra de progreso → **completada** (aparece "Ver encuesta" en la lista de cargas). Si el lote traía más encuestas, primero aparece el estado intermedio de F4b.
 
 **Datos que se detectan y muestran:**
 - **Indicadores:** **Participación** (%, respondieron / invitados), **Favorabilidad neta** (%positivos − %negativos), **eNPS** (real o aproximado, marcado con `*`).
-- **Participantes** (cuando los hay): hacen match con UBITS · posibles match por nombre · nuevos en la encuesta (§6 bis).
+- **Participantes** (cuando los hay): hacen match con UBITS · posibles match por nombre · sin match en UBITS (§6 bis).
 - **Estructura:** **Demográficos** (cortes detectados), **Secciones** (dimensiones) y **Preguntas** (agrupadas por sección, con badges de tipo/escala/valoración).
 
 **Reproducir (demo):**
@@ -124,7 +141,7 @@ Estados transversales: error (bloqueante de análisis) · empty (nada detectado)
 | F2 | Excel `raw` (answers/colaboradores) | Parseo real con participación y eNPS exactos. | `encuesta-real/Resultados Encuesta de Clima 2025.xlsx` | REAL |
 | F3 | Varios Excel del mismo año | Se combinan en **una sola encuesta** (consolidado + por área + raw). | set `*2025*` | REAL |
 | F4 | Varios Excel de **años distintos** | Se detectan **varias encuestas** → paso **"Selecciona la encuesta"** (una a la vez). Al cargar una, el lote no se pierde: ver F4b. | `Clima 2024.xlsx` + `Clima 2025.xlsx` | REAL |
-| F4b | **Lote con encuestas pendientes** | Al pulsar "Cargar encuesta" con otras encuestas del mismo lote sin cargar, **no cae en el tab "Cargas"**: aparece el estado intermedio **"Carga iniciada"** con tres caminos — (1) **cargar otra encuesta** del lote (va a "Selecciona la encuesta" si quedan ≥2, o directo a datos generales si queda 1), (2) **ver el estado de la carga actual** (tab "Cargas"), (3) **cargar una nueva encuesta** (reinicia y descarta las pendientes). La pantalla no repite el progreso de la carga: eso vive en el tab "Cargas" y en la bandeja flotante. En "Selecciona la encuesta" las ya cargadas quedan con check verde, "Ya la cargaste" y no se pueden elegir. El tab "Cargas" muestra un aviso **"N encuesta(s) pendiente(s) → Continuar"** para que nunca queden inalcanzables. Cuando ya no queda nada pendiente, se va directo al tab "Cargas" como antes. | `Clima 2024.xlsx` + `Clima 2025.xlsx` | REAL |
+| F4b | **Lote con encuestas pendientes** | Al pulsar "Cargar encuesta" con otras encuestas del mismo lote sin cargar, **no cae en el tab "Cargas"**: aparece el estado intermedio **"Carga iniciada"**. Arriba, la **carga en curso con su progreso en vivo** (encabezado *"Carga en curso"* + chip *"En segundo plano"*; al terminar pasa a *"Última carga"*), usando la **misma tarjeta** que el tab "Cargas" (`UploadTaskCard`). Debajo, *"¿Qué quieres hacer ahora?"* con dos caminos — (1) **cargar otra encuesta** del lote (va a "Selecciona la encuesta" si quedan ≥2, o directo a datos generales si queda 1), (2) **cargar una nueva encuesta** (reinicia y descarta las pendientes). Ya **no existe** la opción "ver el estado de la carga actual": el progreso está a la vista, no detrás de un clic. En "Selecciona la encuesta" las ya cargadas quedan con check verde, "Ya la cargaste" y no se pueden elegir. El tab "Cargas" muestra un aviso **"N encuesta(s) pendiente(s) → Continuar"** para que nunca queden inalcanzables. Cuando ya no queda nada pendiente, se va directo al tab "Cargas" como antes. | `Clima 2024.xlsx` + `Clima 2025.xlsx` | REAL |
 | F5 | **PDF / imagen** | Extracción **simulada**: muestra estructura estimada con **banner "Estructura estimada (simulada)"**. | `reporte-clima.pdf`, `encuesta.png` | MOCK |
 | F6 | **CSV** | Aceptado en subida pero **no reconocido** (cae en "sin estructura"). | — | Limitación |
 | F7 | Tipo no permitido (`.zip`, `.docx`, …) | **Bloqueado en validación** al seleccionarlo (toast). | `no-soportado.zip` | REAL |
@@ -176,12 +193,13 @@ La clasificación es **presentacional** (badges, agrupación, filtro); **no** al
 
 **Regla de negocio:** la visibilidad **no es una elección libre del usuario**. Una encuesta solo
 puede cargarse como **Pública** (con nombre y apellido) si los archivos traen **una fila por
-persona con las respuestas de esa persona**. Sin ese vínculo respuesta↔persona no hay nada que
+participante con las respuestas de ese participante**. Sin ese vínculo respuesta↔participante no hay nada que
 mostrar identificado, así que la opción Pública se **deshabilita** y se explica por qué.
 
-**Criterio de match con UBITS:** el **username** del colaborador, que en UBITS puede ser
-un **correo**, un **número de documento** o un **username asignado**. Es lo único que se compara
-automáticamente — **el nombre nunca vincula solo**.
+**Criterio de match con UBITS:** el identificador que trae el archivo (un correo, un número de
+documento o un username) se compara con el **username** del usuario en UBITS y, si no coincide, con su
+**correo registrado** — así un participante identificado por correo hace match aunque su username sea
+otro. Esos dos son los únicos criterios automáticos: **el nombre nunca vincula solo**.
 
 **Los tres escenarios de participante.** Viven en su **propia sección del resumen**
 ("PARTICIPANTES DETECTADOS · N"), al mismo nivel que "Indicadores detectados" y "Estructura
@@ -189,25 +207,33 @@ detectada", con **un acordeón independiente por escenario**:
 
 | Acordeón | Estado | Qué significa |
 |----------|--------|----------------|
-| **Hacen match con UBITS** | `matched` | Su identificador ES un username de UBITS. Se vincula automáticamente; sus respuestas suman a los reportes y segmentaciones de UBITS. |
-| **Posibles match** | `possible` | Su identificador **no** existe en UBITS, pero su **nombre y apellido son idénticos** a los de un usuario. **No se vincula solo**: se muestra el usuario candidato con su username y su contexto (área · cargo · sede, para distinguir homónimos) y dos acciones — *"Sí, es la misma persona"* (pasa a "Hacen match") o *"No, crear en la encuesta"* (pasa a "Nuevos"). |
-| **Nuevos en la encuesta** | `unmatched` | No hay username ni nombre igual en UBITS. Se crean como participantes de esta encuesta. Además ofrecen un **autocomplete para vincularlos a mano** con cualquier usuario del directorio de UBITS: se busca por nombre o username, cada opción muestra su contexto, y los usuarios ya vinculados a otro participante aparecen **deshabilitados** ("ya vinculado a otro participante") para que un mismo usuario no quede atado a dos personas. |
+| **Hacen match con UBITS** | `matched` | Su identificador coincide con el **username** o el **correo registrado** de un usuario de UBITS. Se vincula automáticamente; sus respuestas suman a los reportes y segmentaciones de UBITS. Un match automático es una **suposición fuerte, no un hecho**: cada fila ofrece *"Dejar sin match"* (pasa a "Sin match en UBITS") y **Asociar usuario** (lo apunta a otro usuario). |
+| **Posibles match** | `possible` | Su identificador **no** coincide con el username ni con el correo de ningún usuario, pero su **nombre y apellido son idénticos** a los de uno. **No se vincula solo**: se muestra el usuario candidato con su username y su contexto (área · cargo · sede, para distinguir homónimos) y tres acciones — *"Sí, es el mismo usuario"* (pasa a "Hacen match"), *"Dejar sin match"* (pasa a "Sin match en UBITS") o **Asociar usuario** (lo apunta a otro usuario del directorio). |
+| **Sin match en UBITS** | `unmatched` | Ni el username, ni el correo, ni el nombre coinciden con un usuario de UBITS. Se crean como participantes solo de esta encuesta. Además ofrecen **Asociar usuario** para vincularlos a mano: el botón abre, en la misma fila, un **autocomplete** del directorio de UBITS más un botón **Asociar** que confirma (nada se vincula al solo seleccionar). Se busca por nombre o username, cada opción muestra su contexto, y los usuarios ya vinculados a otro participante aparecen **deshabilitados** ("ya vinculado a otro participante") para que un mismo usuario no quede atado a dos participantes. Rechazar o re-apuntar un match **libera** el usuario que tenía tomado. |
 
 Toda decisión (confirmar, rechazar o vincular a mano) queda **visible y reversible** con un chip
-*"Vinculada a {usuario}"* / *"Se crea en la encuesta"* + **Deshacer**, desde el acordeón donde haya
-quedado la persona. Los contadores de los tres acordeones se recalculan en vivo.
+*"Vinculado a {usuario}"* / *"Sin usuario · se crea en la encuesta"* + **Deshacer**, desde el acordeón
+donde haya quedado el participante. Con una decisión tomada la fila se reduce al chip: los datos del
+candidato solo se muestran mientras la decisión está pendiente. Los contadores de los tres acordeones se recalculan en vivo.
 
-Mientras queden posibles sin resolver, un **alert ámbar** sobre los acordeones avisa cuántos son y
-que, si no se decide, se crean solo dentro de la encuesta.
+**Tratamiento visual del recuadro de candidato** (posibles match): recuadro **neutro** (gris, borde
+sutil, radio pequeño), no ámbar. El único color de la fila es el resultado — chip verde al vincular,
+chip gris al dejar sin match. Un posible match no es un error ni una advertencia: es una decisión
+pendiente, y pintarla de ámbar competía con los estados que sí importan. Por la misma razón se quitó
+el alert ámbar *"N posibles match por nombre"* que iba sobre los acordeones.
 
-Sobre los tres acordeones, una nota explica el criterio de match. En una encuesta **pública** lo
-explicita: como cada respuesta queda asociada a una persona, el match automático es por username
-(correo / número de documento / username asignado) y el nombre nunca vincula solo.
+El contador del acordeón **Posibles match** es el único aviso de que quedan decisiones pendientes: si
+se carga sin decidir, esos participantes se crean sin usuario dentro de la encuesta, como dice su nota.
+
+Sobre los tres acordeones, una nota corta explica el criterio: *"Como la encuesta es **pública**, cada
+respuesta queda asociada a un usuario. Vinculamos por **username** o **correo** de UBITS. El nombre
+nunca vincula solo."* No enumera las formas que puede tomar un username (correo / número de documento /
+username asignado) porque **cada fila ya rotula la suya** debajo del identificador.
 
 | # | Caso | Disparador (demo) | Comportamiento esperado | Estado |
 |---|------|-------------------|-------------------------|--------|
-| P1 | **Participantes con sus respuestas** | Nombre con `participantes` (ej. `Clima con participantes 2025.xlsx`) | Se detecta automáticamente como **Pública** (radio preseleccionado, ambos habilitados). Aparece la sección **PARTICIPANTES DETECTADOS · 28** con los tres acordeones (Hacen match 18 · Posibles match 4 · Nuevos 6) y el alert de posibles match pendientes. | token demo |
-| P2 | **Participantes sin respuestas por persona** | Nombre con `participantes` **+** `sin respuestas` / `sin-respuestas` / `anonima` | **Pública deshabilitada** (gris, no clickeable) + nota con candado: *"Detectamos participantes, pero sus respuestas no están asociadas a cada persona. Sin ese vínculo la encuesta solo puede cargarse como anónima."* Se fuerza **Anónima** y aparece el **Umbral de anonimato**. La sección de participantes se muestra igual, con la aclaración de anonimato en su nota. | token demo |
+| P1 | **Participantes con sus respuestas** | Nombre con `participantes` (ej. `Clima con participantes 2025.xlsx`) | Se detecta automáticamente como **Pública** (radio preseleccionado, ambos habilitados). Aparece la sección **PARTICIPANTES DETECTADOS · 28** con los tres acordeones (Hacen match 18 · Posibles match 4 · Sin match 6). | token demo |
+| P2 | **Participantes sin respuestas individuales** | Nombre con `participantes` **+** `sin respuestas` / `sin-respuestas` / `anonima` | **Pública deshabilitada** (gris, no clickeable) + nota con candado: *"Detectamos participantes, pero sus respuestas no están asociadas a cada participante. Sin ese vínculo la encuesta solo puede cargarse como anónima."* Se fuerza **Anónima** y aparece el **Umbral de anonimato**. La sección de participantes se muestra igual, con la aclaración de anonimato en su nota. | token demo |
 | P3 | **Archivos agregados (todos los demás casos)** | Cualquier otro archivo del set demo y el pipeline real | **Pública deshabilitada** + nota: *"Los archivos traen resultados agregados, no participantes con sus respuestas individuales. Por eso esta encuesta solo puede cargarse como anónima."* Se fuerza Anónima. Aplica a `Clima 2025`, `encuesta-real/*`, PDF/imagen, etc. | REAL |
 
 **Cifras de los archivos demo** (para verificar que la demo corre bien):
@@ -218,31 +244,33 @@ explicita: como cada respuesta queda asociada a una persona, el match automátic
 | Participación | 87.5% (28 de 32) | 87.5% (28 de 32) |
 | Favorabilidad neta | 65 (74% fav. − 9% desfav.) | 60 (71% − 11%) |
 | eNPS | **50**, real (18 promotores / 6 neutrales / 4 detractores) | **40\***, aproximado de datos agregados |
-| Participantes | 28 → 18 match · 4 posibles · 6 nuevos | 28 → 18 match · 4 posibles · 6 nuevos |
+| Participantes | 28 → 18 match · 4 posibles · 6 sin match | 28 → 18 match · 4 posibles · 6 sin match |
 | Secciones · preguntas | 4 · 11 | 4 · 11 |
 | Demográficos | 4 (Área, Cargo, Sede, Antigüedad) | 3 (Área, Cargo, Sede) |
 
-El eNPS de P1 no lleva `*` porque las respuestas 0–10 vienen por persona; el de P2 sí, porque solo
+El eNPS de P1 no lleva `*` porque las respuestas 0–10 vienen por participante; el de P2 sí, porque solo
 hay agregados.
 
 **Puntos de código:**
 - Regla: `src/lib/surveyImport/visibility.ts` → `publicVisibilityBlock()`, `PUBLIC_VISIBILITY_BLOCK_MESSAGE`, `splitParticipantsByMatch()`, `effectiveMatchStatus()`, `linkedUsernames()`.
 - Tipos: `ParticipantsDetection` / `DetectedParticipant` / `UbitsDirectoryUser` / `ParticipantResolution` en `src/lib/surveyImport/types.ts` y `visibility.ts`; `DetectedSurveyAnalysis.participants` (null = agregado).
 - Roster demo + directorio de UBITS para el autocomplete: `src/mocks/participantsMocks.ts` → `DEMO_PARTICIPANT_ROSTER` (espejado en `scripts/generate-demo-samples.cjs`) y `UBITS_DIRECTORY`.
-- UI: sección "Participantes detectados", `ParticipantRow` y radio bloqueado en `src/screens/EncuestasDashboard.tsx`; el autocomplete reutiliza `src/components/forms/SearchableSelect.tsx`.
+- UI: sección "Participantes detectados", `ParticipantRow` y radio bloqueado en `src/screens/EncuestasDashboard.tsx`; el autocomplete reutiliza `src/components/forms/SearchableSelect.tsx` (dentro de `ParticipantRow`, `associateRow` y `associateTrigger` son la **misma** pieza en los tres acordeones).
 
 **Criterios de aceptación (HU):**
 - Dado un archivo con participantes y sus respuestas, cuando se analiza, entonces la visibilidad queda en **Pública** por defecto y se listan los participantes con y sin match en UBITS.
-- Dado un archivo sin respuestas por persona (o agregado), cuando se llega a "Datos generales", entonces **Pública está deshabilitada** con el motivo visible y la encuesta solo puede cargarse **Anónima**.
-- El match automático se hace **solo por username** (correo, número de documento o username asignado); los no encontrados se crean dentro de la encuesta y se informan explícitamente antes de cargar.
-- Dado un participante cuyo **nombre y apellido** coinciden con los de un usuario de UBITS pero cuyo identificador no existe, entonces **no se vincula automáticamente**: se muestra como *posible match* con el usuario candidato y su contexto, y solo se vincula si una persona lo confirma.
-- Si se carga la encuesta con posibles match sin resolver, esos participantes **se crean dentro de la encuesta** (comportamiento por defecto, avisado en el alert).
-- Dado un participante nuevo (sin match), cuando se busca un usuario en el autocomplete y se selecciona, entonces queda **vinculado a ese usuario** y pasa al acordeón "Hacen match con UBITS".
+- Dado un archivo sin respuestas por participante (o agregado), cuando se llega a "Datos generales", entonces **Pública está deshabilitada** con el motivo visible y la encuesta solo puede cargarse **Anónima**.
+- El match automático compara el identificador del archivo con el **username** del usuario (que puede ser un correo, un número de documento o un username asignado) y, si no coincide, con su **correo registrado** — así un participante identificado por correo hace match aunque su username sea otro. Los no encontrados se crean dentro de la encuesta y se informan explícitamente antes de cargar.
+- Dado un participante cuyo **nombre y apellido** coinciden con los de un usuario de UBITS pero cuyo identificador no, entonces **no se vincula automáticamente**: se muestra como *posible match* con el usuario candidato y su contexto, y solo se vincula si el revisor lo confirma.
+- Dado un participante con match automático, cuando el revisor elige **"Dejar sin match"**, entonces pasa a "Sin match en UBITS" y el usuario que tenía tomado **queda disponible** para otro participante.
+- Dado un participante ya resuelto (por cualquier vía), entonces su fila se reduce al **chip de resultado + Deshacer**: los datos del usuario candidato solo se muestran mientras la decisión está pendiente.
+- Si se carga la encuesta con posibles match sin resolver, esos participantes **se crean dentro de la encuesta** (comportamiento por defecto, explicado en la nota del acordeón).
+- Dado cualquier participante, cuando se pulsa **Asociar usuario**, se busca en el autocomplete (por nombre o por username) y se confirma con **Asociar**, entonces queda **vinculado a ese usuario** y pasa al acordeón "Hacen match con UBITS". Seleccionar sin confirmar no vincula nada.
 - Un usuario de UBITS **no puede vincularse a dos participantes** del mismo lote: en el autocomplete aparece deshabilitado indicando que ya está vinculado.
-- Toda vinculación manual o decisión sobre un posible match es **reversible** con "Deshacer", que devuelve a la persona al grupo donde la dejó la detección.
+- Toda vinculación manual o decisión sobre un match es **reversible** con "Deshacer", que devuelve al participante al grupo donde lo dejó la detección.
 
 **Deuda para producción:** hoy P1/P2 se disparan por token, y tanto el roster como el directorio de
-UBITS son mock. En backend: leer el roster real del archivo, resolver el username contra el
+UBITS son mock. En backend: leer el roster real del archivo, resolver el identificador (username y correo) contra el
 directorio real de UBITS, servir el autocomplete con búsqueda paginada en el backend (hoy filtra en
 cliente sobre una lista fija), y decidir `answersLinked` a partir de la estructura real del origen
 (no del nombre del archivo).
@@ -321,7 +349,7 @@ npm run dev   # abre http://localhost:5173
   4. Errores reales de **archivo grande/corrupto/sin estructura** (E2–E4) contra validación/parseo real.
   5. **Duplicados**: definir la regla real de unicidad (nombre + año + tipo) en backend (E6).
   6. **Falla de carga** (E7): manejo real de error de servidor + reintento idempotente.
-  7. **Participantes** (§6 bis): parsear la hoja `participantes` de verdad, resolver el username contra el directorio real de UBITS, derivar `answersLinked` de la estructura del origen, y servir el autocomplete con búsqueda paginada en backend (hoy filtra en cliente sobre una lista fija).
+  7. **Participantes** (§6 bis): parsear la hoja `participantes` de verdad, resolver el identificador (username y correo) contra el directorio real de UBITS, derivar `answersLinked` de la estructura del origen, y servir el autocomplete con búsqueda paginada en backend (hoy filtra en cliente sobre una lista fija).
   8. **Persistencia de las decisiones** (§6 bis): hoy las vinculaciones manuales viven en estado de UI y se pierden al salir del wizard; deben viajar al backend junto con la carga.
 - **Reglas de negocio a confirmar:**
   - ¿Las preguntas "Sin reconocer" se cargan igual (con advertencia) o se excluyen? Hoy: se cargan con advertencia.
@@ -337,11 +365,15 @@ npm run dev   # abre http://localhost:5173
 - **Favorabilidad neta:** %positivos − %negativos (estilo NPS).
 - **eNPS:** %promotores − %detractores; **real** si viene de puntajes 0–10, **aproximado** (`*`) si se deriva de porcentajes por bucket.
 - **Consolidado (total):** archivo que representa a toda la empresa; no se suma con los de área para evitar doble conteo.
-- **Encuesta pública:** los resultados quedan asociados a cada persona. Solo posible si el archivo trae las respuestas por participante.
+- **Encuesta pública:** los resultados quedan asociados a cada usuario. Solo posible si el archivo trae las respuestas por participante.
 - **Encuesta anónima:** los resultados no se atribuyen a nadie; se muestran por grupo respetando el **umbral de anonimato**.
-- **Username de UBITS:** identificador único del colaborador; puede ser su correo, su número de documento o un username asignado. Es el criterio de match automático de participantes.
-- **Match automático:** el identificador que trae el archivo coincide con el username de un usuario de UBITS → se vincula sin intervención.
-- **Posible match:** el identificador no existe en UBITS, pero el **nombre y apellido** son idénticos a los de un usuario. Nunca se vincula solo; requiere que una persona confirme o rechace.
-- **Participante nuevo:** no hay username ni nombre igual en UBITS. Se crea dentro de la encuesta y no queda atado a ningún usuario, salvo que se lo vincule a mano.
-- **Vinculación manual:** vincular un participante a un usuario elegido en el autocomplete del directorio. Reversible con "Deshacer".
+- **Usuario de UBITS:** colaborador con cuenta en UBITS. Es a lo que se vincula un participante.
+- **Participante:** fila detectada en el archivo. Puede tener un usuario de UBITS detrás o no — por eso no se le llama "usuario" hasta que haga match.
+- **Username de UBITS:** identificador único del usuario; puede ser su correo, su número de documento o un username asignado.
+- **Correo registrado:** el correo del usuario en UBITS. Segundo criterio de match, para cuando el username es otra cosa.
+- **Match automático:** el identificador que trae el archivo coincide con el **username** o el **correo registrado** de un usuario de UBITS → se vincula sin intervención. Es reversible: el revisor puede dejarlo sin match o apuntarlo a otro usuario.
+- **Posible match:** el identificador no coincide con el username ni con el correo de ningún usuario, pero el **nombre y apellido** son idénticos a los de uno. Nunca se vincula solo; requiere que el revisor confirme o rechace.
+- **Sin match en UBITS:** ni el username, ni el correo, ni el nombre coinciden con un usuario. Se crea dentro de la encuesta y no queda atado a ningún usuario, salvo que se lo vincule a mano.
+- **Asociar usuario:** vincular un participante a un usuario elegido en el autocomplete del directorio. Dos pasos: seleccionar y **confirmar con "Asociar"**. Reversible con "Deshacer".
+- **Dejar sin match:** descartar el usuario que el sistema propuso (o encontró) para un participante. Lo manda a "Sin match en UBITS" y libera ese usuario.
 - **Lote:** el conjunto de encuestas detectadas en una misma subida de archivos. Se carga **una a la vez**; las que quedan son las "pendientes" del lote (F4b).

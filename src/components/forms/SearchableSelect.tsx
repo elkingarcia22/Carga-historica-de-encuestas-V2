@@ -77,7 +77,9 @@ export function SearchableSelect({
               {options.map((option) => (
                 <CommandItem
                   key={option.value}
-                  value={option.value}
+                  // Filtering runs on this string, so it carries the visible
+                  // label too — searching by name has to work, not just by value.
+                  value={`${option.label} ${option.value}`}
                   disabled={option.disabled}
                   onSelect={() => {
                     onValueChange?.(option.value)

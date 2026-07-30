@@ -237,7 +237,7 @@ export function buildParticipantsWithoutAnswersResult(fileName: string): SurveyI
 
   const group: DetectedSurveyGroup = {
     groupKey: "2025",
-    suggestedSurveyName: "Encuesta de Clima sin respuestas por persona 2025",
+    suggestedSurveyName: "Encuesta de Clima sin respuestas por participante 2025",
     surveyYear: 2025,
     suggestedStartDate: new Date(2025, 2, 3),
     suggestedEndDate: new Date(2025, 2, 21),

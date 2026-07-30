@@ -24,13 +24,13 @@ export const PUBLIC_VISIBILITY_BLOCK_MESSAGE: Record<PublicVisibilityBlock, stri
   "no-participants":
     "Los archivos traen resultados agregados, no participantes con sus respuestas individuales. Por eso esta encuesta solo puede cargarse como anónima.",
   "answers-not-linked":
-    "Detectamos participantes, pero sus respuestas no están asociadas a cada persona. Sin ese vínculo la encuesta solo puede cargarse como anónima.",
+    "Detectamos participantes, pero sus respuestas no están asociadas a cada participante. Sin ese vínculo la encuesta solo puede cargarse como anónima.",
 };
 
 /**
- * What the user decided about a participant the system did not link on its own:
- * either tie them to a specific UBITS user (the suggested one, or any other
- * picked from the directory), or keep them inside the survey.
+ * What the reviewer decided about a participant: either tie it to a specific
+ * UBITS user (the suggested one, or any other picked from the directory), or
+ * leave it without a user, created inside the survey.
  */
 export type ParticipantResolution =
   | { kind: "linked"; username: string }
@@ -41,28 +41,26 @@ export type ParticipantResolutions = Record<string, ParticipantResolution>;
 
 export interface ParticipantMatchSplit {
   total: number;
-  /** Username matched in UBITS, or a name-only match the user confirmed. */
+  /** Resolved to a UBITS user: automatically, or by the reviewer's decision. */
   matched: DetectedParticipant[];
   /** Name-only candidates still waiting for a decision. */
   possible: DetectedParticipant[];
-  /** Created inside the survey only, either by default or by the user's choice. */
+  /** No UBITS user behind them — created inside the survey only. */
   unmatched: DetectedParticipant[];
 }
 
 /**
- * Where a participant lands once the user's decisions are applied.
+ * Where a participant lands once the reviewer's decisions are applied.
  *
  * A `possible` match is never resolved automatically: until someone confirms or
- * rejects it, it stays pending. An `unmatched` participant can still be linked
- * by hand to any directory user, which moves them to `matched`. A participant
- * whose username already matched is left alone.
+ * rejects it, it stays pending. Every other status can be corrected — an
+ * automatic match is a strong guess, not a fact, so rejecting it drops the
+ * participant to `unmatched`, and linking any row by hand makes it `matched`.
  */
 export function effectiveMatchStatus(
   participant: DetectedParticipant,
   resolutions: ParticipantResolutions = {}
 ): ParticipantMatchStatus {
-  if (participant.matchStatus === "matched") return "matched";
-
   const decision = resolutions[participant.identifier];
   if (decision?.kind === "linked") return "matched";
   if (decision?.kind === "separate") return "unmatched";
@@ -72,9 +70,8 @@ export function effectiveMatchStatus(
 
 /**
  * Groups detected participants into the three scenarios the review step shows,
- * honoring the decisions already taken on name-only candidates. Unmatched people
- * are still loaded — they just live inside the survey instead of being linked to
- * a UBITS user.
+ * honoring the decisions already taken. Unmatched participants are still loaded
+ * — they just live inside the survey instead of being linked to a UBITS user.
  */
 export function splitParticipantsByMatch(
   participants: DetectedParticipant[],
@@ -92,9 +89,12 @@ export function splitParticipantsByMatch(
 }
 
 /**
- * UBITS usernames already tied to somebody in this batch — either matched
- * automatically (where the identifier IS the username) or linked by hand. Lets
- * the directory picker stop one user being attached to two different people.
+ * UBITS users already tied to a participant in this batch — matched
+ * automatically (where the identifier IS the user's key) or linked by hand. Lets
+ * the directory picker stop one user being attached to two participants.
+ *
+ * A decision always overrides the automatic match, so rejecting or re-pointing
+ * one frees the user it had taken.
  */
 export function linkedUsernames(
   participants: DetectedParticipant[],
@@ -102,12 +102,13 @@ export function linkedUsernames(
 ): Set<string> {
   const taken = new Set<string>();
   participants.forEach((participant) => {
-    if (participant.matchStatus === "matched") {
-      taken.add(participant.identifier);
+    const decision = resolutions[participant.identifier];
+    if (decision?.kind === "linked") {
+      taken.add(decision.username);
       return;
     }
-    const decision = resolutions[participant.identifier];
-    if (decision?.kind === "linked") taken.add(decision.username);
+    if (decision?.kind === "separate") return;
+    if (participant.matchStatus === "matched") taken.add(participant.identifier);
   });
   return taken;
 }
