@@ -36,6 +36,12 @@
    distingue **usuario** (existe en UBITS) de **participante** (fila detectada en el archivo, que puede
    no tener usuario detrás): llamar "usuario" a un participante sin match sería falso justo donde
    importa.
+8. **"Tipo de encuesta" ya no se pre-rellena ni se infiere: el usuario lo elige, y es obligatorio**
+   (§4, §9). Antes, en ningún paso del wizard existía un campo para el tipo — se adivinaba a partir del
+   texto del nombre (`inferSurveyType`, ya eliminado) recién al iniciar la carga, así que dos encuestas
+   con nombres ambiguos podían quedar mal clasificadas sin que nadie lo revisara. Ahora "Datos
+   generales" pide explícitamente **Clima / Cultura / NPS** (sin ninguna opción preseleccionada) y el
+   botón **Siguiente permanece deshabilitado** hasta elegir uno, igual que con nombre y fechas.
 
 ---
 
@@ -80,7 +86,7 @@ Estados transversales: error (bloqueante de análisis) · empty (nada detectado)
 | Parseo real | `src/lib/surveyImport/parseFile.ts` (`detectFormat`), `parseGerenciaReport.ts`, `parseRawFormat.ts` | Lee el Excel y extrae la estructura. |
 | Agregación | `src/lib/surveyImport/aggregate.ts` → `aggregateParsedFiles()` | Agrupa por año, combina archivos, calcula métricas ponderadas. Deja `participants: null` (ningún formato agregado trae participantes). |
 | Validación de archivos | `src/components/upload/uploadUtils.ts` → `validateFiles()`, `getFileKind()` | Tipo y tamaño; mensajes en español. |
-| UI del flujo | `src/screens/EncuestasDashboard.tsx` | Wizard y sus estados (incluido `next-action`), clasificación de preguntas (`classifyQuestion`), secciones del resumen, `ParticipantRow`, lista/tray de cargas. |
+| UI del flujo | `src/screens/EncuestasDashboard.tsx` | Wizard y sus estados (incluido `next-action`), clasificación de preguntas (`classifyQuestion`), secciones del resumen, `ParticipantRow`, lista/tray de cargas. Tipo de encuesta: `SURVEY_TYPE_OPTIONS` (`Clima`/`Cultura`/`NPS`) y `SurveyReviewItem.type`, sin valor por defecto — se exige en `canProceedFromGeneral`. |
 | Tarjeta de carga | `src/screens/EncuestasDashboard.tsx` → `UploadTaskCard` | Una carga de esta sesión con su progreso en vivo. **Compartida** por el tab "Cargas" y el estado intermedio (F4b), para que la carga en curso se vea igual en los dos sitios. |
 | Autocomplete | `src/components/forms/SearchableSelect.tsx` | Combobox con búsqueda. El filtro corre sobre `label + value`, así que se busca **por nombre o por username** (antes solo matcheaba el `value`, de modo que buscar por nombre no encontraba nada). |
 
@@ -112,7 +118,7 @@ Estados transversales: error (bloqueante de análisis) · empty (nada detectado)
 1. Clic en el ícono **Subir** (flecha ↑) en la barra de "Lista de encuestas" → abre el panel "Cargar encuestas".
 2. Arrastra o selecciona el/los archivo(s) → clic en **Analizar archivos**.
 3. Pantalla **"Analizando archivos"** (progreso).
-4. **Datos generales**: nombre, visibilidad (Pública/Anónima — derivada, ver §6 bis), umbral de anonimato, fechas de inicio/cierre (pre-rellenados, editables) → **Siguiente**.
+4. **Datos generales**: nombre (pre-rellenado, editable), **tipo de encuesta** (Clima/Cultura/NPS — **sin preseleccionar, obligatorio**, ver §9), visibilidad (Pública/Anónima — derivada, ver §6 bis), umbral de anonimato, fechas de inicio/cierre (pre-rellenados, editables) → **Siguiente** (deshabilitado hasta completar nombre, tipo y fechas).
 5. **Estructura**: el resumen se lee en tres secciones — **Indicadores detectados**, **Participantes detectados** (solo si los archivos traen participantes) y **Estructura detectada** → **Cargar encuesta**.
 6. **Cargando** con barra de progreso → **completada** (aparece "Ver encuesta" en la lista de cargas). Si el lote traía más encuestas, primero aparece el estado intermedio de F4b.
 
@@ -128,6 +134,7 @@ Estados transversales: error (bloqueante de análisis) · empty (nada detectado)
 
 **Criterios de aceptación (HU):**
 - Dado un archivo válido, cuando se analiza, entonces se muestran datos generales pre-rellenados y la estructura detectada.
+- Dado el paso "Datos generales", cuando se entra a él, entonces el campo **"Tipo de encuesta" llega vacío** (ninguna opción preseleccionada) y el botón **Siguiente** permanece deshabilitado hasta que el usuario elija Clima, Cultura o NPS.
 - Los indicadores sin dato muestran **N/D** (no 0).
 - El eNPS aproximado (derivado de favorabilidad) se marca con `*`; el eNPS real (de puntajes 0–10) no.
 
@@ -356,7 +363,7 @@ npm run dev   # abre http://localhost:5173
   - ¿Los **posibles match sin resolver** se crean dentro de la encuesta (hoy) o deben **bloquear** la carga hasta decidirse?
   - ¿Se permite **cambiar a anónima** una encuesta que sí podría ser pública? Hoy sí: la regla solo bloquea el camino inverso.
   - ¿Qué pasa con las **encuestas pendientes de un lote** si el usuario elige "Cargar una nueva encuesta"? Hoy se descartan y se avisa en la tarjeta.
-- **Tipos de encuesta permitidos:** Clima, Cultura, NPS (validar el tipo real del contenido, hoy no se valida).
+- **Tipos de encuesta permitidos:** Clima, Cultura, NPS. Desde esta iteración el usuario los **elige explícitamente** en "Datos generales" (radio sin preselección) y es **obligatorio** para avanzar — ya no se infiere del nombre de la encuesta. Pendiente de backend: validar que el tipo elegido sea consistente con el contenido real de los archivos (hoy solo se exige que el campo no esté vacío).
 
 ---
 

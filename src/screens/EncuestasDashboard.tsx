@@ -115,6 +115,8 @@ import type { SurveyListItem } from "@/mocks/types";
 interface SurveyReviewItem {
   groupKey: string;
   name: string;
+  /** Never pre-filled — the user must pick it before advancing past "Datos generales". */
+  type: SurveyTypeOption | '';
   visibility: 'publica' | 'anonima';
   anonymityThreshold: string;
   startDate: Date | undefined;
@@ -122,6 +124,10 @@ interface SurveyReviewItem {
   fileNames: string[];
   analysis: DetectedSurveyAnalysis;
 }
+
+/** The only survey types selectable in "Datos generales" — kept in sync with the "Tipo" column. */
+type SurveyTypeOption = 'Clima' | 'Cultura' | 'NPS';
+const SURVEY_TYPE_OPTIONS: SurveyTypeOption[] = ['Clima', 'Cultura', 'NPS'];
 
 interface UploadTaskState {
   id: number;
@@ -228,15 +234,6 @@ function formatShortDate(date: Date | undefined): string {
   if (!date) return '';
   const day = date.getDate().toString().padStart(2, '0');
   return `${day} ${SHORT_MONTH_NAMES[date.getMonth()]} ${date.getFullYear()}`;
-}
-
-/** Best-effort survey type from its name, for the "Tipo" column of a freshly loaded survey. */
-function inferSurveyType(name: string): string {
-  const n = name.toLowerCase();
-  if (n.includes('clima')) return 'Clima';
-  if (n.includes('cultura')) return 'Cultura';
-  if (n.includes('nps') || n.includes('promotor')) return 'NPS';
-  return 'Otro';
 }
 
 /** One line inside a summary accordion: an optional color dot / index, a label, and an optional right-aligned value. */
@@ -1219,6 +1216,8 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
          return {
            groupKey: group.groupKey,
            name: group.suggestedSurveyName,
+           // Never pre-filled: the user must choose it in "Datos generales".
+           type: '',
            // Public only when the files tie each participant to their own
            // answers; otherwise anonymous is the only option (and the form
            // blocks the choice, so this default is also the final value).
@@ -1311,6 +1310,7 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
  const canProceedFromGeneral =
    !!selectedReviewItem &&
    !!selectedReviewItem.name.trim() &&
+   !!selectedReviewItem.type &&
    !!selectedReviewItem.startDate &&
    !!selectedReviewItem.endDate &&
    isDateRangeValid &&
@@ -1387,7 +1387,7 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
      {
        id: `up-${taskId}`,
        name: selectedReviewItem.name,
-       type: inferSurveyType(selectedReviewItem.name),
+       type: selectedReviewItem.type,
        status: 'Cargando',
        statusVariant: 'info',
        startDate: formatShortDate(selectedReviewItem.startDate),
@@ -2635,6 +2635,29 @@ export const EncuestasDashboard: React.FC<EncuestasDashboardProps> = ({
                     Ya existe una encuesta llamada "{duplicateExisting}". Usa otro nombre para continuar.
                   </p>
                 )}
+              </Field>
+
+              <Field label="Tipo de encuesta" required>
+                <RadioGroup
+                  value={selectedReviewItem.type}
+                  onValueChange={(value) => updateReviewItem(selectedReviewItem.groupKey, { type: value as SurveyTypeOption })}
+                  className="grid grid-cols-3 gap-3"
+                >
+                  {SURVEY_TYPE_OPTIONS.map((option) => (
+                    <label
+                      key={option}
+                      className={cn(
+                        "flex items-center justify-center gap-2 p-3 rounded-xl border-2 cursor-pointer transition-all text-xs font-bold",
+                        selectedReviewItem.type === option
+                          ? "border-primary bg-primary/5 text-primary"
+                          : "border-border/40 text-text-primary"
+                      )}
+                    >
+                      <RadioGroupItem value={option} />
+                      <span>{option}</span>
+                    </label>
+                  ))}
+                </RadioGroup>
               </Field>
 
               <Field label="Visibilidad de la encuesta" required>
