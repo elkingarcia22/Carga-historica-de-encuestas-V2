@@ -544,8 +544,8 @@ export function ObjetivosConfigDrawer({
               <DrawerSection
                 icon={Target}
                 tone="brand"
-                title="Estados del objetivo"
-                hint="El nombre, el rango y el color con los que se marca el avance de un objetivo."
+                title="Estados del colaborador"
+                hint="El nombre, el rango de cumplimiento y el color con los que se marca a un colaborador según el avance que lleva."
               >
                 <div className="flex flex-col gap-3">
                   <div className="flex flex-col gap-2 rounded-xl border border-border/60 bg-background p-2">

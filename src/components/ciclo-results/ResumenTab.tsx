@@ -4,10 +4,12 @@ import {
   Lightbulb,
   MessageSquareText,
   PenLine,
+  TriangleAlert,
   UserPlus,
   Users,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { AttentionAction, AttentionStrip } from "@/components/feedback";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatPercent, formatLongDate } from "@/components/ciclo-detail";
@@ -348,46 +350,6 @@ function StatCard({
         <p className="mt-1.5 text-[11px] font-medium text-text-muted">{hint}</p>
       </div>
     </article>
-  );
-}
-
-const PENDING_TONES = {
-  violet: "border-violet-200/70 bg-violet-50/60 text-violet-900 dark:border-violet-800/50 dark:bg-violet-500/10 dark:text-violet-200",
-  orange: "border-orange-200/70 bg-orange-50/60 text-orange-900 dark:border-orange-800/50 dark:bg-orange-500/10 dark:text-orange-200",
-  slate: "border-border bg-surface-muted/60 text-text-primary",
-} as const;
-
-function PendingRow({
-  tone,
-  icon: Icon,
-  title,
-  detail,
-  actionLabel,
-  onAction,
-}: {
-  tone: keyof typeof PENDING_TONES;
-  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
-  title: string;
-  detail: string;
-  actionLabel: string;
-  onAction: () => void;
-}) {
-  return (
-    <div
-      className={cn(
-        "flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-4 py-2.5",
-        PENDING_TONES[tone]
-      )}
-    >
-      <Icon className="size-4 shrink-0 opacity-80" strokeWidth={2.3} />
-      <p className="min-w-0 flex-1 text-[12.5px]">
-        <span className="font-bold">{title}</span>
-        <span className="ml-2 opacity-75">{detail}</span>
-      </p>
-      <Button variant="ghost" size="sm" onClick={onAction} className="h-7 shrink-0 text-[12px] font-semibold">
-        {actionLabel}
-      </Button>
-    </div>
   );
 }
 
