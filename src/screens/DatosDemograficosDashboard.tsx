@@ -1,54 +1,207 @@
 import * as React from "react";
-import { UbitsIcon } from "@/icons";
-import { UbitsLogo } from "@/components/ui/UbitsLogo";
+import { toast } from "sonner";
+import { ShellRailSlot } from "@/components/app-shell";
+import { ConfirmDialog } from "@/components/overlays";
+import {
+  DemographicFormDrawer,
+  DemographicsActionRail,
+  DemographicsTable,
+  ViewDemographicDrawer,
+  buildDemographicRows,
+  type DemographicRow,
+  type EditingDemographic,
+} from "@/components/demographics";
+import {
+  deleteLibraryDemographic,
+  duplicateAsLibraryDemographic,
+  useDemographicsLibrary,
+} from "@/components/survey-builder/demographicsLibrary";
 
 /**
- * DATOS DEMOGRÁFICOS DASHBOARD (PLACEHOLDER)
- * A premium-styled placeholder view for demographic analytics.
+ * DATOS DEMOGRÁFICOS
+ *
+ * The catalog of variables every survey can cut its results by, as a list.
+ * Deliberately the survey screen's twin: same table shell, same floating rail,
+ * so the second tab is not a second app.
  */
 export const DatosDemograficosDashboard: React.FC = () => {
-  return (
-    <div className="w-full animate-in fade-in slide-in-from-bottom-4 duration-700">
-      <div className="flex items-center justify-between mb-8">
-        <div className="flex flex-col gap-1">
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">
-            Datos Demográficos
-          </h1>
-          <p className="text-sm text-text-secondary">
-            Gestión y segmentación avanzada de tu población.
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="flex flex-col items-end">
-              <p className="text-[10px] tracking-wide text-muted-foreground/60 font-bold">Próximamente</p>
-              <p className="text-[11px] font-medium text-text-secondary">Gestión Avanzada</p>
-          </div>
-          <div className="h-10 w-10 rounded-xl bg-brand/5 border border-brand/10 flex items-center justify-center text-brand">
-            <UbitsIcon name="settings" size="sm" />
-          </div>
-        </div>
-      </div>
+  // The library is localStorage-backed and lives outside React, so this
+  // subscription is what makes a demographic created here appear immediately.
+  const library = useDemographicsLibrary();
+  const rows = React.useMemo(() => buildDemographicRows(library), [library]);
+  const rowById = React.useMemo(() => new Map(rows.map((row) => [row.id, row])), [rows]);
 
-      <div className="flex flex-col items-center justify-center py-40 border-2 border-dashed border-border/40 rounded-[32px] bg-surface-subtle/50 relative overflow-hidden group">
-          <div className="absolute inset-0 bg-gradient-to-b from-brand/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
-          
-          <div className="relative z-10 flex flex-col items-center text-center px-6">
-            <div className="w-20 h-20 rounded-3xl bg-brand/5 flex items-center justify-center text-brand mb-6 shadow-sm border border-brand/10 group-hover:scale-110 transition-transform duration-500">
-               <UbitsIcon name="users" size="lg" />
-            </div>
-            <h2 className="text-xl font-bold text-text-primary mb-2">Panel Demográfico en Construcción</h2>
-            <p className="text-sm text-text-secondary max-w-md mb-8">
-              Estamos integrando las visualizaciones avanzadas por segmento para ofrecerte un análisis más profundo de tu organización.
-            </p>
-            
-            <div className="flex items-center gap-2 px-4 py-2 bg-surface border border-border shadow-sm rounded-full">
-               <div className="w-2 h-2 rounded-full bg-brand animate-pulse" />
-               <p className="text-xs font-bold tracking-tight text-foreground/40">
-                  Sincronizando con base de datos de colaboradores...
-               </p>
-            </div>
-          </div>
-      </div>
+  const [selectedIds, setSelectedIds] = React.useState<ReadonlySet<string>>(new Set());
+  const [isCreateOpen, setIsCreateOpen] = React.useState(false);
+  const [editingId, setEditingId] = React.useState<string | null>(null);
+  const [viewingId, setViewingId] = React.useState<string | null>(null);
+  const [pendingDeleteIds, setPendingDeleteIds] = React.useState<readonly string[] | null>(null);
+
+  // Rows can disappear from under a selection (a filter, a deletion), and a
+  // rail acting on ids that no longer exist is worse than one acting on none.
+  React.useEffect(() => {
+    const present = new Set(rows.map((row) => row.id));
+    const stale = [...selectedIds].some((id) => !present.has(id));
+    if (stale) setSelectedIds(new Set([...selectedIds].filter((id) => present.has(id))));
+  }, [rows, selectedIds]);
+
+  const selectedRows = rows.filter((row) => selectedIds.has(row.id));
+  const loneSelection = selectedRows.length === 1 ? selectedRows[0] : null;
+  const viewingRow = viewingId !== null ? rowById.get(viewingId) ?? null : null;
+  const editingRow = editingId !== null ? rowById.get(editingId) ?? null : null;
+
+  // Excludes whatever is being edited, so a demographic never collides with
+  // its own name while its form is open.
+  const formTakenNames = React.useMemo(
+    () => rows.filter((row) => row.id !== editingId).map((row) => row.name),
+    [rows, editingId]
+  );
+
+  const isFormOpen = isCreateOpen || editingId !== null;
+  const closeForm = () => {
+    setIsCreateOpen(false);
+    setEditingId(null);
+  };
+
+  const editingDescriptor: EditingDemographic | null = editingRow
+    ? {
+        key: editingRow.id,
+        label: editingRow.name,
+        type: editingRow.type,
+        optionLabels: editingRow.optionLabels,
+      }
+    : null;
+
+  const handleView = (id: string) => setViewingId(id);
+
+  const handleEdit = (id: string) => {
+    const row = rowById.get(id);
+    if (!row || row.origin === "system") return;
+    setEditingId(id);
+  };
+
+  const handleDuplicate = () => {
+    if (selectedRows.length === 0) return;
+    let duplicated = 0;
+    let lastLabel = "";
+    for (const row of selectedRows) {
+      const created = duplicateAsLibraryDemographic({
+        label: row.name,
+        type: row.type,
+        optionLabels: row.optionLabels,
+      });
+      if (created) {
+        duplicated += 1;
+        lastLabel = created.label;
+      }
+    }
+
+    if (duplicated === 0) {
+      toast.error("No se pudo duplicar", { description: "Inténtalo de nuevo en unos segundos." });
+      return;
+    }
+    toast.success(duplicated === 1 ? "Demográfico duplicado" : `${duplicated} demográficos duplicados`, {
+      description: duplicated === 1 ? `“${lastLabel}” ya está disponible.` : undefined,
+    });
+    setSelectedIds(new Set());
+  };
+
+  const requestDelete = (ids: readonly string[]) => {
+    // System demographics refuse deletion — silently drop them rather than
+    // blocking the whole batch over a row the rail already marked disabled.
+    const deletable = ids.filter((id) => rowById.get(id)?.origin !== "system");
+    if (deletable.length > 0) setPendingDeleteIds(deletable);
+  };
+
+  const pendingDeleteRows: readonly DemographicRow[] = (pendingDeleteIds ?? [])
+    .map((id) => rowById.get(id))
+    .filter((row): row is DemographicRow => row !== undefined);
+
+  const confirmDelete = () => {
+    if (!pendingDeleteIds) return;
+    let deletedCount = 0;
+    for (const id of pendingDeleteIds) {
+      if (deleteLibraryDemographic(id)) deletedCount += 1;
+    }
+    setPendingDeleteIds(null);
+    setSelectedIds(new Set());
+    if (deletedCount > 0) {
+      toast.success(deletedCount === 1 ? "Demográfico eliminado" : `${deletedCount} demográficos eliminados`);
+    }
+  };
+
+  return (
+    <div className="w-full flex-1 flex flex-col min-h-0 animate-in fade-in slide-in-from-bottom-4 duration-700">
+      <DemographicsTable
+        rows={rows}
+        selectedIds={selectedIds}
+        onSelectionChange={setSelectedIds}
+        onViewRow={handleView}
+      />
+
+      <ShellRailSlot>
+        <DemographicsActionRail
+          selectedCount={selectedRows.length}
+          selected={
+            loneSelection
+              ? {
+                  id: loneSelection.id,
+                  name: loneSelection.name,
+                  origin: loneSelection.origin,
+                }
+              : null
+          }
+          onCreate={() => setIsCreateOpen(true)}
+          onView={handleView}
+          onEdit={handleEdit}
+          onDuplicate={handleDuplicate}
+          onDelete={() => requestDelete(selectedRows.map((row) => row.id))}
+          onClearSelection={() => setSelectedIds(new Set())}
+        />
+      </ShellRailSlot>
+
+      <DemographicFormDrawer
+        open={isFormOpen}
+        onOpenChange={(open) => {
+          if (!open) closeForm();
+        }}
+        mode={editingId !== null ? "edit" : "create"}
+        editing={editingDescriptor}
+        onSaved={() => {
+          closeForm();
+          setSelectedIds(new Set());
+        }}
+        takenNames={formTakenNames}
+      />
+
+      <ViewDemographicDrawer
+        open={viewingId !== null}
+        onOpenChange={(open) => {
+          if (!open) setViewingId(null);
+        }}
+        demographic={viewingRow}
+        onEdit={(id) => {
+          setViewingId(null);
+          handleEdit(id);
+        }}
+      />
+
+      <ConfirmDialog
+        open={pendingDeleteIds !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteIds(null);
+        }}
+        title={
+          pendingDeleteRows.length === 1
+            ? `¿Eliminar “${pendingDeleteRows[0].name}”?`
+            : `¿Eliminar ${pendingDeleteRows.length} demográficos?`
+        }
+        description="Esta acción no se puede deshacer. Los filtros de resultados que usen este demográfico dejarán de funcionar."
+        variant="destructive"
+        confirmLabel="Eliminar"
+        confirmationText={pendingDeleteRows.length === 1 ? pendingDeleteRows[0].name : undefined}
+        onConfirm={confirmDelete}
+      />
     </div>
   );
 };

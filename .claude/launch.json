@@ -2,10 +2,33 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "dev",
+      "name": "secciones-encuestas-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
-      "port": 5173,
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5190",
+        "--strictPort"
+      ],
+      "port": 5190,
+      "autoPort": true
+    },
+    {
+      "name": "encuestas-referencia",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "../Secciones y subsecciones encuests",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5191",
+        "--strictPort"
+      ],
+      "port": 5191,
       "autoPort": true
     }
   ]

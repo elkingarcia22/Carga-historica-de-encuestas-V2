@@ -67,7 +67,7 @@
   }
 
   /* ── Icons — thinner stroke to match UBITS style ────────── */
-  svg.lucide,
+  svg.lucide:not(.animate-spin),
   [data-slot] svg,
   button svg,
   a svg {
@@ -121,11 +121,60 @@
     /* AI Premium Tokens */
     --ai-gradient-start: var(--color-ai-gradient-start-hsl);
     --ai-gradient-end: var(--color-ai-gradient-end-hsl);
+    --ai-gradient-start-pastel: var(--color-ai-gradient-start-pastel-hsl);
+    --ai-gradient-end-pastel: var(--color-ai-gradient-end-pastel-hsl);
+
+    /* ── Favorability status scale (pale badge/cell fills) ──
+       Screen-only tokens: results reports (pdf/pdfPalette.ts) keep their own
+       literal copy of these same light values, since a report prints from an
+       isolated iframe that never sees this stylesheet's .dark class. */
+    --fav-negative-bg: 354 80% 87%;
+    --fav-negative-border: 354 78% 54%;
+    --fav-negative-fg: 354 76% 42%;
+
+    --fav-softer-negative-bg: 1 84% 96%;
+    --fav-softer-negative-border: 357 82% 76%;
+    --fav-softer-negative-fg: 357 80% 56%;
+
+    --fav-yellow-bg: 48 96% 92%;
+    --fav-yellow-border: 48 92% 64%;
+    --fav-yellow-fg: 46 90% 42%;
+
+    --fav-positive-bg: 116 52% 94%;
+    --fav-positive-border: 116 50% 72%;
+    --fav-positive-fg: 116 48% 42%;
+
+    --fav-deep-positive-bg: 122 55% 82%;
+    --fav-deep-positive-border: 120 48% 40%;
+    --fav-deep-positive-fg: 120 46% 30%;
+
+    --fav-nsnr-bg: 218 14% 93%;
+    --fav-nsnr-border: 218 10% 66%;
+    --fav-nsnr-fg: 218 14% 38%;
   }
 
   .dark {
     /* ── Overrides de tokens UBITS directos (text-text-*, bg-surface-*) ── */
     /* Sin esto, clases como text-text-secondary quedan oscuras sobre fondo oscuro */
+
+    /* `--primary` ya sube a #3865f5 más abajo para que el azul aguante sobre
+       #0c1120. `--color-brand` alimenta bg-brand/text-brand, que el contenido
+       usa donde el shell usa bg-primary; sin este override los dos azules se
+       separan en oscuro y el menú queda más luminoso que la pantalla. */
+    --color-brand: #3865f5;
+    --color-brand-hover: #5c82f8;
+    --color-brand-pressed: #7b9bfa;
+
+    /* Rellenos pálidos pensados para papel blanco. Sin override se convierten
+       en manchas casi blancas sobre las cards oscuras. */
+    --color-ai-bg: #1b1a33;
+    --color-ai-border: #4b53a8;
+    /* Same emerald family as StatusBadge's dark:bg-emerald-500/15 and
+       dark:text-emerald-300, so a metric card matches a table badge here too. */
+    --color-positive-bg: #15353B;
+    --color-positive-dark: #6EE7B7;
+    --color-warning-light: #7a4415;
+
     --color-text-primary: #edeeef;    /* ubits-fg-1-high dark */
     --color-text-secondary: #9aa0aa;  /* ubits fg-1-medium dark, paso intermedio */
     --color-text-muted: #6b7480;      /* reducido para hint/placeholder */
@@ -133,10 +182,12 @@
     --color-bg-app: #0c1120;          /* Deep Navy Base (Kept for Harmony) */
     --color-surface: #161e2f;         /* Elevated Card Surface (Kept for Harmony) */
     --color-surface-muted: #212d40;   /* Muted Section (Kept for Harmony) */
+    --color-tab-track: #1e2536;   /* leve, sin el peso de un bloque azul sólido */
     /* recessed, más oscuro que card */
     --color-surface-subtle: #0f172a;
     --color-border: #3d4555;
     --color-border-strong: #4f5561;
+    --color-border-strong-hsl: 220 10% 35%;
 
     /* ── Superficies ─────────────────────────────────────── */
     /* #0c1120 — pantalla base */
@@ -187,6 +238,35 @@
     --ring: 222 91% 58%;
     --nav: 222 47% 11%;
     --nav-foreground: 0 0% 100%;
+
+    /* ── Favorability status scale, re-tuned for a dark surface ──
+       The light values are pastel fills meant to sit on white — unchanged
+       they read as washed-out, low-contrast smudges on a dark card. Dark
+       mode instead deepens the fill toward the surface and lifts the text
+       so each status still reads as its own hue. */
+    --fav-negative-bg: 354 55% 22%;
+    --fav-negative-border: 354 65% 45%;
+    --fav-negative-fg: 354 90% 80%;
+
+    --fav-softer-negative-bg: 357 45% 20%;
+    --fav-softer-negative-border: 357 55% 42%;
+    --fav-softer-negative-fg: 357 85% 78%;
+
+    --fav-yellow-bg: 46 55% 20%;
+    --fav-yellow-border: 46 75% 45%;
+    --fav-yellow-fg: 46 90% 72%;
+
+    --fav-positive-bg: 116 35% 18%;
+    --fav-positive-border: 116 45% 38%;
+    --fav-positive-fg: 116 65% 70%;
+
+    --fav-deep-positive-bg: 122 40% 24%;
+    --fav-deep-positive-border: 120 55% 42%;
+    --fav-deep-positive-fg: 122 65% 74%;
+
+    --fav-nsnr-bg: 218 20% 24%;
+    --fav-nsnr-border: 218 14% 45%;
+    --fav-nsnr-fg: 218 12% 72%;
   }
 
   .bg-nav {
@@ -212,11 +292,43 @@
     -webkit-text-fill-color: transparent;
     background-clip: text;
   }
+  
+  @keyframes border-beam {
+    100% {
+      offset-distance: 100%;
+    }
+  }
 
   .border-ai-gradient {
     border: 1px solid transparent !important;
     background: linear-gradient(hsl(var(--background)), hsl(var(--background))) padding-box,
                 linear-gradient(135deg, hsl(var(--ai-gradient-start)), hsl(var(--ai-gradient-end))) border-box !important;
+  }
+
+  .border-ai-gradient-surface {
+    border: 1px solid transparent !important;
+    background: linear-gradient(hsl(var(--color-surface-hsl)), hsl(var(--color-surface-hsl))) padding-box,
+                linear-gradient(135deg, hsl(var(--ai-gradient-start)), hsl(var(--ai-gradient-end))) border-box !important;
+  }
+
+  /* Gradient ring drawn as a masked pseudo-element so it layers on top of a
+     card's own background (e.g. the animated AI mesh) instead of replacing it,
+     which the padding-box/border-box trick above would do. */
+  .ai-gradient-ring {
+    position: relative;
+  }
+
+  .ai-gradient-ring::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1.5px;
+    background: linear-gradient(135deg, hsl(var(--ai-gradient-start)), hsl(var(--ai-gradient-end)));
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
   }
 
   .shadow-ai-premium {
@@ -249,7 +361,7 @@
       rgba(255, 255, 255, 0) 100%
     );
     transform: translateX(-120%) skewX(-22deg);
-    animation: mirror-shimmer-anim 3.5s infinite ease-in-out;
+    animation: mirror-shimmer-anim 2.2s infinite ease-in-out;
     pointer-events: none;
   }
 
@@ -257,11 +369,168 @@
     0% {
       transform: translateX(-120%) skewX(-22deg);
     }
-    45% {
-      transform: translateX(120%) skewX(-22deg);
-    }
     100% {
       transform: translateX(120%) skewX(-22deg);
+    }
+  }
+
+  /* Animated subtle mesh background for AI cards */
+  .bg-ai-mesh-card {
+    background-color: var(--color-surface);
+    background-image:
+      radial-gradient(55% 34% at 18% 0%, rgba(46, 198, 255, 0.16), transparent 65%),
+      radial-gradient(45% 30% at 55% 0%, rgba(124, 58, 237, 0.08), transparent 65%),
+      radial-gradient(50% 34% at 88% 0%, rgba(244, 63, 94, 0.12), transparent 65%);
+    background-size: 140% 140%;
+    animation: mesh-drift 12s ease-in-out infinite alternate;
+  }
+
+  /* Animated subtle mesh background for the agent page */
+  .bg-ai-mesh-agent {
+    background-image:
+      radial-gradient(55% 34% at 18% 0%, rgba(46, 198, 255, 0.16), transparent 65%),
+      radial-gradient(45% 30% at 55% 0%, rgba(124, 58, 237, 0.08), transparent 65%),
+      radial-gradient(50% 34% at 88% 0%, rgba(244, 63, 94, 0.12), transparent 65%);
+    background-size: 140% 140%;
+    animation: mesh-drift 14s ease-in-out infinite alternate;
+  }
+
+  /* Bounded drift — the blobs stay within the visible box at every point in
+     the cycle instead of sliding past the edge and leaving the card blank. */
+  @keyframes mesh-drift {
+    0% {
+      background-position: 20% 10%;
+    }
+    50% {
+      background-position: 60% 30%;
+    }
+    100% {
+      background-position: 30% 50%;
+    }
+  }
+
+  /* ── Card hover ────────────────────────────────────────────
+     Two layers that ease in together on hover and out again on leave:
+       ::after — a faint single-hue wash, anchored bottom-left
+       .magic-card-lift — a barely-there rise plus a soft matching shadow
+     Kept deliberately restrained — a single soft gradient and a 1px lift
+     read as "alive" without calling attention to themselves. */
+  .magic-card-sweep::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    opacity: 0;
+    background: radial-gradient(
+      130% 100% at 6% 112%,
+      hsl(var(--primary) / 0.06),
+      transparent 58%
+    );
+    transition: opacity 500ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .magic-card-sweep:hover::after {
+    opacity: 1;
+  }
+
+  /* Toned cards — a card that carries its own accent (a survey kind, a way of
+     picking participants) hovers in that accent instead of in brand blue.
+     `--tone` is set inline by `MagicCard`; the wash, the outline and the drop
+     shadow all read from it, so the whole hover stays one hue. */
+  .magic-card-toned.magic-card-sweep::after {
+    background: radial-gradient(
+      130% 100% at 6% 112%,
+      color-mix(in srgb, var(--tone) 8%, transparent),
+      transparent 58%
+    );
+  }
+
+  .magic-card-toned:not(.magic-card-selected):hover {
+    border-color: color-mix(in srgb, var(--tone) 40%, transparent);
+  }
+
+  .magic-card-toned.magic-card-lift:hover {
+    box-shadow: 0 6px 16px -12px color-mix(in srgb, var(--tone) 40%, transparent);
+  }
+
+  /* Any control that should hover in the accent it was handed rather than in
+     brand blue. Set `--tone` inline (see `@/lib/tone`'s `toneAccent`). */
+  .tone-hover {
+    transition:
+      border-color 200ms ease,
+      background-color 200ms ease,
+      color 200ms ease;
+  }
+
+  .tone-hover:hover {
+    border-color: color-mix(in srgb, var(--tone) 40%, transparent);
+    background-color: color-mix(in srgb, var(--tone) 5%, transparent);
+    color: var(--tone);
+  }
+
+  /* An icon chip or label that stays neutral gray at rest and only takes its
+     option's tone once that option is hovered or picked — so a row of choices
+     reads as one calm set until the author actually engages with one, instead
+     of shouting every accent at once. Pairs with `.tone-hover` (the compact
+     type-selector buttons) and `.magic-card-toned` (the bigger option cards);
+     the selected state is still painted separately by the caller. */
+  .tone-reveal-chip {
+    background-color: var(--color-surface-muted);
+    color: var(--color-text-secondary);
+    transition: background-color 200ms ease, color 200ms ease;
+  }
+
+  .tone-reveal-text {
+    color: var(--color-text-secondary);
+    transition: color 200ms ease;
+  }
+
+  .tone-hover:hover .tone-reveal-chip,
+  .magic-card-toned:not(.magic-card-selected):hover .tone-reveal-chip {
+    background-color: color-mix(in srgb, var(--tone) 12%, transparent);
+    color: var(--tone);
+  }
+
+  .tone-hover:hover .tone-reveal-text,
+  .magic-card-toned:not(.magic-card-selected):hover .tone-reveal-text {
+    color: var(--tone);
+  }
+
+  /* AI variant — one soft blend of the same three hues as `.bg-ai-mesh-card`
+     instead of three stacked radials, so it reads as a gentle wash rather
+     than a patchwork of coloured blotches. */
+  .magic-card-sweep-ai::after {
+    background: linear-gradient(
+      135deg,
+      rgba(46, 198, 255, 0.07) 0%,
+      rgba(124, 58, 237, 0.05) 50%,
+      rgba(244, 63, 94, 0.06) 100%
+    );
+  }
+
+  /* The rise. Kept on its own class so surfaces that already scale on drag
+     (the upload dropzone) can take the wash without the movement. */
+  .magic-card-lift {
+    transition:
+      transform 380ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 380ms cubic-bezier(0.22, 1, 0.36, 1),
+      border-color 320ms cubic-bezier(0.22, 1, 0.36, 1),
+      background-color 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .magic-card-lift:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px -12px hsl(var(--primary) / 0.28);
+  }
+
+  .magic-card-lift.magic-card-sweep-ai:hover {
+    box-shadow: 0 6px 16px -12px rgba(124, 58, 237, 0.22);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .magic-card-lift:hover {
+      transform: none;
     }
   }
 
@@ -311,12 +580,519 @@
     to { opacity: 1; transform: translateY(0) scale(1); }
   }
 
+  /* ── Rail action bar micro-interactions ──────────────── */
+  @keyframes railActionAppear {
+    0% {
+      opacity: 0;
+      transform: translateY(8px) scale(0.92);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes railGroupShimmer {
+    0% {
+      box-shadow: inset 0 0 16px 0 rgba(59, 130, 246, 0.4);
+    }
+    100% {
+      box-shadow: inset 0 0 16px 0 rgba(59, 130, 246, 0);
+    }
+  }
+
+  @keyframes railActionColorFlash {
+    0% {
+      background: rgba(59, 130, 246, 0.4);
+      box-shadow: 0 0 15px rgba(59, 130, 246, 0.6);
+    }
+    60% {
+      background: rgba(59, 130, 246, 0.15);
+      box-shadow: 0 0 8px rgba(59, 130, 246, 0.2);
+    }
+    100% {
+      background: transparent;
+      box-shadow: none;
+    }
+  }
+
+  /*
+   * Activar "Probar objetivo" en la tarjeta de objetivo: el fondo entra en un
+   * azul intenso y baja hasta el tinte de reposo (el mismo `hsl(var(--primary)
+   * / 0.1)` que queda puesto todo el tiempo que el botón sigue activo), en
+   * vez de simplemente saltar de un color al otro. Usa `hsl(var(--primary))`
+   * y no un azul fijo — a diferencia de `railActionColorFlash` de arriba, éste
+   * se queda pintado al terminar, así que si no sigue el tema se nota.
+   */
+  @keyframes probarActivateFlash {
+    0% {
+      background-color: hsl(var(--primary) / 0.45);
+      box-shadow: 0 0 0 1px hsl(var(--primary) / 0.3);
+    }
+    100% {
+      background-color: hsl(var(--primary) / 0.1);
+      box-shadow: 0 0 0 0 hsl(var(--primary) / 0);
+    }
+  }
+
+  /*
+   * El chulito de "Confirmar ajustes" al pasar de gris a disponible: el botón
+   * ya queda en azul primario sólido en reposo (el mismo tono que "Guardar
+   * ajustes" en la cabecera de la tarjeta), así que lo único que anima es un
+   * anillo que entra intenso y se apaga, como si acabara de encenderse.
+   */
+  @keyframes rowConfirmReadyFlash {
+    0% {
+      box-shadow: 0 0 0 4px hsl(var(--primary) / 0.35);
+    }
+    100% {
+      box-shadow: 0 0 0 0 hsl(var(--primary) / 0);
+    }
+  }
+
   /* ── Custom Utilities ──────────────────────────────────── */
+
+  /*
+   * Opaque stand-ins for the translucent surfaces, for cells that are frozen
+   * over scrolling content — the heatmap's first column and its header.
+   * `bg-muted/40` reads correctly while it sits still on the page background,
+   * but a frozen cell has the grid sliding underneath it: at 40% the columns
+   * show straight through the thing that is supposed to be covering them.
+   * Same colour, resolved against the surface instead of composited over it.
+   */
+  .bg-muted-solid {
+    background-color: color-mix(in srgb, hsl(var(--muted)) 40%, var(--color-surface));
+  }
+
   .no-scrollbar::-webkit-scrollbar {
     display: none;
   }
   .no-scrollbar {
     -ms-overflow-style: none;
     scrollbar-width: none;
+  }
+}
+/* ── Motion reducida ───────────────────────────────────────
+ *
+ * Los overlays (drawers, diálogos, popovers) entran y salen con animaciones
+ * declaradas en `tailwind.config.js`. Con `prefers-reduced-motion: reduce` el
+ * panel debe seguir apareciendo y desapareciendo — Radix espera a que la
+ * animación termine para desmontar, así que no se puede quitar del todo — pero
+ * sin recorrido: se resuelve en 1ms y solo queda el cambio de estado.
+ */
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="sheet-content"],
+  [data-slot="sheet-overlay"],
+  [data-slot="dialog-content"],
+  [data-slot="dialog-overlay"],
+  [data-slot="alert-dialog-content"],
+  [data-slot="alert-dialog-overlay"],
+  [data-slot="popover-content"],
+  [data-slot="dropdown-menu-content"],
+  [data-slot="dropdown-menu-sub-content"],
+  [data-slot="tooltip-content"],
+  [data-slot="hover-card-content"] {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+  }
+}
+
+@layer components {
+  /* Mac-like Dock Effect for the Action Rail */
+  .dock-item {
+    transition: transform 0.2s cubic-bezier(0.25, 1, 0.5, 1), background-color 0.15s, color 0.15s;
+    transform-origin: center;
+    will-change: transform;
+  }
+  
+  .dock-item:hover {
+    transform: scale(1.3);
+    z-index: 10;
+  }
+  
+  .dock-container:has(.dock-item:hover) .dock-item:not(:hover) {
+    /* If a child is hovered, scale all others down slightly or just keep them normal */
+  }
+
+  /* Right sibling of hovered */
+  
+  /* Support for wrapped dock items (like in sidebar) */
+  .dock-wrapper:hover > .dock-item {
+    transform: scale(1.3);
+    z-index: 10;
+  }
+  .dock-wrapper:hover + .dock-wrapper > .dock-item {
+    transform: scale(1.15);
+  }
+  .dock-wrapper:has(+ .dock-wrapper:hover) > .dock-item {
+    transform: scale(1.15);
+  }
+
+  .dock-item:hover + .dock-item {
+    transform: scale(1.15);
+  }
+  
+  /* Left sibling of hovered - Using modern :has selector */
+  .dock-item:has(+ .dock-item:hover) {
+    transform: scale(1.15);
+  }
+}
+
+@layer components {
+  /* Dock Effect specifically for vertical lists (smaller scale to avoid spilling) */
+  .dock-item-list {
+    transition: transform 0.2s cubic-bezier(0.25, 1, 0.5, 1), background-color 0.15s, color 0.15s;
+    transform-origin: center;
+    will-change: transform;
+  }
+  
+  .dock-item-list:hover {
+    transform: scale(1.05);
+    z-index: 10;
+  }
+  
+  .dock-item-list:hover + .dock-item-list {
+    transform: scale(1.02);
+  }
+  
+  .dock-item-list:has(+ .dock-item-list:hover) {
+    transform: scale(1.02);
+  }
+}
+
+/* ── Table Row Cascade ────────────────────────────────────
+   Al montar una tabla, cada fila entra con un fade + leve
+   ascenso, escalonado por fila (nth-child) para que el conjunto
+   se lea como una cascada, no como un parpadeo. Cubre tanto
+   <TableBody> (data-slot) como <tbody> a mano.
+
+   Sin escala: una fila ocupa todo el ancho de la tabla, así que
+   un scale() por sutil que sea se percibe como un salto horizontal
+   grande (la fila "crece" varios px de cada lado), mucho más
+   notorio que el leve ascenso vertical que sí queremos.
+*/
+@layer utilities {
+  @keyframes table-row-in {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  [data-slot="table-body"] > tr,
+  tbody > tr {
+    animation: table-row-in 780ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  [data-slot="table-body"] > tr:nth-child(1),  tbody > tr:nth-child(1)  { animation-delay: 0ms; }
+  [data-slot="table-body"] > tr:nth-child(2),  tbody > tr:nth-child(2)  { animation-delay: 55ms; }
+  [data-slot="table-body"] > tr:nth-child(3),  tbody > tr:nth-child(3)  { animation-delay: 110ms; }
+  [data-slot="table-body"] > tr:nth-child(4),  tbody > tr:nth-child(4)  { animation-delay: 165ms; }
+  [data-slot="table-body"] > tr:nth-child(5),  tbody > tr:nth-child(5)  { animation-delay: 220ms; }
+  [data-slot="table-body"] > tr:nth-child(6),  tbody > tr:nth-child(6)  { animation-delay: 275ms; }
+  [data-slot="table-body"] > tr:nth-child(7),  tbody > tr:nth-child(7)  { animation-delay: 330ms; }
+  [data-slot="table-body"] > tr:nth-child(8),  tbody > tr:nth-child(8)  { animation-delay: 385ms; }
+  [data-slot="table-body"] > tr:nth-child(9),  tbody > tr:nth-child(9)  { animation-delay: 440ms; }
+  [data-slot="table-body"] > tr:nth-child(10), tbody > tr:nth-child(10) { animation-delay: 495ms; }
+  [data-slot="table-body"] > tr:nth-child(11), tbody > tr:nth-child(11) { animation-delay: 550ms; }
+  [data-slot="table-body"] > tr:nth-child(12), tbody > tr:nth-child(12) { animation-delay: 605ms; }
+  [data-slot="table-body"] > tr:nth-child(13), tbody > tr:nth-child(13) { animation-delay: 660ms; }
+  [data-slot="table-body"] > tr:nth-child(14), tbody > tr:nth-child(14) { animation-delay: 715ms; }
+  [data-slot="table-body"] > tr:nth-child(15), tbody > tr:nth-child(15) { animation-delay: 770ms; }
+  [data-slot="table-body"] > tr:nth-child(16), tbody > tr:nth-child(16) { animation-delay: 825ms; }
+  [data-slot="table-body"] > tr:nth-child(17), tbody > tr:nth-child(17) { animation-delay: 880ms; }
+  [data-slot="table-body"] > tr:nth-child(18), tbody > tr:nth-child(18) { animation-delay: 935ms; }
+  [data-slot="table-body"] > tr:nth-child(19), tbody > tr:nth-child(19) { animation-delay: 990ms; }
+  [data-slot="table-body"] > tr:nth-child(20), tbody > tr:nth-child(20) { animation-delay: 1045ms; }
+  [data-slot="table-body"] > tr:nth-child(n+21), tbody > tr:nth-child(n+21) { animation-delay: 1100ms; }
+
+  @media (prefers-reduced-motion: reduce) {
+    [data-slot="table-body"] > tr,
+    tbody > tr {
+      animation: none;
+    }
+  }
+
+  /* react-day-picker (the date/range calendar) renders its weeks as <tr>
+     too, but it isn't "a table loading" — it's a small widget that opens
+     and re-renders on every month change, so replaying the cascade there
+     reads as flicker, not polish. */
+  [data-slot="calendar"] tr {
+    animation: none;
+  }
+}
+
+/* ── Preview Section Cascade ──────────────────────────────
+   Al pasar de sección en la vista previa de encuesta, el header
+   de la página (breadcrumb/insignia, título, descripción, meta)
+   entra como un conjunto y luego cada una de sus piezas se
+   escalona sutilmente; debajo, las preguntas aparecen en cascada
+   una a una. El remount por `key={page.id}` en SurveyPreviewDrawer
+   reinicia estas animaciones en cada navegación.
+*/
+@layer utilities {
+  @keyframes preview-box-in {
+    from {
+      opacity: 0;
+      transform: translateY(14px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .preview-page-enter-header {
+    animation: preview-box-in 620ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .preview-header-content > * {
+    animation: preview-box-in 560ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .preview-header-content > *:nth-child(1) { animation-delay: 60ms; }
+  .preview-header-content > *:nth-child(2) { animation-delay: 150ms; }
+  .preview-header-content > *:nth-child(3) { animation-delay: 240ms; }
+  .preview-header-content > *:nth-child(4) { animation-delay: 330ms; }
+
+  .preview-page-enter > header ~ * {
+    animation: preview-box-in 620ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .preview-page-enter > header ~ *:nth-child(2)  { animation-delay: 380ms; }
+  .preview-page-enter > header ~ *:nth-child(3)  { animation-delay: 470ms; }
+  .preview-page-enter > header ~ *:nth-child(4)  { animation-delay: 560ms; }
+  .preview-page-enter > header ~ *:nth-child(5)  { animation-delay: 650ms; }
+  .preview-page-enter > header ~ *:nth-child(6)  { animation-delay: 740ms; }
+  .preview-page-enter > header ~ *:nth-child(7)  { animation-delay: 830ms; }
+  .preview-page-enter > header ~ *:nth-child(8)  { animation-delay: 920ms; }
+  .preview-page-enter > header ~ *:nth-child(9)  { animation-delay: 1010ms; }
+  .preview-page-enter > header ~ *:nth-child(10) { animation-delay: 1100ms; }
+  .preview-page-enter > header ~ *:nth-child(11) { animation-delay: 1190ms; }
+  .preview-page-enter > header ~ *:nth-child(n+12) { animation-delay: 1280ms; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .preview-page-enter-header,
+    .preview-header-content > *,
+    .preview-page-enter > header ~ * {
+      animation: none;
+    }
+  }
+}
+
+/* ── Screen & Tab Entrance Cascade ─────────────────────────
+   The same settle-in language as the preview cascade above, generalized
+   for anywhere a whole screen is swapped for another: a builder step, a
+   results tab, a home tab. Pair with `key={<step/tab id>}` on a
+   `.cascade-enter` wrapper so React remounts it — and replays this
+   animation — on every switch. When the freshly mounted screen is a
+   single root element it reads as one soft fade-and-settle; when it is a
+   list (e.g. the builder's stacked section cards), each one cascades in
+   right after the last, same as the preview's question cards.
+*/
+@layer utilities {
+  .cascade-enter > * {
+    animation: preview-box-in 560ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .cascade-enter > *:nth-child(1)  { animation-delay: 0ms; }
+  .cascade-enter > *:nth-child(2)  { animation-delay: 90ms; }
+  .cascade-enter > *:nth-child(3)  { animation-delay: 180ms; }
+  .cascade-enter > *:nth-child(4)  { animation-delay: 270ms; }
+  .cascade-enter > *:nth-child(5)  { animation-delay: 360ms; }
+  .cascade-enter > *:nth-child(6)  { animation-delay: 450ms; }
+  .cascade-enter > *:nth-child(7)  { animation-delay: 540ms; }
+  .cascade-enter > *:nth-child(8)  { animation-delay: 630ms; }
+  .cascade-enter > *:nth-child(9)  { animation-delay: 720ms; }
+  .cascade-enter > *:nth-child(10) { animation-delay: 810ms; }
+  .cascade-enter > *:nth-child(n+11) { animation-delay: 900ms; }
+
+  /* The thin bars under the home pulse metrics grow in from the left once,
+     on mount — transform only, so the row above never shifts. */
+  .pulse-bar-grow {
+    animation: pulse-bar-grow 720ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: 180ms;
+  }
+  @keyframes pulse-bar-grow {
+    from { transform: scaleX(0); }
+    to { transform: scaleX(1); }
+  }
+  /* The ring eases open via a transition on its dash offset (a keyframe
+     cannot know where each ring stops); the sparkline draws itself along
+     its normalized path length; the area and end dot simply fade in. */
+  .pulse-ring-draw {
+    transition: stroke-dashoffset 900ms cubic-bezier(0.16, 1, 0.3, 1) 180ms;
+  }
+  .pulse-line-draw {
+    stroke-dasharray: 1;
+    animation: pulse-line-draw 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: 180ms;
+  }
+  @keyframes pulse-line-draw {
+    from { stroke-dashoffset: 1; }
+    to { stroke-dashoffset: 0; }
+  }
+  .pulse-fade-in {
+    animation: pulse-fade-in 600ms ease-out both;
+    animation-delay: 700ms;
+  }
+  @keyframes pulse-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pulse-bar-grow,
+    .pulse-line-draw,
+    .pulse-fade-in { animation: none; }
+    .pulse-ring-draw { transition: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cascade-enter > * {
+      animation: none;
+    }
+  }
+}
+
+/* ── Drawer-internal cascade ────────────────────────────────
+   Same reveal as `.cascade-enter` above, timed to start only once a
+   Sheet's own slide-in (500ms, expo-out — visually settled well before it
+   technically ends) has cleared. Stacking the two motions at the same
+   start time buries the cascade's subtle vertical settle inside the much
+   bigger horizontal slide, so it read as nothing happening. Use this
+   instead of `.cascade-enter` for content that reveals as a drawer opens;
+   once the drawer is already open, a later swap (e.g. picking a different
+   item from a list inside it) has nothing to compete with and can use the
+   immediate `.cascade-enter` instead. */
+@layer utilities {
+  .cascade-enter-drawer > * {
+    animation: preview-box-in 480ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .cascade-enter-drawer > *:nth-child(1)  { animation-delay: 280ms; }
+  .cascade-enter-drawer > *:nth-child(2)  { animation-delay: 325ms; }
+  .cascade-enter-drawer > *:nth-child(3)  { animation-delay: 370ms; }
+  .cascade-enter-drawer > *:nth-child(4)  { animation-delay: 415ms; }
+  .cascade-enter-drawer > *:nth-child(5)  { animation-delay: 460ms; }
+  .cascade-enter-drawer > *:nth-child(6)  { animation-delay: 505ms; }
+  .cascade-enter-drawer > *:nth-child(7)  { animation-delay: 550ms; }
+  .cascade-enter-drawer > *:nth-child(8)  { animation-delay: 595ms; }
+  .cascade-enter-drawer > *:nth-child(9)  { animation-delay: 640ms; }
+  .cascade-enter-drawer > *:nth-child(10) { animation-delay: 685ms; }
+  .cascade-enter-drawer > *:nth-child(n+11) { animation-delay: 730ms; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cascade-enter-drawer > * {
+      animation: none;
+    }
+  }
+}
+
+/* ── Listas flotantes: cascada + resaltado deslizante ─────
+ *
+ * Dos piezas que van juntas y arreglan el mismo defecto: una lista que se
+ * abría de golpe y un resaltado que saltaba de un ítem a otro sin recorrido.
+ *
+ * 1. `.popup-cascade` escalona la entrada de los ítems (mismo patrón que
+ *    `.cascade-enter` y las filas de tabla, pero con pasos mucho más cortos:
+ *    un menú se lee de una ojeada, no admite el ritmo de una tabla). El primer
+ *    hijo del contenedor es la píldora, así que la numeración arranca en
+ *    `nth-child(2)`; los ítems agrupados se cuentan dentro de su grupo.
+ *
+ * 2. `[data-slot="fluid-highlight"]` es esa píldora: un único fondo absoluto
+ *    que se traslada hasta el ítem activo (ver `fluid-highlight.tsx`). El
+ *    `transform` lleva un easing con un rebase mínimo — llega, se pasa un
+ *    pelo y se asienta — mientras la altura usa el easing suave del resto del
+ *    sistema para que un ítem alto no dé un tirón. La opacidad es lo único
+ *    rápido: entrar y salir no debe arrastrarse.
+ *
+ *    Con `data-slide="false"` (primera aparición, o reaparición tras salir del
+ *    menú) solo transiciona la opacidad: la píldora aparece ya colocada en vez
+ *    de venir volando desde la esquina del contenedor.
+ */
+@layer utilities {
+  @keyframes popup-item-in {
+    from {
+      opacity: 0;
+      transform: translate3d(0, -6px, 0);
+    }
+    to {
+      opacity: 1;
+      transform: translate3d(0, 0, 0);
+    }
+  }
+
+  .popup-cascade > *:not([data-slot="fluid-highlight"]),
+  .popup-cascade > [data-slot$="-group"] > * {
+    animation: popup-item-in 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .popup-cascade > *:nth-child(2),
+  .popup-cascade > [data-slot$="-group"] > *:nth-child(1) { animation-delay: 0ms; }
+  .popup-cascade > *:nth-child(3),
+  .popup-cascade > [data-slot$="-group"] > *:nth-child(2) { animation-delay: 26ms; }
+  .popup-cascade > *:nth-child(4),
+  .popup-cascade > [data-slot$="-group"] > *:nth-child(3) { animation-delay: 52ms; }
+  .popup-cascade > *:nth-child(5),
+  .popup-cascade > [data-slot$="-group"] > *:nth-child(4) { animation-delay: 78ms; }
+  .popup-cascade > *:nth-child(6),
+  .popup-cascade > [data-slot$="-group"] > *:nth-child(5) { animation-delay: 104ms; }
+  .popup-cascade > *:nth-child(7),
+  .popup-cascade > [data-slot$="-group"] > *:nth-child(6) { animation-delay: 130ms; }
+  .popup-cascade > *:nth-child(8),
+  .popup-cascade > [data-slot$="-group"] > *:nth-child(7) { animation-delay: 156ms; }
+  /*
+   * Tope deliberado: hay selects de decenas de opciones (países, plantillas) y
+   * seguir sumando 26ms por ítem dejaría los últimos entrando medio segundo
+   * después de que el usuario ya está leyendo la lista.
+   */
+  .popup-cascade > *:nth-child(n+9),
+  .popup-cascade > [data-slot$="-group"] > *:nth-child(n+8) { animation-delay: 182ms; }
+
+  [data-slot="fluid-highlight"] {
+    transition:
+      transform 300ms cubic-bezier(0.22, 1.14, 0.36, 1),
+      width 300ms cubic-bezier(0.22, 1.14, 0.36, 1),
+      height 220ms cubic-bezier(0.16, 1, 0.3, 1),
+      opacity 130ms linear;
+    will-change: transform;
+  }
+
+  [data-slot="fluid-highlight"][data-slide="false"] {
+    transition: opacity 130ms linear;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .popup-cascade > *:not([data-slot="fluid-highlight"]),
+    .popup-cascade > [data-slot$="-group"] > * {
+      animation: none;
+    }
+    [data-slot="fluid-highlight"] {
+      transition: none;
+    }
+  }
+}
+
+/* ── AI generation progress ────────────────────────────────
+   The indeterminate fill inside the "Crear objetivo con IA" modal
+   while the mocked generation is "thinking" — a single sweep timed
+   to the same delay the modal waits before it hands back a filled
+   objective, so the bar finishes right as the result appears.
+*/
+@layer utilities {
+  @keyframes ai-progress {
+    from {
+      transform: scaleX(0.05);
+    }
+    to {
+      transform: scaleX(1);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-\[ai-progress_1\.7s_ease-in-out_forwards\] {
+      animation: none;
+      transform: scaleX(1);
+    }
   }
 }

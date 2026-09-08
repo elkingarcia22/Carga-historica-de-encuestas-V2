@@ -2,13 +2,34 @@ import * as React from "react"
 import { Toaster as SonnerToaster } from "@/components/ui/sonner"
 
 /**
- * UbitsToaster
- * 
- * Wrapper for Sonner notifications following UBITS B2B standards.
- * Positioned by default at bottom-right for non-invasive feedback.
- * Detects the system theme (light/dark) from documentElement classes.
+ * Clears the app header (h-14, plus the shell's own p-2 outer padding) with
+ * room to spare, so the stack never starts flush against it.
  */
-export function UbitsToaster() {
+const DEFAULT_TOP_OFFSET_PX = 76
+
+/**
+ * UbitsToaster
+ *
+ * Wrapper for Sonner notifications following UBITS B2B standards. Stacked in
+ * the top-right corner, clear of the header, so feedback about what just
+ * happened doesn't sit on top of — or get mistaken for — the screen's own
+ * bottom action bar. Detects the system theme (light/dark) from
+ * documentElement classes.
+ *
+ * Mounted once, at the app level — a second instance elsewhere would render
+ * every toast twice, since both would read the same toast queue.
+ */
+export function UbitsToaster({
+  className,
+  style,
+  topOffset = DEFAULT_TOP_OFFSET_PX,
+}: {
+  className?: string
+  style?: React.CSSProperties
+  /** Distance in px from the viewport top to the toast stack — enough to
+   * clear the app header. */
+  topOffset?: number
+}) {
   const [theme, setTheme] = React.useState<"light" | "dark">("light")
 
   React.useEffect(() => {
@@ -35,12 +56,15 @@ export function UbitsToaster() {
   }, [])
 
   return (
-    <SonnerToaster 
+    <SonnerToaster
       theme={theme}
-      position="bottom-right"
+      position="top-right"
+      offset={{ top: topOffset }}
       closeButton
       richColors={false} // Keeping it sober as per UBITS rules
       expand={false}
+      className={className}
+      style={style}
     />
   )
 }

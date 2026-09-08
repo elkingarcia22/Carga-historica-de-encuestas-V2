@@ -37,6 +37,8 @@ export interface DrawerShellProps {
   showCloseButton?: boolean
   /** Whether to disable default padding in the content area (default: false) */
   disablePadding?: boolean
+  /** Whether to disable scrollbar-gutter: stable (default: false) */
+  disableScrollbarGutter?: boolean
 }
 
 const sideSizeClasses = {
@@ -108,6 +110,7 @@ export function DrawerShell({
   className,
   showCloseButton = true,
   disablePadding = false,
+  disableScrollbarGutter = false,
 }: DrawerShellProps) {
   const sizeClass = sideSizeClasses[side][size]
 
@@ -121,27 +124,34 @@ export function DrawerShell({
         aria-describedby={undefined}
       >
         {(title || description) && (
-          <SheetHeader className="border-b bg-background">
+          <SheetHeader className="border-b bg-muted/30">
             {title && <SheetTitle>{title}</SheetTitle>}
             {description && <SheetDescription>{description}</SheetDescription>}
           </SheetHeader>
         )}
-
-        {/* Positioned wrapper for body + footer only, so an `absolute inset-0`
-            overlay passed via `footer` covers just this area — never the header. */}
-        <div className="flex-1 flex flex-col relative overflow-hidden">
-          <div className={cn("flex-1 overflow-y-auto flex flex-col bg-background", !disablePadding && "p-4")}>
-            {children}
-          </div>
-
-          {footer ? (
-            footer
-          ) : actions ? (
-            <SheetFooter className="border-t bg-background">
-              {actions}
-            </SheetFooter>
-          ) : null}
+        
+        <div
+          className={cn(
+            // `scrollbar-gutter: stable` reserves the scrollbar's space even
+            // when nothing overflows yet — without it, switching to content
+            // tall enough to need a scrollbar shifts every row a few pixels
+            // narrower, which can flip a borderline-length line from one
+            // line to two (or back) depending on what's selected above.
+            "flex-1 overflow-y-auto flex flex-col",
+            !disableScrollbarGutter && "[scrollbar-gutter:stable]",
+            !disablePadding && "p-4"
+          )}
+        >
+          {children}
         </div>
+
+        {footer ? (
+          footer
+        ) : actions ? (
+          <SheetFooter className="border-t bg-muted/30">
+            {actions}
+          </SheetFooter>
+        ) : null}
       </SheetContent>
     </Sheet>
   )

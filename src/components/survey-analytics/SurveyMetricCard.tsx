@@ -35,6 +35,7 @@ export function SurveyMetricCard({
   loading = false,
   error,
   className,
+  children,
 }: SurveyMetricCardProps) {
   
   if (loading) {
@@ -115,10 +116,11 @@ export function SurveyMetricCard({
         {comparisonItems && comparisonItems.length > 0 && (
           <MetricComparisonFooter items={comparisonItems} className="border-t-0 pt-2 pb-0" />
         )}
+        {children && <div className="mt-4">{children}</div>}
       </CardContent>
 
       {footer && (
-        <CardFooter className="bg-muted/5 border-t border-border/5 text-[11px] text-muted-foreground py-3">
+        <CardFooter className="bg-muted/30 border-t border-border/60 text-[11px] text-muted-foreground py-3">
           {footer}
         </CardFooter>
       )}

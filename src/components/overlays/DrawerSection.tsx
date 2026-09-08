@@ -1,0 +1,51 @@
+import type * as React from "react";
+import type { LucideIcon } from "lucide-react";
+import { toneChip, type Tone } from "@/lib/tone";
+
+interface DrawerSectionProps {
+  icon: LucideIcon;
+  tone: Tone;
+  title: string;
+  hint: string;
+  /** Un dato al vuelo sobre lo que hay dentro — cuántas opciones van escritas. */
+  badge?: string;
+  children: React.ReactNode;
+}
+
+/**
+ * Un grupo de contenido de un drawer como tarjeta: el chip de su icono en su
+ * tono, el título, la línea que explica para qué sirve y, bajo una divisoria,
+ * lo que contenga.
+ *
+ * Es la unidad con la que se arman todos los paneles laterales del producto
+ * —actualizar un avance, asignar objetivos, ver un demográfico— para que
+ * cualquiera de ellos se lea como el mismo sistema y no como tres formularios
+ * distintos. Lo que cambia entre sitios es el icono, el tono y el texto;
+ * nunca la anatomía.
+ */
+export function DrawerSection({ icon: Icon, tone, title, hint, badge, children }: DrawerSectionProps) {
+  return (
+    <section className="rounded-2xl border border-border/60 bg-surface p-3.5 shadow-card">
+      <header className="flex items-start gap-2.5">
+        <span
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ring-1 ring-inset ring-border/40"
+          style={toneChip(tone)}
+        >
+          <Icon className="h-4 w-4" strokeWidth={2} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h3 className="text-[13.5px] font-semibold leading-tight text-text-primary">{title}</h3>
+            {badge && (
+              <span className="rounded-full bg-surface-muted px-2 py-0.5 text-[11px] font-semibold tabular-nums text-text-secondary">
+                {badge}
+              </span>
+            )}
+          </div>
+          <p className="mt-0.5 text-[12px] leading-relaxed text-text-muted">{hint}</p>
+        </div>
+      </header>
+      <div className="mt-3 border-t border-border/50 pt-3.5">{children}</div>
+    </section>
+  );
+}

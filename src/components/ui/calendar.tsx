@@ -29,8 +29,8 @@ function Calendar({
     <DayPicker
       showOutsideDays={showOutsideDays}
       className={cn(
-        "group/calendar bg-background p-4 [--cell-radius:var(--radius-md)] [--cell-size:2.5rem]",
-        "in-data-[slot=popover-content]:bg-transparent in-data-[slot=popover-content]:p-0",
+        "group/calendar p-4 [--cell-radius:var(--radius-md)] [--cell-size:2.5rem]",
+        "in-data-[slot=popover-content]:p-0",
         "rtl:**:[.rdp-button_next>svg]:rotate-180",
         "rtl:**:[.rdp-button_previous>svg]:rotate-180",
         className
@@ -55,12 +55,12 @@ function Calendar({
         ),
         button_previous: cn(
           buttonVariants({ variant: buttonVariant }),
-          "h-7 w-7 p-0 select-none aria-disabled:opacity-50 hover:bg-muted/80 rounded-md transition-colors pointer-events-auto",
+          "h-7 w-7 p-0 select-none aria-disabled:opacity-50 hover:bg-muted/60 rounded-md transition-colors pointer-events-auto",
           defaultClassNames.button_previous
         ),
         button_next: cn(
           buttonVariants({ variant: buttonVariant }),
-          "h-7 w-7 p-0 select-none aria-disabled:opacity-50 hover:bg-muted/80 rounded-md transition-colors pointer-events-auto",
+          "h-7 w-7 p-0 select-none aria-disabled:opacity-50 hover:bg-muted/60 rounded-md transition-colors pointer-events-auto",
           defaultClassNames.button_next
         ),
         month_caption: cn(
@@ -119,11 +119,11 @@ function Calendar({
           defaultClassNames.today
         ),
         outside: cn(
-          "text-muted-foreground/40 aria-selected:text-muted-foreground/40",
+          "text-muted-foreground/60 aria-selected:text-muted-foreground/60",
           defaultClassNames.outside
         ),
         disabled: cn(
-          "text-muted-foreground/30 cursor-not-allowed",
+          "text-muted-foreground/60 cursor-not-allowed",
           defaultClassNames.disabled
         ),
         hidden: cn("invisible", defaultClassNames.hidden),
@@ -190,6 +190,12 @@ function CalendarDayButton({
     if (modifiers.focused) ref.current?.focus()
   }, [modifiers.focused])
 
+  // Outside days rendered as the trailing/leading edge of a neighboring
+  // visible month duplicate a date already shown in that month's own grid
+  // (common with numberOfMonths > 1); skip range/selection styling on them
+  // so the same date isn't visually highlighted twice.
+  const isOutsideDay = modifiers.outside
+
   return (
     <Button
       ref={ref}
@@ -200,11 +206,12 @@ function CalendarDayButton({
         modifiers.selected &&
         !modifiers.range_start &&
         !modifiers.range_end &&
-        !modifiers.range_middle
+        !modifiers.range_middle &&
+        !isOutsideDay
       }
-      data-range-start={modifiers.range_start}
-      data-range-end={modifiers.range_end}
-      data-range-middle={modifiers.range_middle}
+      data-range-start={modifiers.range_start && !isOutsideDay}
+      data-range-end={modifiers.range_end && !isOutsideDay}
+      data-range-middle={modifiers.range_middle && !isOutsideDay}
       className={cn(
         "relative isolate z-10 flex aspect-square h-full w-full flex-col items-center justify-center gap-1 border-0 leading-none font-normal rounded-[var(--cell-radius)] transition-all hover:bg-muted/60 group-data-[focused=true]/day:relative group-data-[focused=true]/day:z-10 group-data-[focused=true]/day:ring-2 group-data-[focused=true]/day:ring-primary/60 data-[range-end=true]:rounded-[var(--cell-radius)] data-[range-end=true]:bg-primary data-[range-end=true]:text-primary-foreground data-[range-end=true]:hover:bg-primary/90 data-[range-end=true]:font-bold data-[range-middle=true]:rounded-none data-[range-middle=true]:bg-primary/10 data-[range-middle=true]:text-foreground data-[range-middle=true]:hover:bg-primary/20 data-[range-start=true]:rounded-[var(--cell-radius)] data-[range-start=true]:bg-primary data-[range-start=true]:text-primary-foreground data-[range-start=true]:hover:bg-primary/90 data-[range-start=true]:font-bold data-[selected-single=true]:bg-primary data-[selected-single=true]:text-primary-foreground data-[selected-single=true]:hover:bg-primary/90 data-[selected-single=true]:font-bold [&>span]:text-[10px] [&>span]:opacity-70",
         defaultClassNames.day,

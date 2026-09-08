@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { CalendarIcon } from 'lucide-react'
+import { es } from 'date-fns/locale'
 
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -72,6 +73,11 @@ export const DatePicker = React.forwardRef<
 }, ref) => {
   const [open, setOpen] = React.useState(false)
 
+  // `locale` is an Intl code for the trigger text; the calendar grid needs a
+  // date-fns Locale object. Anything not Spanish falls back to the library
+  // default, which is English.
+  const calendarLocale = locale.startsWith('es') ? es : undefined
+
   // Determine if value is valid and selectable
   const isValidValue = value && isValidDate(value)
   const isValueSelectable = isValidValue
@@ -136,9 +142,13 @@ export const DatePicker = React.forwardRef<
           </Button>
         </PopoverTrigger>
 
-        <PopoverContent className="w-auto p-0" align="start">
+        <PopoverContent className="w-auto p-0 data-open:animate-in data-open:fade-in data-open:slide-in-from-top-2 data-open:zoom-in-100 data-open:duration-200 data-open:[animation-timing-function:ease-out]" align="start">
           <Calendar
             mode="single"
+            // Without this the grid keeps react-day-picker's English month and
+            // weekday names, so `locale` only reached the trigger text and the
+            // popover contradicted it.
+            locale={calendarLocale}
             selected={isValidValue ? value : undefined}
             onSelect={handleDateSelect}
             disabled={(date: any) => {

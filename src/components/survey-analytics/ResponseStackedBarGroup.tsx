@@ -25,17 +25,20 @@ export function ResponseStackedBarGroup({
   const sharedLegendItems: LegendItem[] = []
   if (showLegend && items.length > 0 && !showIndividualLegends) {
     // Collect all unique tones/labels from segments (assuming they follow a consistent scale)
-    const uniqueSegments = new Map<string, { label: string, tone?: LegendTone }>()
+    // The explicit color travels with the tone: a scale that needs two
+    // intensities of one hue would otherwise collapse in the legend while the
+    // bars themselves still show it.
+    const uniqueSegments = new Map<string, { label: string, tone?: LegendTone, color?: string }>()
     items.forEach(item => {
       item.segments.forEach(segment => {
         if (!uniqueSegments.has(segment.label)) {
-          uniqueSegments.set(segment.label, { label: segment.label, tone: segment.tone })
+          uniqueSegments.set(segment.label, { label: segment.label, tone: segment.tone, color: segment.color })
         }
       })
     })
     
     uniqueSegments.forEach(s => {
-      sharedLegendItems.push({ label: s.label, tone: s.tone })
+      sharedLegendItems.push({ label: s.label, tone: s.tone, color: s.color })
     })
   }
 
@@ -51,7 +54,7 @@ export function ResponseStackedBarGroup({
 
       {/* Shared Legend (Top) - Only if not showing individual ones */}
       {showLegend && sharedLegendItems.length > 0 && !showIndividualLegends && (
-        <div className="pb-2 border-b border-border/40">
+        <div className="pb-2 border-b border-border/60">
           <InlineLegend items={sharedLegendItems} size="sm" />
         </div>
       )}
@@ -78,7 +81,7 @@ export function ResponseStackedBarGroup({
             />
           ))
         ) : (
-          <div className="py-8 text-center border-2 border-dashed border-border/40 rounded-lg text-sm text-muted-foreground italic">
+          <div className="py-8 text-center border-2 border-dashed border-border/60 rounded-lg text-sm text-muted-foreground italic">
             No hay datos comparativos disponibles
           </div>
         )}

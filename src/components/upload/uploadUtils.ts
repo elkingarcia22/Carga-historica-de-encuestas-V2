@@ -23,6 +23,47 @@ export function getFileExtension(fileName: string): string {
 }
 
 /**
+ * Lista legible de lo que un `accept` realmente permite.
+ *
+ * Derivada en vez de escrita a mano porque el mensaje que alimenta lo muestran
+ * todas las zonas de carga de la app y no aceptan lo mismo: la de evidencias
+ * toma PDF e imágenes, la de objetivos solo hojas de cálculo. Una frase fija
+ * estaría mal para una de las dos por construcción.
+ */
+const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.heic']
+
+/** Extensiones que se nombran por familia en vez de una por una. */
+const ACCEPT_FAMILIES: Array<{ label: string; matches: string[] }> = [
+  { label: 'Excel', matches: ['.xlsx', '.xls'] },
+  { label: 'CSV', matches: ['.csv'] },
+  { label: 'PDF', matches: ['.pdf'] },
+  { label: 'imágenes', matches: IMAGE_EXTENSIONS },
+]
+
+function describeAccepted(accept: string): string {
+  const types = accept.split(',').map((entry) => entry.trim().toLowerCase())
+  const labels: string[] = []
+
+  ACCEPT_FAMILIES.forEach(({ label, matches }) => {
+    const matchesImages = label === 'imágenes' && types.some((type) => type.startsWith('image/'))
+    if (matchesImages || matches.some((extension) => types.includes(extension))) {
+      labels.push(label)
+    }
+  })
+
+  // Lo que ninguna familia reclama se nombra por su extensión, para que un tipo
+  // recién aceptado nunca desaparezca del mensaje en silencio.
+  const claimed = new Set(ACCEPT_FAMILIES.flatMap((family) => family.matches))
+  types
+    .filter((type) => type.startsWith('.') && !claimed.has(type))
+    .forEach((type) => labels.push(type))
+
+  if (labels.length === 0) return ''
+  if (labels.length === 1) return labels[0]
+  return `${labels.slice(0, -1).join(', ')} o ${labels[labels.length - 1]}`
+}
+
+/**
  * Validate a list of files against rules.
  */
 export function validateFiles(
@@ -45,8 +86,8 @@ export function validateFiles(
   for (const file of files) {
     // Check size
     if (maxSizeMB && file.size > maxSizeMB * 1024 * 1024) {
-      return {
-        isValid: false,
+      return { 
+        isValid: false, 
         error: `"${file.name}" supera el límite de ${maxSizeMB} MB.`
       }
     }
@@ -69,9 +110,12 @@ export function validateFiles(
       })
 
       if (!isAccepted) {
+        const accepted = describeAccepted(accept)
         return {
           isValid: false,
-          error: `El tipo de archivo "${extension}" no está permitido. Acepta Excel, CSV, PDF o imágenes.`
+          error: accepted
+            ? `El tipo de archivo "${extension}" no está permitido. Acepta ${accepted}.`
+            : `El tipo de archivo "${extension}" no está permitido.`,
         }
       }
     }
