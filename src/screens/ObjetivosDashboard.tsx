@@ -49,7 +49,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { EmptyState } from "@/components/feedback";
 import { ConfirmDialog } from "@/components/overlays";
 import { StatusBadge, type StatusState } from "@/components/status-badge";
-import { CicloDetail } from "@/screens/CicloDetail";
 import { CicloResults } from "@/screens/CicloResults";
 import type { CicloListRow } from "@/components/ciclo-detail";
 import { CargaObjetivosDrawer } from "@/components/carga-objetivos";
@@ -139,12 +138,7 @@ interface ObjetivosDashboardProps {
    */
   filters: CicloListFilters;
   onFiltersChange: (filters: CicloListFilters) => void;
-  selectedCiclo?: CicloListRow | null;
-  onSelectCiclo?: (ciclo: CicloListRow) => void;
-  /**
-   * El ciclo cuya vista de *resultados* está abierta. Es una pantalla distinta
-   * del seguimiento: allá se reporta avance, aquí se lee cómo fue.
-   */
+  /** El ciclo cuya vista de resultados está abierta — la única que tiene. */
   resultsCiclo?: CicloListRow | null;
   onViewResults?: (ciclo: CicloListRow) => void;
   /** Opens the ciclo creation wizard from the list's action rail. */
@@ -161,8 +155,6 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
   onCiclosChange,
   filters,
   onFiltersChange,
-  selectedCiclo,
-  onSelectCiclo,
   resultsCiclo,
   onViewResults,
   onCreateCiclo,
@@ -246,11 +238,7 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
     if (!singleSelectedCiclo) return;
     switch (action) {
       case "results":
-        // "Ver resultados" abre resultados; el seguimiento se abre pulsando la
-        // fila. Antes las dos entradas llevaban al mismo sitio, y la acción
-        // prometía un reporte que nunca aparecía.
-        if (onViewResults) onViewResults(singleSelectedCiclo);
-        else onSelectCiclo?.(singleSelectedCiclo);
+        onViewResults?.(singleSelectedCiclo);
         break;
       case "edit":
         onEditCiclo?.(singleSelectedCiclo);
@@ -414,12 +402,6 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
 
   if (resultsCiclo) {
     return <CicloResults key={`results-${resultsCiclo.id}`} ciclo={resultsCiclo} />;
-  }
-
-  if (selectedCiclo) {
-    // La clave reinicia la vista al cambiar de ciclo: cada uno arranca con
-    // sus propios datos, pestaña y selección, sin arrastrar los del anterior.
-    return <CicloDetail key={selectedCiclo.id} ciclo={selectedCiclo} />;
   }
 
   return (
@@ -738,14 +720,16 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                // Un ciclo en curso o finalizado ya tiene resultados que
-                                // mostrar; el nombre debe llevar al mismo lugar que el
-                                // botón "Ver resultados" en vez de al seguimiento.
-                                const hasResults = CICLO_ACTIONS_BY_ESTADO[ciclo.estado]?.includes("results");
-                                if (hasResults && onViewResults) onViewResults(ciclo);
-                                else onSelectCiclo?.(ciclo);
+                                onViewResults?.(ciclo);
                               }}
-                              disabled={isEditingDate}
+                              // Un ciclo sin resultados que leer —borrador o por
+                              // iniciar— no lleva a ninguna parte: su nombre se
+                              // queda como texto en vez de fingir un enlace. Antes
+                              // esos abrían el seguimiento, que ya no existe.
+                              disabled={
+                                isEditingDate ||
+                                !CICLO_ACTIONS_BY_ESTADO[ciclo.estado]?.includes("results")
+                              }
                               className="text-left text-text-primary hover:text-primary hover:underline transition-colors disabled:cursor-default disabled:no-underline disabled:hover:text-text-primary"
                             >
                               {ciclo.nombre}

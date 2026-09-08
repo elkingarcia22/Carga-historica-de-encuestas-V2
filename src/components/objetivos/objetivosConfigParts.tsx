@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Trash2, type LucideIcon } from "lucide-react";
+import { Lock, Trash2, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -210,6 +210,7 @@ export function RangeRow({
   allowNegative,
   onDelete,
   deleteDisabledReason,
+  layout = "stacked",
 }: {
   index: number;
   nameLabel: string;
@@ -227,68 +228,206 @@ export function RangeRow({
   onDelete: () => void;
   /** Por qué no se puede borrar esta fila, o null si sí se puede. */
   deleteDisabledReason: string | null;
+  /**
+   * `stacked` (por defecto) pone el nombre arriba y los tres campos angostos
+   * debajo: en un panel angosto los cinco en fila obligaban a que el nombre
+   * fuera el campo más estrecho. `inline` los pone todos en una sola línea,
+   * para un panel con ancho de sobra donde lo que cuesta es el alto.
+   */
+  layout?: "stacked" | "inline";
 }) {
+  const isInline = layout === "inline";
+
+  const indexChip = (
+    <span className="mb-1.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-surface-muted text-xs font-bold tabular-nums text-text-secondary">
+      {index}
+    </span>
+  );
+
+  const nameField = (
+    <Field label={nameLabel} className="min-w-0 flex-1">
+      <Input
+        value={name}
+        onChange={(event) => onNameChange(event.target.value)}
+        className="h-9 border-border/70 text-[13px] font-semibold"
+        placeholder={namePlaceholder}
+      />
+    </Field>
+  );
+
+  const deleteButton = (
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={onDelete}
+      disabled={deleteDisabledReason !== null}
+      title={deleteDisabledReason ?? "Eliminar"}
+      className="mb-0.5 h-9 w-9 shrink-0 rounded-lg border border-status-negative/30 bg-status-negative/10 text-status-negative hover:border-status-negative/50 hover:bg-status-negative/20 hover:text-status-negative disabled:opacity-50"
+    >
+      <Trash2 className="h-4 w-4" />
+    </Button>
+  );
+
+  const rangeFields = (
+    <>
+      <Field label="Desde (%)" className={cn(isInline && "w-24 shrink-0")}>
+        <PercentInput value={min} onChange={onMinChange} allowNegative={allowNegative} />
+      </Field>
+      <Field label="Hasta (%)" className={cn(isInline && "w-24 shrink-0")}>
+        <PercentInput value={max} onChange={onMaxChange} allowNegative={allowNegative} />
+      </Field>
+      <Field label="Color" className={cn(isInline && "w-36 shrink-0")}>
+        <Select value={colorHex} onValueChange={onColorChange}>
+          {/*
+            * El valor va dentro de `SelectValue` y no como marcado propio:
+            * Radix mide ese nodo para colocar la lista alineada al ítem
+            * elegido, y sin él el panel no llega a abrirse. La muestra de
+            * color y su nombre viven en el ítem, y Radix los clona aquí.
+            */}
+          <SelectTrigger className="h-9 w-full px-2 text-[13px] font-semibold">
+            <SelectValue placeholder="Color" />
+          </SelectTrigger>
+          <SelectContent>
+            {colors.map((color) => (
+              <SelectItem key={color.hex} value={color.hex} className="text-[12px]">
+                <span className="flex items-center gap-2">
+                  <span
+                    className="h-4 w-4 shrink-0 rounded-md border border-border/50"
+                    style={{ backgroundColor: color.hex }}
+                  />
+                  <span className="truncate">{color.label}</span>
+                </span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+    </>
+  );
+
+  if (isInline) {
+    return (
+      <div className="flex items-end gap-2 rounded-lg border border-border/60 bg-surface px-3 py-2.5 transition-colors hover:border-primary/40">
+        {indexChip}
+        {nameField}
+        {rangeFields}
+        {deleteButton}
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-2.5 rounded-lg border border-border/60 bg-surface px-3 py-2.5 transition-colors hover:border-primary/40">
       <div className="flex items-end gap-2">
-        <span className="mb-1.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-surface-muted text-xs font-bold tabular-nums text-text-secondary">
-          {index}
-        </span>
-        <Field label={nameLabel} className="flex-1">
-          <Input
-            value={name}
-            onChange={(event) => onNameChange(event.target.value)}
-            className="h-9 border-border/70 text-[13px] font-semibold"
-            placeholder={namePlaceholder}
-          />
-        </Field>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onDelete}
-          disabled={deleteDisabledReason !== null}
-          title={deleteDisabledReason ?? "Eliminar"}
-          className="mb-0.5 h-9 w-9 shrink-0 rounded-lg border border-status-negative/30 bg-status-negative/10 text-status-negative hover:border-status-negative/50 hover:bg-status-negative/20 hover:text-status-negative disabled:opacity-50"
-        >
-          <Trash2 className="h-4 w-4" />
-        </Button>
+        {indexChip}
+        {nameField}
+        {deleteButton}
       </div>
 
-      <div className="grid grid-cols-[1fr_1fr_9rem] gap-2 pl-9">
-        <Field label="Desde (%)">
-          <PercentInput value={min} onChange={onMinChange} allowNegative={allowNegative} />
-        </Field>
-        <Field label="Hasta (%)">
-          <PercentInput value={max} onChange={onMaxChange} allowNegative={allowNegative} />
-        </Field>
-        <Field label="Color">
-          <Select value={colorHex} onValueChange={onColorChange}>
-            {/*
-              * El valor va dentro de `SelectValue` y no como marcado propio:
-              * Radix mide ese nodo para colocar la lista alineada al ítem
-              * elegido, y sin él el panel no llega a abrirse. La muestra de
-              * color y su nombre viven en el ítem, y Radix los clona aquí.
-              */}
-            <SelectTrigger className="h-9 w-full px-2 text-[13px] font-semibold">
-              <SelectValue placeholder="Color" />
-            </SelectTrigger>
-            <SelectContent>
-              {colors.map((color) => (
-                <SelectItem key={color.hex} value={color.hex} className="text-[12px]">
-                  <span className="flex items-center gap-2">
-                    <span
-                      className="h-4 w-4 shrink-0 rounded-md border border-border/50"
-                      style={{ backgroundColor: color.hex }}
-                    />
-                    <span className="truncate">{color.label}</span>
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-      </div>
+      <div className="grid grid-cols-[1fr_1fr_9rem] gap-2 pl-9">{rangeFields}</div>
     </div>
+  );
+}
+
+/**
+ * Un estado que no se configura: el mismo alto y la misma caja que una fila
+ * editable, pero con su nombre, su rango y su color como texto y un candado
+ * que explica por qué.
+ *
+ * Se muestra en vez de esconderse porque quien abre esta pestaña necesita ver
+ * el cuadro completo de estados; dejarlo afuera haría parecer que el módulo
+ * solo tiene las bandas de resultado.
+ */
+export function LockedStateRow({
+  name,
+  description,
+  colorHex,
+  range,
+  rangeLabel = "Antes de arrancar",
+  lockReason = "Este estado lo fija el flujo del objetivo. No se puede renombrar, mover ni eliminar.",
+}: {
+  name: string;
+  description: string;
+  colorHex: string;
+  /** El rango de avance del estado, o null si no depende de un rango. */
+  range: { min: number; max: number } | null;
+  /** Qué decir en vez del rango cuando `range` es null. */
+  rangeLabel?: string;
+  /** Qué explica el candado. Por defecto, que lo fija el flujo del objetivo. */
+  lockReason?: string;
+}) {
+  return (
+    <div className="flex items-start gap-2.5 rounded-lg border border-border/60 bg-surface px-3 py-2.5">
+      <span
+        className="mt-1 h-3 w-3 shrink-0 rounded-full border border-black/5 shadow-xs"
+        style={{ backgroundColor: colorHex }}
+      />
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[13px] font-semibold leading-tight text-text-primary">{name}</span>
+          <span className="rounded-md border border-border/60 bg-surface-muted px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-text-secondary">
+            {range ? `${range.min}% a ${range.max}%` : rangeLabel}
+          </span>
+        </div>
+        <p className="text-[12px] leading-snug text-text-muted">{description}</p>
+      </div>
+      <Tooltip delayDuration={0}>
+        <TooltipTrigger asChild>
+          <span className="mt-0.5 flex h-6 w-6 shrink-0 cursor-help items-center justify-center rounded-md border border-border/60 bg-surface-muted text-text-muted">
+            <Lock className="h-3.5 w-3.5" />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="left" sideOffset={6} className="max-w-[15rem] text-[12px]">
+          {lockReason}
+        </TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
+/**
+ * El mismo botón que hace crecer una lista, pero para la cabecera de la
+ * tarjeta: compacto y con la razón del tope en un tooltip en vez de al lado,
+ * porque ahí no hay una línea libre donde escribirla.
+ *
+ * El botón deshabilitado va envuelto en un `span`: un `button` con `disabled`
+ * no emite eventos de puntero, así que sin ese envoltorio el tooltip —lo
+ * único que explica por qué no se puede— nunca aparecería.
+ */
+export function AddRangeHeaderButton({
+  label,
+  onClick,
+  disabledReason,
+  icon: Icon,
+}: {
+  label: string;
+  onClick: () => void;
+  disabledReason: string | null;
+  icon: LucideIcon;
+}) {
+  const button = (
+    <Button
+      onClick={onClick}
+      variant="outline"
+      disabled={disabledReason !== null}
+      className="h-8 gap-1.5 px-2.5 text-[12px] font-semibold"
+    >
+      <Icon className="h-3.5 w-3.5" />
+      {label}
+    </Button>
+  );
+
+  if (!disabledReason) return button;
+
+  return (
+    <Tooltip delayDuration={0}>
+      <TooltipTrigger asChild>
+        <span className="inline-flex">{button}</span>
+      </TooltipTrigger>
+      <TooltipContent side="left" sideOffset={6} className="text-[12px]">
+        {disabledReason}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

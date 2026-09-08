@@ -56,7 +56,7 @@ interface Tone {
 }
 
 /**
- * Traduce el `colorHex` pastel de "Estados y rangos" a una pareja fondo claro
+ * Traduce el `colorHex` pastel de "Estados de los objetivos" a una pareja fondo claro
  * / texto oscuro que sí cumple contraste.
  *
  * Son tonos pensados para relleno de barra, no para texto — usarlos tal cual

@@ -9,7 +9,7 @@ import { Sparkline } from "@/components/survey-analytics/pulseCharts";
 import { LIFECYCLE_META, LIFECYCLE_ORDER } from "./objectiveLifecycle";
 import { AvancePill, LifecycleBar, LifecycleChip } from "./ResultsChips";
 import { ResultsDetailCard } from "./ResultsDetailCard";
-import { ResultsFilterChips, ResultsFilterControls } from "./ResultsFilterBar";
+import { ResultsAxisSelect } from "./ResultsFilterBar";
 import { ResultsHeatmap, type HeatmapRowBy } from "./ResultsHeatmap";
 import { ResultsTree } from "./ResultsTree";
 import { buildResultsTree } from "./buildResultsTree";
@@ -142,12 +142,7 @@ export function CumplimientoTab({
           controls={
             <>
               {view === "arbol" ? (
-                <ResultsFilterControls
-                  results={results}
-                  state={filters}
-                  axis={axis}
-                  onAxisChange={onAxisChange}
-                />
+                <ResultsAxisSelect axis={axis} onAxisChange={onAxisChange} />
               ) : (
                 <>
                   <span className="text-[13px] font-medium text-muted-foreground">Ver por:</span>
@@ -157,13 +152,11 @@ export function CumplimientoTab({
                       <TabsTrigger value="grupo">Asignación</TabsTrigger>
                     </TabsList>
                   </Tabs>
-                  <ResultsFilterControls results={results} state={filters} />
                 </>
               )}
               <CumplimientoViewSwitch value={view} onChange={onViewChange} />
             </>
           }
-          chips={<ResultsFilterChips results={results} state={filters} />}
         >
           {entries.length === 0 ? (
             <div className="rounded-xl border border-border/60 p-8">

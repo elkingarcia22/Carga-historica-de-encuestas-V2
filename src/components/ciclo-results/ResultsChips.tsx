@@ -1,3 +1,4 @@
+import { Ban } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatPercent } from "@/components/ciclo-detail";
 import { getEstadoBadgeConfig, type EstadoParticipanteConfig } from "@/components/objetivos/objetivosConfigStore";
@@ -40,6 +41,37 @@ export function LifecycleChip({
     >
       <meta.Icon className={cn("shrink-0", size === "sm" ? "size-2.5" : "size-3")} strokeWidth={2.5} />
       <span className="truncate">{meta.label}</span>
+    </span>
+  );
+}
+
+/**
+ * Que un objetivo puntual está inactivo. Va aparte del `LifecycleChip` en vez
+ * de reemplazarlo: uno dice en qué etapa del flujo se congeló, este dice que
+ * ya no cuenta.
+ */
+export function InactiveChip({
+  date,
+  percentAtInactivation,
+  size = "md",
+  className,
+}: {
+  date: string;
+  percentAtInactivation: number;
+  size?: "sm" | "md";
+  className?: string;
+}) {
+  return (
+    <span
+      title={`Inactivado el ${date} con ${formatPercent(percentAtInactivation)} de avance. No cuenta en el peso ni en el promedio.`}
+      className={cn(
+        "inline-flex max-w-full items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-200/60 bg-slate-100/80 font-semibold text-slate-600 dark:border-slate-700/50 dark:bg-slate-800/40 dark:text-slate-300",
+        size === "sm" ? "px-2 py-px text-[10.5px]" : "px-2.5 py-0.5 text-[11px]",
+        className
+      )}
+    >
+      <Ban className={cn("shrink-0", size === "sm" ? "size-2.5" : "size-3")} strokeWidth={2.5} />
+      Inactivo
     </span>
   );
 }

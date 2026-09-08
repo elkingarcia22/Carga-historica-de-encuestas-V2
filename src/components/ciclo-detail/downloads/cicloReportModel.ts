@@ -292,10 +292,10 @@ export interface IndividualObjectiveLine {
   percent: number;
   /**
    * En qué punto del flujo está este objetivo: por aprobar, por ajustar, por
-   * iniciar, en progreso o completado. No es el estado por rango de
-   * "Estados del colaborador" —ese describe a la persona, no depende de un
-   * solo objetivo— sino la misma máquina de estados de la vista de
-   * seguimiento, para que la carta y la pantalla nunca discrepen.
+   * iniciar, en progreso o completado. No es la banda de cumplimiento de
+   * "Estados de los objetivos" —esa depende del porcentaje alcanzado— sino la
+   * misma máquina de estados de la vista de seguimiento, para que la carta y
+   * la pantalla nunca discrepen.
    */
   lifecycle: ObjectiveLifecycle;
 }

@@ -1,7 +1,6 @@
 import * as React from "react";
 import {
   CheckCircle2,
-  Lightbulb,
   MessageSquareText,
   PenLine,
   TriangleAlert,
@@ -10,24 +9,37 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AttentionAction, AttentionStrip } from "@/components/feedback";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { formatPercent, formatLongDate } from "@/components/ciclo-detail";
 import { MetricReadingBadge, MetricSummaryCard } from "@/components/survey-results";
 import { Sparkline } from "@/components/survey-analytics/pulseCharts";
-import { LIFECYCLE_META, LIFECYCLE_ORDER } from "./objectiveLifecycle";
+import { APPROVAL_META, APPROVAL_ORDER } from "./objectiveLifecycle";
 import { toneForEstado } from "./resultsTone";
+import { CicloTimePanel } from "./CicloTimePanel";
 import { RISK_META, RISK_ORDER, type CicloResults } from "./resultsModel";
-import type { FilterKey, ResultsFiltersState } from "./useResultsFilters";
+import {
+  AreaRanking,
+  DonutDistribution,
+  FlowDistribution,
+  StatCard,
+  WaffleDistribution,
+} from "./ResumenPanels";
+import type { ResultsFiltersState } from "./useResultsFilters";
 
 /**
  * El panorama del ciclo.
  *
  * La referencia pone diez donuts del mismo tamaño en una grilla: nada manda y
- * el lector no sabe por dónde empezar. Aquí hay jerarquía — un número grande,
- * tres que lo enmarcan, tres distribuciones que lo explican — y todo tramo de
- * toda distribución es un filtro que se lleva a las demás pestañas. Un gráfico
- * que no se puede pulsar en una herramienta de análisis es un adorno.
+ * el lector no sabe por dónde empezar. Aquí hay jerarquía —un número grande,
+ * tres que lo enmarcan, cuatro repartos que lo explican y una comparación
+ * entre áreas— y todo tramo de todo gráfico es un filtro que se lleva a las
+ * demás pestañas. Un gráfico que no se puede pulsar en una herramienta de
+ * análisis es un adorno.
+ *
+ * Y cada reparto se dibuja con la forma que le corresponde, no con la misma
+ * barra apilada seis veces: un flujo por etapas se lee como medidores, un
+ * total con un tramo dominante como anillo, un reparto casi parejo como
+ * cuadrícula de cien celdas. Seis tarjetas idénticas eran seis tarjetas que
+ * el ojo dejaba de leer a la tercera.
  *
  * Lo que la referencia trata como métricas y no lo son —"15 colaboradores sin
  * objetivos", "112 por aprobar"— sube a la franja de pendientes: son acciones,
@@ -38,16 +50,21 @@ interface ResumenTabProps {
   results: CicloResults;
   filters: ResultsFiltersState;
   onOpenPending: (kind: "sin-objetivos" | "por-aprobar" | "por-ajustar") => void;
-  onSuggestMetric: () => void;
 }
 
-export function ResumenTab({
-  results,
-  filters,
-  onOpenPending,
-  onSuggestMetric,
-}: ResumenTabProps) {
-  const laggingAreas = React.useMemo(() => {
+export function ResumenTab({ results, filters, onOpenPending }: ResumenTabProps) {
+  /**
+   * El avance promedio de cada área y cuánta gente hay detrás, ordenadas de
+   * la más rezagada a la que va mejor: la primera fila es el titular.
+   *
+   * Todas las barras van del mismo azul: no hay un estado configurado detrás
+   * de "área" —a diferencia del riesgo o del estado del objetivo, que sí
+   * vienen de una configuración con su propio color— así que colorear cada
+   * barra según qué tan atrás va sería inventarle un semáforo que nadie
+   * definió. La comparación contra el calendario la sigue dando la guía
+   * punteada, no el color.
+   */
+  const areaBars = React.useMemo(() => {
     const byArea = new Map<string, number[]>();
     results.scored.forEach((row) => {
       const bucket = byArea.get(row.area);
@@ -55,16 +72,39 @@ export function ResumenTab({
       else byArea.set(row.area, [row.percent]);
     });
     return [...byArea.entries()]
-      .filter(([, percents]) => percents.length >= 3)
       .map(([area, percents]) => ({
         id: area,
         label: area,
-        value: percents.reduce((a, b) => a + b, 0) / percents.length,
+        percent: percents.reduce((a, b) => a + b, 0) / percents.length,
+        people: percents.length,
       }))
-      .sort((a, b) => a.value - b.value)
-      .slice(0, 3)
-      .map((item) => ({ ...item, displayValue: formatPercent(item.value) }));
-  }, [results.scored]);
+      .sort((a, b) => a.percent - b.percent)
+      .map((item) => ({
+        id: item.id,
+        label: item.label,
+        percent: item.percent,
+        detail: `${item.people} ${item.people === 1 ? "persona" : "personas"}`,
+        color: "var(--color-brand)",
+        active: filters.isOn("areas", item.id),
+      }));
+  }, [results.scored, filters]);
+
+  // Las tres áreas de la cabecera son las tres primeras de esa misma lista:
+  // un solo cálculo, y la tarjeta grande y la de abajo nunca discrepan.
+  const laggingAreas = React.useMemo(
+    () =>
+      areaBars
+        .filter(() => areaBars.length >= 3)
+        .slice(0, 3)
+        .map((bar) => ({
+          id: bar.id,
+          label: bar.label,
+          value: bar.percent,
+          displayValue: formatPercent(bar.percent),
+        })),
+    [areaBars]
+  );
+
   const porAprobar = results.lifecycleCounts.get("por-aprobar") ?? 0;
   const porAjustar = results.lifecycleCounts.get("por-ajustar") ?? 0;
   // Objetivos y personas suman en la misma cifra porque "pendiente" es lo que
@@ -111,20 +151,24 @@ export function ResumenTab({
         }
         ringsLabel="Niveles de desempeño"
         ringsTotal={`${results.scored.length} personas`}
-        rings={[...results.nivelCounts.entries()]
-          .filter(([, count]) => count > 0)
-          .map(([id, count]) => {
-            const nivel = results.rows.find((row) => row.nivel?.id === id)?.nivel;
-            return {
-              id,
-              label: nivel?.nombre ?? id,
-              percentage: Math.round((count / Math.max(1, results.scored.length)) * 100),
-              color: nivel?.colorHex ?? "#CBD5E1",
-              count: String(count),
-              active: filters.isOn("niveles", id),
-              onToggle: () => filters.toggle("niveles", id),
-            };
-          })}
+        // Todos los niveles configurados, también los que quedaron en cero:
+        // "Excelente: 0" es la lectura más dura que puede dar un ciclo y
+        // esconderla haría creer que ese nivel no está definido. El que va en
+        // cero no se puede pulsar —filtrar por él dejaría la vista vacía—,
+        // que es justo lo que `interactive` apaga.
+        rings={[...results.nivelCounts.entries()].map(([id, count]) => {
+          const nivel = results.niveles.find((item) => item.id === id);
+          return {
+            id,
+            label: nivel?.nombre ?? id,
+            percentage: Math.round((count / Math.max(1, results.scored.length)) * 100),
+            color: nivel?.colorHex ?? "#CBD5E1",
+            count: String(count),
+            active: filters.isOn("niveles", id),
+            interactive: count > 0,
+            onToggle: () => filters.toggle("niveles", id),
+          };
+        })}
         topAreasTitle="Top 3 áreas más rezagadas"
         topAreas={laggingAreas}
         chartTitle="Avance en el tiempo"
@@ -197,61 +241,66 @@ export function ResumenTab({
         <StatCard
           icon={Users}
           label="Reportaron avance"
-          value={`${results.peopleWithProgress} / ${results.scored.length}`}
+          value={`${results.peopleWithProgress}`}
+          total={`${results.scored.length}`}
+          share={(results.peopleWithProgress / Math.max(1, results.scored.length)) * 100}
           hint={`${results.peopleCount} personas en el ciclo`}
         />
         <StatCard
           icon={CheckCircle2}
           label="Objetivos en meta"
-          value={`${completados} / ${results.objectiveCount}`}
-          hint={`${Math.round((completados / Math.max(1, results.objectiveCount)) * 100)} % del total`}
+          value={`${completados}`}
+          total={`${results.objectiveCount}`}
+          share={(completados / Math.max(1, results.objectiveCount)) * 100}
+          hint={`${results.objectiveCount - completados} todavía no llegan`}
         />
         <StatCard
           icon={MessageSquareText}
           label="Objetivos con conversación"
           value={`${results.commentedCount}`}
-          hint={`${
-            results.objectiveCount - results.commentedCount
-          } avanzan sin un solo comentario`}
+          total={`${results.objectiveCount}`}
+          share={(results.commentedCount / Math.max(1, results.objectiveCount)) * 100}
+          hint={`${results.objectiveCount - results.commentedCount} avanzan sin un solo comentario`}
         />
       </section>
 
-      {/* ── Distribuciones: cada tramo es un filtro ── */}
-      <section className="grid grid-cols-1 gap-4 lg:grid-cols-3" aria-label="Distribuciones">
-        <DistributionPanel
-          title="Estado de los objetivos"
-          hint="En qué punto del flujo está cada objetivo."
+      {/* ── El calendario, la aprobación y el riesgo ──
+          Las tres preguntas que se hacen antes de mirar cifras: cuánto
+          tiempo queda, cuántos objetivos siguen sin permiso para arrancar y
+          quién no va a llegar. */}
+      <section
+        className={cn(
+          "grid grid-cols-1 gap-4",
+          results.showsRisk ? "lg:grid-cols-3" : "lg:grid-cols-2"
+        )}
+        aria-label="Estado del ciclo"
+      >
+        <CicloTimePanel results={results} />
+        <DonutDistribution
+          title="Aprobación de objetivos"
+          hint="Cuántos pasaron la revisión del líder. Los otros no suman avance."
           total={results.objectiveCount}
           filters={filters}
-          filterKey="lifecycles"
-          segments={LIFECYCLE_ORDER.map((id) => ({
+          filterKey="approvals"
+          headline={{ id: "aprobado", label: "aprobados" }}
+          segments={APPROVAL_ORDER.map((id) => ({
             id,
-            label: LIFECYCLE_META[id].label,
-            color: LIFECYCLE_META[id].colorHex,
-            count: results.lifecycleCounts.get(id) ?? 0,
+            label: APPROVAL_META[id].label,
+            color: APPROVAL_META[id].colorHex,
+            count: results.approvalCounts.get(id) ?? 0,
           }))}
         />
-        <DistributionPanel
-          title="Niveles de desempeño"
-          hint="Con qué calificación va cerrando cada persona."
-          total={results.scored.length}
-          filters={filters}
-          filterKey="niveles"
-          segments={[...results.nivelCounts.entries()].map(([id, count]) => {
-            const nivel = results.rows.find((row) => row.nivel?.id === id)?.nivel;
-            return { id, label: nivel?.nombre ?? id, color: nivel?.colorHex ?? "#CBD5E1", count };
-          })}
-        />
-        {/* Un ciclo cerrado no tiene riesgo que mostrar, así que el estado de
-            los participantes —que sí sigue explicando el resultado— sube a
-            ocupar ese lugar en vez de dejar un hueco en la fila. */}
-        {results.showsRisk ? (
-          <DistributionPanel
+        {/* Un ciclo cerrado no tiene riesgo que mostrar —el riesgo es un
+            pronóstico— así que la fila baja a dos columnas en vez de dejar un
+            hueco o rellenarlo con algo que ya está arriba. */}
+        {results.showsRisk && (
+          <DonutDistribution
             title="Riesgo"
             hint="Avance comparado con el calendario ya corrido."
             total={results.scored.length}
             filters={filters}
             filterKey="risks"
+            headline={{ id: "sin-riesgo", label: "sin riesgo" }}
             segments={RISK_ORDER.map((id) => ({
               id,
               label: RISK_META[id].label,
@@ -259,14 +308,56 @@ export function ResumenTab({
               count: results.riskCounts.get(id) ?? 0,
             }))}
           />
-        ) : (
-          <ParticipantesPanel results={results} filters={filters} />
         )}
       </section>
 
-      <section className="grid grid-cols-1 gap-4 lg:grid-cols-3" aria-label="Composición del ciclo">
-        {results.showsRisk && <ParticipantesPanel results={results} filters={filters} />}
-        <DistributionPanel
+      {/* ── Cómo va cada objetivo aprobado y cómo va cada área ── */}
+      <section className="grid grid-cols-1 gap-4 lg:grid-cols-2" aria-label="Cumplimiento del ciclo">
+        {/* Las bandas de "Estados de los objetivos" tal como están
+            configuradas, todas y en orden de cumplimiento. Solo cuenta los
+            aprobados: uno que espera visto bueno tiene 0 % y saldría en la
+            primera banda como si hubiera arrancado y no reportado, que es
+            otra cosa. Los no aprobados están en la tarjeta de aprobación. */}
+        <FlowDistribution
+          title="Estado de los objetivos"
+          hint={
+            results.showsRisk
+              ? "Las bandas de cumplimiento configuradas, sobre los objetivos ya aprobados."
+              : "Con qué banda de cumplimiento cerró cada objetivo aprobado."
+          }
+          total={results.committedCount}
+          filters={filters}
+          filterKey="estados"
+          segments={results.estados.map((estado) => ({
+            id: estado.id,
+            label: estado.nombre,
+            color: estado.colorHex,
+            count: results.estadoCounts.get(estado.id) ?? 0,
+          }))}
+        />
+        <AreaRanking
+          bars={areaBars}
+          hint={
+            results.showsRisk
+              ? "La guía punteada marca el calendario ya corrido."
+              : "El avance con el que cerró cada área."
+          }
+          reference={
+            results.showsRisk
+              ? { value: results.elapsed, label: `${Math.round(results.elapsed)} % del calendario` }
+              : undefined
+          }
+          filters={filters}
+        />
+      </section>
+
+      {/* ── El tipo de medida, a lo ancho ──
+          Las cuatro medidas no caben legibles en un tercio de fila: las
+          celdas quedaban en cinco píxeles y la leyenda a dos columnas se
+          cortaba antes de nombrarlas todas. Aquí la cuadrícula respira y la
+          leyenda va completa al lado. */}
+      <section aria-label="Composición del ciclo">
+        <WaffleDistribution
           title="Tipo de medida"
           hint="Con qué se está midiendo el ciclo."
           total={results.objectiveCount}
@@ -275,189 +366,16 @@ export function ResumenTab({
           segments={results.measureMix.map((share, index) => ({
             id: share.measure,
             label: share.label,
-            color: ["#4F46E5", "#0EA5E9", "#8B5CF6", "#14B8A6"][index % 4],
+            color: MEASURE_COLORS[index % MEASURE_COLORS.length],
             count: share.count,
           }))}
         />
-
-        <article className="flex flex-col justify-between gap-4 rounded-2xl border border-dashed border-border bg-muted/20 p-5">
-          <div className="flex items-start gap-3">
-            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface text-primary shadow-card">
-              <Lightbulb className="size-4" strokeWidth={2} />
-            </span>
-            <div className="min-w-0">
-              <p className="text-[13px] font-bold text-text-primary">¿Qué te gustaría medir?</p>
-              <p className="mt-0.5 text-[12px] leading-relaxed text-text-secondary">
-                Si el reporte que necesitas no está aquí, dinos cuál es y lo construimos.
-              </p>
-            </div>
-          </div>
-          <Button variant="outline" size="sm" onClick={onSuggestMetric} className="w-full text-[12.5px]">
-            Sugerir una métrica
-          </Button>
-        </article>
       </section>
     </>
   );
 }
 
-/** El reparto de estados del participante, que aparece en una fila o en otra
- *  según el ciclo tenga riesgo que mostrar. */
-function ParticipantesPanel({
-  results,
-  filters,
-}: {
-  results: CicloResults;
-  filters: ResultsFiltersState;
-}) {
-  return (
-    <DistributionPanel
-      title="Estado de los participantes"
-      hint="Los que no cuentan quedan fuera de promedios y rankings."
-      total={results.peopleCount}
-      filters={filters}
-      filterKey="estadosParticipante"
-      segments={[...results.estadoParticipanteCounts.entries()].map(([id, count]) => {
-        const estado = results.rows.find((row) => row.estadoParticipante?.id === id)
-          ?.estadoParticipante;
-        return { id, label: estado?.nombre ?? id, color: estado?.colorHex ?? "#CBD5E1", count };
-      })}
-    />
-  );
-}
-
-function StatCard({
-  icon: Icon,
-  label,
-  value,
-  hint,
-}: {
-  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
-  label: string;
-  value: string;
-  hint: string;
-}) {
-  return (
-    <article className="flex items-start gap-3.5 rounded-2xl border border-border/60 bg-surface p-5 shadow-card">
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted/40 text-muted-foreground">
-        <Icon className="size-4" strokeWidth={2} />
-      </span>
-      <div className="min-w-0">
-        <p className="text-[12.5px] font-semibold text-text-primary">{label}</p>
-        <p className="mt-1 text-[24px] font-extrabold leading-none tracking-tight text-text-primary tabular-nums">
-          {value}
-        </p>
-        <p className="mt-1.5 text-[11px] font-medium text-text-muted">{hint}</p>
-      </div>
-    </article>
-  );
-}
-
-interface Segment {
-  id: string;
-  label: string;
-  color: string;
-  count: number;
-}
-
-/**
- * Una distribución como barra apilada más su leyenda, y toda ella pulsable.
- *
- * Barra apilada y no donut: comparar dos tramos de un anillo obliga a estimar
- * ángulos, comparar dos tramos de una barra es mirar cuál es más largo. Y la
- * leyenda ya trae la cifra exacta, que es lo que el donut nunca da.
- */
-function DistributionPanel({
-  title,
-  hint,
-  total,
-  segments,
-  filters,
-  filterKey,
-}: {
-  title: string;
-  hint: string;
-  total: number;
-  segments: readonly Segment[];
-  filters: ResultsFiltersState;
-  filterKey: FilterKey;
-}) {
-  const visible = segments.filter((segment) => segment.count > 0);
-  const sum = visible.reduce((acc, segment) => acc + segment.count, 0);
-  const anyActive = (filters.filters[filterKey] as ReadonlySet<string>).size > 0;
-
-  return (
-    <article className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-surface p-5 shadow-card">
-      <header className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h3 className="text-[13px] font-bold text-text-primary">{title}</h3>
-            <Badge variant="neutral" className="h-5 px-1.5 text-[11px] font-semibold tabular-nums">
-              {total}
-            </Badge>
-          </div>
-          <p className="mt-0.5 text-[11px] font-medium text-text-muted">{hint}</p>
-        </div>
-      </header>
-
-      {sum === 0 ? (
-        <p className="py-4 text-center text-[12px] text-text-muted">Sin datos todavía.</p>
-      ) : (
-        <>
-          <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-border/40">
-            {visible.map((segment) => {
-              const active = filters.isOn(filterKey, segment.id);
-              return (
-                <button
-                  key={segment.id}
-                  type="button"
-                  onClick={() => filters.toggle(filterKey, segment.id)}
-                  title={`${segment.label}: ${segment.count}`}
-                  aria-pressed={active}
-                  className={cn(
-                    "h-full cursor-pointer transition-all duration-300 hover:brightness-110",
-                    anyActive && !active && "opacity-30"
-                  )}
-                  style={{ flexGrow: segment.count, backgroundColor: segment.color }}
-                />
-              );
-            })}
-          </div>
-
-          <ul className="flex flex-col gap-0.5">
-            {visible.map((segment) => {
-              const active = filters.isOn(filterKey, segment.id);
-              return (
-                <li key={segment.id}>
-                  <button
-                    type="button"
-                    onClick={() => filters.toggle(filterKey, segment.id)}
-                    aria-pressed={active}
-                    className={cn(
-                      "flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left text-[12px] transition-colors",
-                      active
-                        ? "bg-primary/[0.08] font-semibold text-primary"
-                        : "text-text-secondary hover:bg-muted/60 hover:text-text-primary",
-                      anyActive && !active && "opacity-60"
-                    )}
-                  >
-                    <span
-                      aria-hidden
-                      className="size-2.5 shrink-0 rounded-full"
-                      style={{ backgroundColor: segment.color }}
-                    />
-                    <span className="min-w-0 flex-1 truncate">{segment.label}</span>
-                    <span className="shrink-0 tabular-nums font-bold">{segment.count}</span>
-                    <span className="w-10 shrink-0 text-right tabular-nums text-text-muted">
-                      {Math.round((segment.count / sum) * 100)} %
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </>
-      )}
-    </article>
-  );
-}
+/** Cuatro tonos para las cuatro medidas. No son estados configurados, pero sí
+ *  categorías que hay que poder distinguir de un vistazo en la cuadrícula: sin
+ *  color no habría cómo separar un tramo del siguiente. */
+const MEASURE_COLORS = ["#4F46E5", "#0EA5E9", "#8B5CF6", "#14B8A6"];

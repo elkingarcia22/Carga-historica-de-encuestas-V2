@@ -15,7 +15,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { AiAgentDrawer } from "@/components/ai/AiAgentDrawer";
 import { MovingBorderBeam } from "@/components/ui/moving-border-beam";
 import { CICLO_ACTIONS, splitCicloActions, type CicloActionId } from "@/components/ciclo-list";
-import { ObjetivosConfigDrawer } from "./ObjetivosConfigDrawer";
+import { ObjetivosConfigDrawerWide } from "./ObjetivosConfigDrawerWide";
 
 interface ObjetivosListActionRailProps {
   /** A row is mid date-edit — an immersive, in-row decision that the rail
@@ -265,7 +265,7 @@ export function ObjetivosListActionRail({
           ) : null
         }
       />
-      <ObjetivosConfigDrawer open={isPermisosOpen} onOpenChange={setIsPermisosOpen} />
+      <ObjetivosConfigDrawerWide open={isPermisosOpen} onOpenChange={setIsPermisosOpen} />
       <AiAgentDrawer open={aiDrawerOpen} onOpenChange={setAiDrawerOpen} context="dashboard" />
     </>
   );

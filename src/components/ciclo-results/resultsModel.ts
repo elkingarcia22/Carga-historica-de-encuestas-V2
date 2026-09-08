@@ -24,6 +24,7 @@ import {
   average,
   complianceForValue,
   elapsedShare,
+  estadosForStatus,
   hasReportedProgress,
   objectiveCompliance,
   personCompliance,
@@ -32,6 +33,7 @@ import {
   resolveNivel,
   roundPercent,
   type CicloDetailData,
+  type ObjectiveInactivation,
   type ObjectiveUpdate,
   type TrackedObjective,
   type TrackedPerson,
@@ -41,7 +43,15 @@ import type {
   NivelDesempenoConfig,
   ObjetivoEstadoConfig,
 } from "@/components/objetivos/objetivosConfigStore";
-import { countLifecycles, lifecycleOf, type ObjectiveLifecycle } from "./objectiveLifecycle";
+import {
+  APPROVAL_ORDER,
+  LIFECYCLE_META,
+  approvalStateOf,
+  countLifecycles,
+  lifecycleOf,
+  type ApprovalState,
+  type ObjectiveLifecycle,
+} from "./objectiveLifecycle";
 
 // ── Configuración ──────────────────────────────────────────────────────────
 
@@ -156,6 +166,8 @@ export interface ResultEntry {
   estado: ObjetivoEstadoConfig | null;
   lastUpdate: ObjectiveUpdate | null;
   commentCount: number;
+  /** Presente si este objetivo puntual está inactivo — ver `tracked.inactivation`. */
+  inactivation: ObjectiveInactivation | null;
 }
 
 export interface PersonResultRow {
@@ -270,19 +282,62 @@ export interface CicloResults {
   showsRisk: boolean;
   lifecycleCounts: Map<ObjectiveLifecycle, number>;
   nivelCounts: Map<string, number>;
+  /**
+   * Los niveles tal como están configurados, en su orden.
+   *
+   * Va aquí y no se rebusca desde las filas porque un nivel en el que no cayó
+   * nadie no aparece en ninguna fila —y es justo el que hay que poder
+   * nombrar—: sin esto, "Excelente: 0" no tendría de dónde sacar ni su nombre
+   * ni su color.
+   */
+  niveles: readonly NivelDesempenoConfig[];
+  /** Cuántos objetivos hay en cada tramo de la revisión del líder. */
+  approvalCounts: Map<ApprovalState, number>;
+  /**
+   * El reparto de los objetivos aprobados entre las bandas de cumplimiento
+   * configuradas. Solo cuenta los aprobados: uno que todavía espera el visto
+   * bueno saldría en "Por iniciar" por tener 0 %, y eso lo leería como
+   * "arrancó y no ha reportado", que es otra cosa. Los no aprobados están
+   * contados en `approvalCounts`, así que los dos repartos se complementan.
+   */
+  estadoCounts: Map<string, number>;
+  /**
+   * Las bandas que aplican al estado del ciclo, en orden de menor a mayor
+   * cumplimiento. Un ciclo abierto no usa "No cumplió" —todavía puede
+   * cumplir— y uno cerrado no usa "En progreso".
+   */
+  estados: readonly ObjetivoEstadoConfig[];
   estadoParticipanteCounts: Map<string, number>;
   riskCounts: Map<RiskLevel, number>;
   measureMix: readonly MeasureShare[];
+  /** Cuántos objetivos cuelgan de cada objetivo de empresa, más los sueltos. */
+  companyObjectiveMix: readonly CompanyObjectiveShare[];
   objectiveCount: number;
+  /** Los que pasaron la aprobación. Es la base de `estadoCounts`. */
+  committedCount: number;
   /** Objetivos con al menos un comentario en su historial. */
   commentedCount: number;
   peopleCount: number;
   peopleWithProgress: number;
   groupCount: number;
+  /** Cuánto dura el ciclo de punta a punta y cuánto lleva corrido. */
+  totalDays: number;
+  elapsedDays: number;
   timeline: readonly TimelinePoint[];
   /** Gente de las áreas del ciclo que se quedó sin ningún objetivo. */
   withoutObjectives: readonly Collaborator[];
 }
+
+export interface CompanyObjectiveShare {
+  id: string;
+  label: string;
+  count: number;
+}
+
+/** El cajón de los objetivos que no se alinearon a ninguno de la empresa. Es
+ *  una opción de filtro más —"¿cuántos van sueltos?" es una pregunta real—,
+ *  así que necesita un id propio en vez de quedar fuera del eje. */
+export const UNALIGNED_OBJECTIVE = "__sin-alinear__";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -323,6 +378,17 @@ export function buildCicloResults(
   const daysLeft = Math.ceil(
     (new Date(`${data.endDate}T23:59:59`).getTime() - now.getTime()) / DAY_MS
   );
+  // El calendario en días, no en porcentaje: "168 días restantes" se entiende
+  // sin traducir nada, y "11 % corrido" no dice si eso es una semana o un mes.
+  const totalDays = Math.max(
+    1,
+    Math.round(
+      (new Date(`${data.endDate}T23:59:59`).getTime() -
+        new Date(`${data.startDate}T00:00:00`).getTime()) /
+        DAY_MS
+    )
+  );
+  const elapsedDays = Math.min(totalDays, Math.max(0, totalDays - Math.max(0, daysLeft)));
   // El eje con el que se mide el riesgo. En un ciclo cerrado no hay ninguno.
   const showsRisk = data.status !== "closed";
   const riskElapsed = showsRisk ? elapsed : -1;
@@ -343,6 +409,7 @@ export function buildCicloResults(
         estado: resolveEstado(config.estados, percent, data.status),
         lastUpdate: tracked.updates.length === 0 ? null : tracked.updates[tracked.updates.length - 1],
         commentCount: tracked.updates.filter((update) => update.comment.trim() !== "").length,
+        inactivation: tracked.inactivation ?? null,
       };
       entries.push(entry);
       return entry;
@@ -400,12 +467,57 @@ export function buildCicloResults(
   const riskCounts = new Map<RiskLevel, number>(RISK_ORDER.map((level) => [level, 0]));
   scored.forEach((row) => riskCounts.set(row.risk, (riskCounts.get(row.risk) ?? 0) + 1));
 
+  const approvalCounts = new Map<ApprovalState, number>(APPROVAL_ORDER.map((id) => [id, 0]));
+  scoredEntries.forEach((entry) => {
+    const state = approvalStateOf(entry.lifecycle);
+    approvalCounts.set(state, (approvalCounts.get(state) ?? 0) + 1);
+  });
+
+  // Las bandas que aplican a este ciclo, de menor a mayor cumplimiento. El
+  // orden con el que están escritas en la configuración es el de edición
+  // ("Por iniciar" primero por ser el default), no el de lectura.
+  const estados = [...estadosForStatus(config.estados, data.status)].sort(
+    (a, b) => a.minPorcentaje - b.minPorcentaje || a.maxPorcentaje - b.maxPorcentaje
+  );
+  const estadoCounts = new Map<string, number>(estados.map((estado) => [estado.id, 0]));
+  const committedEntries = scoredEntries.filter(
+    (entry) => LIFECYCLE_META[entry.lifecycle].isCommitted
+  );
+  committedEntries.forEach((entry) => {
+    if (!entry.estado) return;
+    estadoCounts.set(entry.estado.id, (estadoCounts.get(entry.estado.id) ?? 0) + 1);
+  });
+
+  const alignedCounts = new Map<string, number>(
+    data.companyObjectives.map((objective) => [objective.id, 0])
+  );
+  let unaligned = 0;
+  scoredEntries.forEach((entry) => {
+    const alignedTo = entry.objective.alignedTo;
+    if (alignedTo && alignedCounts.has(alignedTo)) {
+      alignedCounts.set(alignedTo, (alignedCounts.get(alignedTo) ?? 0) + 1);
+    } else {
+      unaligned += 1;
+    }
+  });
+  const companyObjectiveMix: CompanyObjectiveShare[] = [
+    ...data.companyObjectives.map((objective) => ({
+      id: objective.id,
+      label: objective.title,
+      count: alignedCounts.get(objective.id) ?? 0,
+    })),
+    { id: UNALIGNED_OBJECTIVE, label: "Sin objetivo de empresa", count: unaligned },
+  ];
+
+  // Las cuatro medidas siempre, aunque alguna vaya en cero: "ningún objetivo
+  // se mide en dinero" es una lectura sobre cómo se escribió el ciclo, y una
+  // lista que se encoge deja al lector sin saber cuántas medidas existen.
   const measureMix: MeasureShare[] = MEASURE_ORDER.map((measure) => ({
     measure,
     label: MEASURE_META[measure].label,
     symbol: MEASURE_META[measure].symbol,
     count: scoredEntries.filter((entry) => entry.objective.measure === measure).length,
-  })).filter((share) => share.count > 0);
+  }));
 
   /*
    * Quién se quedó sin objetivos.
@@ -445,16 +557,24 @@ export function buildCicloResults(
     showsRisk,
     lifecycleCounts: countLifecycles(scoredEntries.map((entry) => entry.lifecycle)),
     nivelCounts,
+    niveles: config.niveles,
+    approvalCounts,
+    estadoCounts,
+    estados,
     estadoParticipanteCounts,
     riskCounts,
     measureMix,
+    companyObjectiveMix,
     objectiveCount: scoredEntries.length,
+    committedCount: committedEntries.length,
     commentedCount: scoredEntries.filter((entry) => entry.commentCount > 0).length,
     peopleCount: rows.length,
     peopleWithProgress: scored.filter((row) => row.reportedCount > 0).length,
     groupCount: new Set(
       data.people.map((person) => person.groupId).filter((id): id is string => id !== null)
     ).size,
+    totalDays,
+    elapsedDays,
     timeline: buildTimeline(data, rows, config, now),
     withoutObjectives,
   };

@@ -84,7 +84,7 @@ export function ComplianceSimulator({
           allowNegative: allowNegativeResults,
         });
   const roundedPercent = result === null ? null : round1(result.percent);
-  // A qué estado de "Estados y rangos" pertenece este porcentaje — la
+  // A qué estado de "Estados de los objetivos" pertenece este porcentaje — la
   // pregunta que el paso 6 está aquí para contestar, no solo el número.
   const matchedEstado =
     roundedPercent === null ? null : findEstadoForPercent(estados, roundedPercent);

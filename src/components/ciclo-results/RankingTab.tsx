@@ -11,7 +11,6 @@ import { riskFor, type CicloResults, type PersonResultRow, type ResultsConfig } 
 import { SearchBox } from "./tableBridge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ResultsDetailCard } from "./ResultsDetailCard";
-import { ResultsFilterChips, ResultsFilterControls } from "./ResultsFilterBar";
 import type { ResultsFiltersState } from "./useResultsFilters";
 
 /**
@@ -71,7 +70,6 @@ export function RankingTab({
   results,
   rows,
   config,
-  filters,
   axis,
   onAxisChange,
   onOpenPerson,
@@ -138,7 +136,6 @@ export function RankingTab({
         </TabsList>
       </Tabs>
       <SearchBox value={search} onChange={setSearch} placeholder={`Buscar ${AXIS_NOUN[axis]}…`} />
-      <ResultsFilterControls results={results} state={filters} />
     </>
   );
 
@@ -147,7 +144,6 @@ export function RankingTab({
       title={`Ranking por ${AXIS_NOUN[axis]}`}
       count={visible.length}
       controls={controls}
-      chips={<ResultsFilterChips results={results} state={filters} />}
     >
       {ranking.length === 0 ? (
         <div className="rounded-xl border border-border/60 p-8">

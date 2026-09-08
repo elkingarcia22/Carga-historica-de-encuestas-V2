@@ -72,11 +72,28 @@ export function complianceForValue(
   return roundPercent(result.percent);
 }
 
-/** Avance ponderado de una persona: Σ peso × cumplimiento. */
+/** Los objetivos de una persona que sí cuentan: todos menos los inactivados. */
+export const activeObjectives = (person: TrackedPerson): readonly TrackedObjective[] =>
+  person.objectives.filter((tracked) => !tracked.inactivation);
+
+/**
+ * Avance ponderado de una persona: Σ peso × cumplimiento, solo sobre sus
+ * objetivos activos.
+ *
+ * Se divide por el peso de esos mismos objetivos —no por 100 fijo— para que
+ * inactivar uno redistribuya su peso entre los que quedan en vez de restarle
+ * puntos al total: si alguien tenía cinco objetivos al 20 % de peso cada uno y
+ * cumplió cuatro al 100 %, inactivar el quinto (el que iba en 0 %) lo deja en
+ * 100 %, no en 80 %. Cuando nadie está inactivado el peso activo ya suma 100,
+ * así que el resultado no cambia.
+ */
 export function personCompliance(person: TrackedPerson, allowNegative: boolean): number {
-  const total = person.objectives.reduce(
+  const active = activeObjectives(person);
+  const activeWeight = active.reduce((sum, tracked) => sum + tracked.objective.weight, 0);
+  if (activeWeight === 0) return 0;
+  const total = active.reduce(
     (sum, tracked) =>
-      sum + (tracked.objective.weight / 100) * objectiveCompliance(tracked, allowNegative),
+      sum + (tracked.objective.weight / activeWeight) * objectiveCompliance(tracked, allowNegative),
     0
   );
   return roundPercent(total);

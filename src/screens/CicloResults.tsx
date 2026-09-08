@@ -2,6 +2,7 @@ import * as React from "react";
 import { toast } from "sonner";
 import { BarChart3, ListTree, Sparkles, Trophy, Users } from "lucide-react";
 import { ShellRailSlot } from "@/components/app-shell";
+import { CURRENT_USER } from "@/components/app-shell/appShellData";
 import { UbitsTabs, type TabItem } from "@/components/navigation";
 import { useObjetivosConfig } from "@/components/objetivos/objetivosConfigStore";
 import {
@@ -10,6 +11,7 @@ import {
   buildCicloDetail,
   buildGroupRows,
   buildPersonRows,
+  objectiveCompliance,
   summarize,
   useCicloDownloadCenter,
   type CicloListRow,
@@ -23,9 +25,11 @@ import {
   PendingDrawer,
   PersonResultSheet,
   RankingTab,
+  ResultsGlobalFilters,
   ResumenTab,
   buildCicloResults,
   filterResults,
+  narrowResults,
   useResultsFilters,
   type CumplimientoView,
   type PendingKind,
@@ -59,8 +63,37 @@ const TABS: readonly TabItem[] = [
 ];
 
 export function CicloResults({ ciclo }: { ciclo: CicloListRow }) {
-  const data = React.useMemo(() => buildCicloDetail(ciclo), [ciclo]);
+  // Estado, no memo: inactivar un objetivo edita esta copia in-memoria. La
+  // pantalla monta de cero con `key={ciclo.id}` en el dashboard, así que el
+  // inicializador perezoso no necesita resincronizarse si `ciclo` cambia.
+  const [data, setData] = React.useState(() => buildCicloDetail(ciclo));
   const config = useObjetivosConfig();
+
+  const toggleObjectiveInactivation = React.useCallback((personId: string, objectiveId: string) => {
+    setData((current) => ({
+      ...current,
+      people: current.people.map((person) => {
+        if (person.id !== personId) return person;
+        return {
+          ...person,
+          objectives: person.objectives.map((tracked) => {
+            if (tracked.objective.id !== objectiveId) return tracked;
+            if (tracked.inactivation) {
+              return { ...tracked, inactivation: null };
+            }
+            return {
+              ...tracked,
+              inactivation: {
+                date: new Date().toISOString(),
+                authorName: CURRENT_USER.name,
+                percentAtInactivation: objectiveCompliance(tracked, config.allowNegativeResults),
+              },
+            };
+          }),
+        };
+      }),
+    }));
+  }, [config.allowNegativeResults]);
 
   const resultsConfig = React.useMemo(
     () => ({
@@ -88,6 +121,17 @@ export function CicloResults({ ciclo }: { ciclo: CicloListRow }) {
 
   const filters = useResultsFilters();
   const filtered = React.useMemo(() => filterResults(results, filters.filters), [results, filters.filters]);
+
+  /*
+   * El resumen se lee sobre lo que dejaron los filtros; la barra de filtros y
+   * la barra flotante, sobre el ciclo completo. Es a propósito: si las
+   * opciones del popover salieran de lo ya filtrado, marcar "Colombia" borraría
+   * los otros cinco países de la lista y no habría forma de cambiar de idea.
+   */
+  const viewResults = React.useMemo(
+    () => narrowResults(results, filtered, filters.filters, resultsConfig),
+    [results, filtered, filters.filters, resultsConfig]
+  );
 
   const openPerson = React.useMemo(
     () => results.rows.find((row) => row.person.id === openPersonId) ?? null,
@@ -149,15 +193,21 @@ export function CicloResults({ ciclo }: { ciclo: CicloListRow }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="shrink-0 pb-2">
+      {/* Las pestañas y los filtros comparten renglón: los filtros valen para
+          las cinco por igual —ese es el punto de tenerlos aquí y no dentro de
+          cada tarjeta— y separarlos en dos franjas costaba alto de pantalla
+          sin decir nada nuevo. Cuando hay fichas puestas bajan a su propia
+          línea, que es cuando de verdad hacen falta. */}
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 pb-2">
         <UbitsTabs
           tabs={[...TABS]}
           activeTabId={tab}
           onTabChange={(id) => changeTab(id as ResultsTab)}
           variant="page"
           fitContent
-          className="mb-0"
+          className="mb-0 w-auto"
         />
+        <ResultsGlobalFilters results={results} state={filters} />
       </div>
 
       {/* El mismo contenedor de scroll que la vista de seguimiento —y un
@@ -173,20 +223,15 @@ export function CicloResults({ ciclo }: { ciclo: CicloListRow }) {
         <div key={tab} className="cascade-enter flex min-h-0 flex-col gap-4">
           {tab === "resumen" && (
             <ResumenTab
-              results={results}
+              results={viewResults}
               filters={filters}
               onOpenPending={setPending}
-              onSuggestMetric={() =>
-                toast("Sugerir una métrica", {
-                  description: "El formulario de sugerencias llega en la siguiente iteración.",
-                })
-              }
             />
           )}
 
           {tab === "cumplimiento" && (
             <CumplimientoTab
-              results={results}
+              results={viewResults}
               entries={filtered.entries}
               config={resultsConfig}
               filters={filters}
@@ -202,7 +247,7 @@ export function CicloResults({ ciclo }: { ciclo: CicloListRow }) {
 
           {tab === "colaboradores" && (
             <ColaboradoresTab
-              results={results}
+              results={viewResults}
               rows={filtered.rows}
               filters={filters}
               showsRisk={results.showsRisk}
@@ -214,7 +259,7 @@ export function CicloResults({ ciclo }: { ciclo: CicloListRow }) {
 
           {tab === "ranking" && (
             <RankingTab
-              results={results}
+              results={viewResults}
               rows={filtered.rows}
               config={resultsConfig}
               filters={filters}
@@ -226,7 +271,7 @@ export function CicloResults({ ciclo }: { ciclo: CicloListRow }) {
 
           {tab === "ia" && (
             <AnalisisIaTab
-              results={results}
+              results={viewResults}
               rows={filtered.rows}
               entries={filtered.entries}
               filters={filters}
@@ -262,6 +307,11 @@ export function CicloResults({ ciclo }: { ciclo: CicloListRow }) {
         onOpenChange={(open) => {
           if (!open) setOpenPersonId(null);
         }}
+        onToggleInactivation={
+          openPersonId
+            ? (objectiveId) => toggleObjectiveInactivation(openPersonId, objectiveId)
+            : undefined
+        }
       />
 
       {pending && (

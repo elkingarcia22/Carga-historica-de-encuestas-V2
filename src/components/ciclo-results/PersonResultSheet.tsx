@@ -1,6 +1,17 @@
-import { CalendarClock, MessageSquareText, Paperclip, Target, UserRound } from "lucide-react";
+import * as React from "react";
+import {
+  Ban,
+  CalendarClock,
+  MessageSquareText,
+  Paperclip,
+  RotateCcw,
+  Target,
+  UserRound,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { DrawerShell } from "@/components/overlays";
+import { CURRENT_USER } from "@/components/app-shell/appShellData";
+import { ConfirmDialog, DrawerShell } from "@/components/overlays";
+import { Button } from "@/components/ui/button";
 import {
   ComplianceBar,
   EstadoChip,
@@ -11,7 +22,7 @@ import {
   formatRelativeDate,
 } from "@/components/ciclo-detail";
 import { MEASURE_META } from "@/components/ciclo-builder";
-import { LifecycleChip, ParticipanteChip, RiskChip } from "./ResultsChips";
+import { InactiveChip, LifecycleChip, ParticipanteChip, RiskChip } from "./ResultsChips";
 import { LIFECYCLE_META } from "./objectiveLifecycle";
 import type { PersonResultRow, ResultEntry } from "./resultsModel";
 
@@ -31,11 +42,18 @@ export function PersonResultSheet({
   showsRisk,
   open,
   onOpenChange,
+  onToggleInactivation,
 }: {
   row: PersonResultRow | null;
   showsRisk: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * Inactiva o reactiva un objetivo puntual de esta persona. Opcional: sin
+   * ella (ninguna pantalla la pasa hoy salvo resultados) la tarjeta se ve
+   * igual pero sin el botón de acción.
+   */
+  onToggleInactivation?: (objectiveId: string) => void;
 }) {
   return (
     <DrawerShell
@@ -99,7 +117,16 @@ export function PersonResultSheet({
             </header>
 
             {row.entries.map((entry, index) => (
-              <ObjectiveCard key={entry.objective.id} entry={entry} numbering={index + 1} />
+              <ObjectiveCard
+                key={entry.objective.id}
+                entry={entry}
+                numbering={index + 1}
+                onToggleInactivation={
+                  onToggleInactivation
+                    ? () => onToggleInactivation(entry.objective.id)
+                    : undefined
+                }
+              />
             ))}
           </section>
         </div>
@@ -108,13 +135,28 @@ export function PersonResultSheet({
   );
 }
 
-function ObjectiveCard({ entry, numbering }: { entry: ResultEntry; numbering: number }) {
+function ObjectiveCard({
+  entry,
+  numbering,
+  onToggleInactivation,
+}: {
+  entry: ResultEntry;
+  numbering: number;
+  onToggleInactivation?: () => void;
+}) {
   const measure = entry.objective.measure ? MEASURE_META[entry.objective.measure] : null;
   const review = entry.tracked.review;
   const conversation = entry.tracked.updates.filter((update) => update.comment.trim() !== "");
+  const inactivation = entry.inactivation;
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
 
   return (
-    <article className="flex flex-col overflow-hidden rounded-2xl border border-border/60 bg-surface shadow-card">
+    <article
+      className={cn(
+        "flex flex-col overflow-hidden rounded-2xl border border-border/60 bg-surface shadow-card",
+        inactivation && "opacity-75"
+      )}
+    >
       <header className="flex items-start gap-3 border-b border-border/50 bg-muted/40 px-4 py-3.5">
         <span
           aria-hidden
@@ -146,8 +188,64 @@ function ObjectiveCard({ entry, numbering }: { entry: ResultEntry; numbering: nu
             )}
           </p>
         </div>
-        <LifecycleChip lifecycle={entry.lifecycle} size="sm" />
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
+          <LifecycleChip lifecycle={entry.lifecycle} size="sm" />
+          {inactivation && (
+            <InactiveChip
+              date={formatRelativeDate(inactivation.date)}
+              percentAtInactivation={inactivation.percentAtInactivation}
+              size="sm"
+            />
+          )}
+        </div>
+        {onToggleInactivation && (
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              size="xs"
+              onClick={() => setConfirmOpen(true)}
+              className="shrink-0"
+            >
+              {inactivation ? (
+                <>
+                  <RotateCcw />
+                  Reactivar
+                </>
+              ) : (
+                <>
+                  <Ban />
+                  Inactivar
+                </>
+              )}
+            </Button>
+            <ConfirmDialog
+              open={confirmOpen}
+              onOpenChange={setConfirmOpen}
+              title={inactivation ? "¿Reactivar este objetivo?" : "¿Inactivar este objetivo?"}
+              description={
+                inactivation
+                  ? "Vuelve a contar en el peso y en el promedio ponderado de esta persona."
+                  : `Deja de contar en el peso y en el promedio ponderado de esta persona. Su avance actual (${formatPercent(entry.percent)}) queda registrado.`
+              }
+              confirmLabel={inactivation ? "Reactivar" : "Inactivar"}
+              variant={inactivation ? "default" : "warning"}
+              onConfirm={() => {
+                onToggleInactivation();
+                setConfirmOpen(false);
+              }}
+            />
+          </>
+        )}
       </header>
+
+      {inactivation && (
+        <p className="border-b border-border/50 bg-surface-muted/70 px-4 py-2 text-[12px] text-text-secondary">
+          Inactivo desde {formatRelativeDate(inactivation.date)} por {inactivation.authorName}. No
+          cuenta en el peso ni en el promedio de esta persona, pero conserva el{" "}
+          {formatPercent(inactivation.percentAtInactivation)} que había alcanzado.
+        </p>
+      )}
 
       <div className="flex flex-col gap-3 px-4 py-3.5">
         <ComplianceBar percent={entry.percent} estado={entry.estado} />

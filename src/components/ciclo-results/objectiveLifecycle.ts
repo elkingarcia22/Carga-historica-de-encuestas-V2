@@ -1,7 +1,9 @@
 /**
  * El ciclo de vida de un objetivo.
  *
- * Es un eje distinto de los "Estados y rangos" que se configuran en el drawer.
+ * Es un eje distinto de las bandas de cumplimiento que se configuran en el
+ * drawer ("Estados de los objetivos"). Los cuatro primeros estados de esta
+ * máquina son los que ese drawer muestra quemados.
  * Aquellos son *bandas de resultado* —cuánto cumplió— y se leen sobre todo al
  * cierre; este es la máquina de estados por la que pasa un objetivo antes y
  * durante el ciclo, y no es configurable porque no es una opinión de la
@@ -155,6 +157,59 @@ export function lifecycleOf(
   if (approval === "ajustes") return "por-ajustar";
   if (!hasProgress) return "por-iniciar";
   return percent >= 100 ? "completado" : "en-progreso";
+}
+
+// ── El eje de la aprobación ────────────────────────────────────────────────
+
+/**
+ * El flujo del objetivo visto solo como "¿ya arrancó?".
+ *
+ * Es un corte del ciclo de vida, no un estado nuevo: las tres primeras etapas
+ * responden a la revisión del líder y las tres últimas al avance. Mezclarlas
+ * en un solo gráfico escondía la pregunta que de verdad bloquea el ciclo
+ * —cuántos objetivos siguen sin permiso para empezar— entre cinco tramos que
+ * hablan de otra cosa.
+ */
+export type ApprovalState = "aprobado" | "por-aprobar" | "denegado";
+
+export interface ApprovalMeta {
+  id: ApprovalState;
+  label: string;
+  description: string;
+  colorHex: string;
+}
+
+export const APPROVAL_ORDER: readonly ApprovalState[] = ["aprobado", "por-aprobar", "denegado"];
+
+export const APPROVAL_META: Readonly<Record<ApprovalState, ApprovalMeta>> = {
+  aprobado: {
+    id: "aprobado",
+    label: "Aprobados",
+    description: "Con el visto bueno del líder. Son los únicos que suman avance.",
+    colorHex: "#22C55E",
+  },
+  "por-aprobar": {
+    id: "por-aprobar",
+    label: "Por aprobar",
+    description: LIFECYCLE_META["por-aprobar"].description,
+    colorHex: LIFECYCLE_META["por-aprobar"].colorHex,
+  },
+  denegado: {
+    id: "denegado",
+    // "Denegado" es el nombre que le da la configuración de estados fijos;
+    // el ciclo de vida lo llama "Por ajustar" porque describe lo que le toca
+    // hacer a quien lo escribió. Aquí manda el nombre de la configuración.
+    label: "Denegados",
+    description: LIFECYCLE_META["por-ajustar"].description,
+    colorHex: LIFECYCLE_META["por-ajustar"].colorHex,
+  },
+};
+
+/** El tramo de aprobación al que pertenece una etapa del ciclo de vida. */
+export function approvalStateOf(lifecycle: ObjectiveLifecycle): ApprovalState {
+  if (lifecycle === "por-aprobar") return "por-aprobar";
+  if (lifecycle === "por-ajustar") return "denegado";
+  return "aprobado";
 }
 
 /** Cuenta por estado, siempre con las cinco llaves aunque alguna vaya en cero. */

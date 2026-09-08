@@ -20,7 +20,6 @@ import {
 import { HeaderCell, SearchBox, TablePager, usePagedSlice } from "./tableBridge";
 import { AvancePill, LifecycleBar, ParticipanteChip, RiskChip } from "./ResultsChips";
 import { ResultsDetailCard } from "./ResultsDetailCard";
-import { ResultsFilterChips, ResultsFilterControls } from "./ResultsFilterBar";
 import type { CicloResults, PersonResultRow } from "./resultsModel";
 import type { ResultsFiltersState } from "./useResultsFilters";
 
@@ -51,7 +50,6 @@ interface ColaboradoresTabProps {
 }
 
 export function ColaboradoresTab({
-  results,
   rows,
   filters,
   showsRisk,
@@ -114,7 +112,6 @@ export function ColaboradoresTab({
         onChange={filters.setSearch}
         placeholder="Buscar colaborador…"
       />
-      <ResultsFilterControls results={results} state={filters} />
     </>
   );
 
@@ -124,7 +121,6 @@ export function ColaboradoresTab({
         title="Detalle por colaborador"
         count={0}
         controls={controls}
-        chips={<ResultsFilterChips results={results} state={filters} />}
       >
         <div className="rounded-xl border border-border/60 p-8">
           <EmptyState
@@ -142,7 +138,6 @@ export function ColaboradoresTab({
       title="Detalle por colaborador"
       count={rows.length}
       controls={controls}
-      chips={<ResultsFilterChips results={results} state={filters} />}
     >
       <div className="overflow-x-auto rounded-xl border border-border/60">
         <Table className="min-w-[62rem]">

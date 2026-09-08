@@ -76,6 +76,21 @@ export interface ObjectiveReview {
   comment: string;
 }
 
+/**
+ * Que un objetivo puntual quedó fuera de juego: alguien lo inactivó a mitad
+ * de camino porque ya no aplica, sin que eso borre lo que llevaba.
+ *
+ * `percentAtInactivation` congela el cumplimiento del momento en que se
+ * inactivó — el número que se sigue mostrando en la ficha aunque el objetivo
+ * ya no sume en el peso ni en el promedio de la persona.
+ */
+export interface ObjectiveInactivation {
+  /** ISO con hora. */
+  date: string;
+  authorName: string;
+  percentAtInactivation: number;
+}
+
 /** Un objetivo tal como lo lleva *una* persona: la definición más su avance. */
 export interface TrackedObjective {
   objective: Objective;
@@ -90,6 +105,13 @@ export interface TrackedObjective {
    * flujo de aprobación existiera.
    */
   review?: ObjectiveReview;
+  /**
+   * Presente cuando este objetivo puntual está inactivo. A diferencia del
+   * estado de un participante —que saca a toda la persona de los
+   * resultados— esto excluye un solo objetivo: los demás de la persona
+   * siguen contando normal.
+   */
+  inactivation?: ObjectiveInactivation | null;
 }
 
 export interface TrackedPerson {

@@ -13,45 +13,83 @@
 
 import * as React from "react";
 import type { MeasureType } from "@/components/ciclo-builder";
-import type { ObjectiveLifecycle } from "./objectiveLifecycle";
-import type { CicloResults, PersonResultRow, ResultEntry, RiskLevel } from "./resultsModel";
+import { approvalStateOf, type ApprovalState, type ObjectiveLifecycle } from "./objectiveLifecycle";
+import {
+  UNALIGNED_OBJECTIVE,
+  type CicloResults,
+  type PersonResultRow,
+  type ResultEntry,
+  type RiskLevel,
+} from "./resultsModel";
 
 export interface ResultsFilters {
+  // ── Quién: lo que describe a la persona ──
   areas: ReadonlySet<string>;
   leaders: ReadonlySet<string>;
+  countries: ReadonlySet<string>;
+  ages: ReadonlySet<string>;
+  genders: ReadonlySet<string>;
+  customGroups: ReadonlySet<string>;
   groups: ReadonlySet<string>;
-  lifecycles: ReadonlySet<ObjectiveLifecycle>;
-  niveles: ReadonlySet<string>;
   estadosParticipante: ReadonlySet<string>;
+  niveles: ReadonlySet<string>;
   risks: ReadonlySet<RiskLevel>;
+  // ── Qué: lo que describe al objetivo ──
+  approvals: ReadonlySet<ApprovalState>;
+  lifecycles: ReadonlySet<ObjectiveLifecycle>;
+  estados: ReadonlySet<string>;
+  companyObjectives: ReadonlySet<string>;
   measures: ReadonlySet<MeasureType>;
   search: string;
 }
 
 export type FilterKey = Exclude<keyof ResultsFilters, "search">;
 
-export const NO_RESULTS_FILTERS: ResultsFilters = {
-  areas: new Set(),
-  leaders: new Set(),
-  groups: new Set(),
-  lifecycles: new Set(),
-  niveles: new Set(),
-  estadosParticipante: new Set(),
-  risks: new Set(),
-  measures: new Set(),
-  search: "",
+/**
+ * Qué describe cada filtro. El reparto no es cosmético: las personas se
+ * filtran por lo que las describe a ellas y los objetivos por lo suyo, así que
+ * `filterResults` necesita saber de qué lado cae cada llave, y la barra de
+ * filtros usa el mismo corte para separar "Demográficos" de "Del ciclo".
+ */
+export type FilterScope = "persona" | "objetivo";
+
+interface FilterMeta {
+  label: string;
+  scope: FilterScope;
+  /** Va en el popover de demográficos y no en el del ciclo. */
+  isDemographic?: boolean;
+}
+
+export const FILTER_META: Readonly<Record<FilterKey, FilterMeta>> = {
+  areas: { label: "Área", scope: "persona", isDemographic: true },
+  leaders: { label: "Líder", scope: "persona", isDemographic: true },
+  countries: { label: "País", scope: "persona", isDemographic: true },
+  ages: { label: "Edad", scope: "persona", isDemographic: true },
+  genders: { label: "Género", scope: "persona", isDemographic: true },
+  customGroups: { label: "Grupo personalizado", scope: "persona", isDemographic: true },
+  groups: { label: "Grupo del ciclo", scope: "persona" },
+  estadosParticipante: { label: "Estado del participante", scope: "persona" },
+  niveles: { label: "Nivel de desempeño", scope: "persona" },
+  risks: { label: "Riesgo", scope: "persona" },
+  approvals: { label: "Aprobación", scope: "objetivo" },
+  lifecycles: { label: "Etapa del objetivo", scope: "objetivo" },
+  estados: { label: "Estado de cumplimiento", scope: "objetivo" },
+  companyObjectives: { label: "Objetivo de empresa", scope: "objetivo" },
+  measures: { label: "Tipo de medida", scope: "objetivo" },
 };
 
-export const FILTER_LABELS: Readonly<Record<FilterKey, string>> = {
-  areas: "Área",
-  leaders: "Líder",
-  groups: "Grupo",
-  lifecycles: "Estado del objetivo",
-  niveles: "Nivel de desempeño",
-  estadosParticipante: "Estado del participante",
-  risks: "Riesgo",
-  measures: "Tipo de medida",
-};
+export const FILTER_LABELS: Readonly<Record<FilterKey, string>> = Object.fromEntries(
+  Object.entries(FILTER_META).map(([key, meta]) => [key, meta.label])
+) as Record<FilterKey, string>;
+
+/** Todas las llaves en vacío. Se arma desde `FILTER_META` para que agregar un
+ *  filtro nuevo sea una línea y no tres sitios que se olvidan de actualizar. */
+const emptySets = () =>
+  Object.fromEntries(
+    (Object.keys(FILTER_META) as FilterKey[]).map((key) => [key, new Set<string>()])
+  ) as unknown as Omit<ResultsFilters, "search">;
+
+export const NO_RESULTS_FILTERS: ResultsFilters = { ...emptySets(), search: "" };
 
 const FILTER_KEYS = Object.keys(FILTER_LABELS) as FilterKey[];
 
@@ -116,6 +154,7 @@ export function useResultsFilters(): ResultsFiltersState {
 /** Un set vacío no filtra nada: es "todos", no "ninguno". */
 const passes = <T,>(set: ReadonlySet<T>, value: T): boolean => set.size === 0 || set.has(value);
 
+
 const matchesSearch = (row: PersonResultRow, term: string): boolean => {
   if (term === "") return true;
   const haystack = [
@@ -154,6 +193,13 @@ export function filterResults(
     (row) =>
       passes(filters.areas, row.area) &&
       passes(filters.leaders, row.leader) &&
+      passes(filters.countries, row.collaborator.country) &&
+      passes(filters.ages, row.collaborator.age) &&
+      passes(filters.genders, row.collaborator.gender) &&
+      // Quien no está en ningún grupo hecho a mano no pasa ningún filtro de
+      // grupo personalizado: no tiene sentido que "Comité de innovación"
+      // arrastre a los 6.000 que no están en él.
+      passes(filters.customGroups, row.collaborator.customGroup ?? "") &&
       passes(filters.groups, row.groupLabel) &&
       passes(filters.niveles, row.nivel?.id ?? "") &&
       passes(filters.estadosParticipante, row.estadoParticipante?.id ?? "") &&
@@ -165,7 +211,10 @@ export function filterResults(
   const entries = results.entries.filter(
     (entry) =>
       keptIds.has(entry.personId) &&
+      passes(filters.approvals, approvalStateOf(entry.lifecycle)) &&
       passes(filters.lifecycles, entry.lifecycle) &&
+      passes(filters.estados, entry.estado?.id ?? "") &&
+      passes(filters.companyObjectives, entry.objective.alignedTo ?? UNALIGNED_OBJECTIVE) &&
       passes(filters.measures, (entry.objective.measure ?? "numeric") as MeasureType)
   );
 

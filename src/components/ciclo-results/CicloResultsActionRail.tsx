@@ -1,11 +1,13 @@
 import * as React from "react";
+import { toast } from "sonner";
 import {
+  Bell,
   BellRing,
   CalendarRange,
+  ChartColumnIncreasing,
   Download,
   Info,
   Scale,
-  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Target,
@@ -26,7 +28,9 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import { PopoverTitle } from "@/components/ui/popover";
 import { CICLO_PERIOD_LABELS } from "@/components/ciclo-builder";
 import { formatLongDate, formatPercent } from "@/components/ciclo-detail";
-import { ObjetivosConfigDrawer } from "@/components/objetivos/ObjetivosConfigDrawer";
+import { ObjetivosConfigDrawerWide } from "@/components/objetivos/ObjetivosConfigDrawerWide";
+import { CreateMetricDrawer } from "./CreateMetricDrawer";
+import { describeMetric } from "./metricDefinition";
 import type { CicloResults } from "./resultsModel";
 
 /**
@@ -64,6 +68,7 @@ export function CicloResultsActionRail({
   onCreateObjectives,
 }: CicloResultsActionRailProps) {
   const [isConfigOpen, setIsConfigOpen] = React.useState(false);
+  const [isMetricOpen, setIsMetricOpen] = React.useState(false);
   const mode = selectedCount === 0 ? "none" : "selected";
   const animKey = useContextChangeKey(mode);
 
@@ -96,7 +101,7 @@ export function CicloResultsActionRail({
   return (
     <>
       <ActionRailShell
-        keepOpen={selectedCount > 0 || isConfigOpen}
+        keepOpen={selectedCount > 0 || isConfigOpen || isMetricOpen}
         contextual={contextual}
         persistent={
           selectedCount === 0 ? (
@@ -107,7 +112,7 @@ export function CicloResultsActionRail({
               {blockedCount > 0 && (
                 <>
                   <RailButton
-                    icon={<ShieldCheck className="h-[20px] w-[20px]" strokeWidth={2} />}
+                    icon={<Bell className="h-[20px] w-[20px]" strokeWidth={2} />}
                     label={`Recordar aprobación · ${blockedCount} ${
                       blockedCount === 1 ? "objetivo" : "objetivos"
                     }`}
@@ -116,6 +121,14 @@ export function CicloResultsActionRail({
                   <RailDivider />
                 </>
               )}
+              {/* Justo a la izquierda de la configuración: las dos cambian
+                  qué se ve en el reporte en vez de actuar sobre el ciclo, y
+                  quedan juntas por eso. */}
+              <RailButton
+                icon={<ChartColumnIncreasing className="h-[20px] w-[20px]" strokeWidth={2} />}
+                label="Crear una métrica para este reporte"
+                onClick={() => setIsMetricOpen(true)}
+              />
               <RailButton
                 icon={<SlidersHorizontal className="h-[20px] w-[20px]" strokeWidth={2} />}
                 label="Configuración de estados, niveles y participantes"
@@ -138,10 +151,20 @@ export function CicloResultsActionRail({
           ) : null
         }
       />
-      <ObjetivosConfigDrawer
+      <ObjetivosConfigDrawerWide
         open={isConfigOpen}
         onOpenChange={setIsConfigOpen}
         initialTab="estados"
+      />
+      <CreateMetricDrawer
+        open={isMetricOpen}
+        onOpenChange={setIsMetricOpen}
+        cicloName={results.data.name}
+        onSubmit={(metric) =>
+          toast.success("Métrica creada", {
+            description: `"${metric.title.trim()}" — ${describeMetric(metric)}.`,
+          })
+        }
       />
     </>
   );

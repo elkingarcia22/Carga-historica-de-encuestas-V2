@@ -5,17 +5,8 @@ import { AdminShell } from "@/components/app-shell";
 import { ObjetivosDashboard } from "@/screens/ObjetivosDashboard";
 import { CicloBuilder } from "@/screens/CicloBuilder";
 import { UbitsTabs } from "@/components/navigation";
-import { StatusBadge, type StatusState } from "@/components/status-badge";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { toast } from "sonner";
 import { parseSpanishDate, type CicloListRow } from "@/components/ciclo-detail";
-import { ArrowLeft, ChevronDown, Target, UserX } from "lucide-react";
+import { ArrowLeft, Target, UserX } from "lucide-react";
 import { HomePulseStrip, TemplatesStrip, AlertsRow } from "@/components/home";
 import {
   CicloTemplatesDrawer,
@@ -62,31 +53,18 @@ function cicloRowToDraft(
 
 type HomeTab = "ciclos" | "usuarios";
 
-function cicloStatusState(estado: string): StatusState {
-  if (estado === "Finalizado") return "success";
-  if (estado === "En curso") return "pending";
-  return "neutral";
-}
-
-/** Same states as `cicloStatusState`, mapped onto the breadcrumb badge's own tone scale. */
+/** El estado del ciclo en el tono que usa la insignia de la miga de pan. */
 function cicloBadgeTone(estado: string): "positive" | "neutral" | "warning" {
   if (estado === "Finalizado") return "positive";
   if (estado === "En curso") return "warning";
   return "neutral";
 }
 
-const CICLO_ACTIONS = [
-  "Editar ciclo",
-  "Agregar usuarios al ciclo",
-  "Duplicar ciclo",
-  "Exportar avance",
-] as const;
-
 function App() {
   const [homeTab, setHomeTab] = React.useState<HomeTab>("ciclos");
-  const [selectedCiclo, setSelectedCiclo] = React.useState<CicloListRow | null>(null);
-  // Resultados y seguimiento son dos pantallas, no dos pestañas: nunca están
-  // abiertas a la vez, así que abrir una cierra la otra.
+  // Un ciclo se abre en una sola pantalla: sus resultados. El seguimiento era
+  // una segunda lectura del mismo ciclo —con su propia cabecera, sus tablas y
+  // su barra— y obligaba a elegir por cuál entrar; ya no existe.
   const [resultsCiclo, setResultsCiclo] = React.useState<CicloListRow | null>(null);
   const [ciclos, setCiclos] = React.useState<readonly CicloRow[]>(CICLOS);
   // The creation wizard takes over the whole content area — it owns its own
@@ -241,8 +219,8 @@ function App() {
             : { parent: "Desempeño", label: "Objetivos" }
         }
         // The list scrolls as one page — title, shelf, pulse, alerts and the
-        // table below them. A ciclo's tracking view owns its own scroll.
-        scrollContent={selectedCiclo === null && resultsCiclo === null}
+        // table below them. A ciclo's results view owns its own scroll.
+        scrollContent={resultsCiclo === null}
         showFooter={true}
         onNavigateHome={goHome}
       >
@@ -261,57 +239,6 @@ function App() {
                   Resultados del ciclo
                 </h1>
               </div>
-              <button
-                onClick={() => {
-                  setResultsCiclo(null);
-                  setSelectedCiclo(resultsCiclo);
-                }}
-                className="flex h-9 shrink-0 items-center gap-2 rounded-lg border border-border/70 bg-surface px-4 text-[13px] font-medium text-text-primary transition-colors hover:bg-surface-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-              >
-                Ir al seguimiento
-              </button>
-            </div>
-          ) : selectedCiclo ? (
-            <div className="flex items-center justify-between mb-4 shrink-0">
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setSelectedCiclo(null)}
-                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-border/70 bg-surface transition-colors hover:bg-surface-muted focus:outline-none"
-                >
-                  <ArrowLeft className="w-4 h-4 text-text-primary" />
-                </button>
-                <h1 className="text-[20px] font-bold text-text-primary">{selectedCiclo.nombre}</h1>
-                <StatusBadge
-                  state={cicloStatusState(selectedCiclo.estado)}
-                  labels={{ [cicloStatusState(selectedCiclo.estado)]: selectedCiclo.estado }}
-                />
-              </div>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button className="flex h-9 items-center gap-2 rounded-lg border border-border/70 bg-surface px-4 text-[13px] font-medium text-text-primary transition-colors hover:bg-surface-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
-                    Acciones del ciclo
-                    <ChevronDown className="size-3.5" strokeWidth={2} />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56 p-1 rounded-xl shadow-lg border-border/50">
-                  {CICLO_ACTIONS.map((action) => (
-                    <DropdownMenuItem
-                      key={action}
-                      onClick={() => toast(action, { description: "Disponible próximamente en este prototipo." })}
-                      className="text-[13px] gap-2 p-2 rounded-lg cursor-pointer text-text-secondary hover:text-text-primary hover:bg-surface-muted"
-                    >
-                      {action}
-                    </DropdownMenuItem>
-                  ))}
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={() => toast("Cerrar ciclo", { description: "Disponible próximamente en este prototipo." })}
-                    className="text-[13px] gap-2 p-2 rounded-lg cursor-pointer text-status-negative hover:text-status-negative hover:bg-status-negative/10"
-                  >
-                    {selectedCiclo.estado === "Finalizado" ? "Eliminar ciclo" : "Cerrar ciclo"}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
             </div>
           ) : (
             <>
@@ -371,20 +298,15 @@ function App() {
               so this wrapper must not add the CSS `.cascade-enter` on top —
               two staggered reveals over the same rows read as a stutter).
               `contents` keeps it a layout passthrough in the column. */}
-          <div key={resultsCiclo ? "resultados" : selectedCiclo ? "detalle" : homeTab} className="contents">
+          <div key={resultsCiclo ? "resultados" : homeTab} className="contents">
             <ObjetivosDashboard
               activeTab={homeTab}
               ciclos={ciclos}
               onCiclosChange={setCiclos}
               filters={listFilters}
               onFiltersChange={setListFilters}
-              selectedCiclo={selectedCiclo}
-              onSelectCiclo={setSelectedCiclo}
               resultsCiclo={resultsCiclo}
-              onViewResults={(ciclo) => {
-                setSelectedCiclo(null);
-                setResultsCiclo(ciclo);
-              }}
+              onViewResults={setResultsCiclo}
               onCreateCiclo={startBlank}
               onAddUsersToCiclo={startEditParticipants}
               onEditCiclo={startEditGeneral}

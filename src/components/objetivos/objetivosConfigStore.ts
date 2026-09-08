@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 
 /**
- * La configuración de "Estados y rangos" del módulo de objetivos, compartida
+ * La configuración de "Estados de los objetivos" del módulo, compartida
  * entre el drawer de ajustes (donde se edita) y cualquier lugar que necesite
  * saber qué estado le corresponde a un porcentaje de cumplimiento — como el
  * simulador del paso "¿Cómo se va a calcular el avance?".
@@ -29,6 +29,11 @@ export interface ObjetivoEstadoConfig {
   colorHex: string;
   descripcion: string;
   isDefault?: boolean;
+  /**
+   * El estado lo fija el flujo del objetivo, no la empresa: se sigue usando
+   * para resolver un avance, pero no se edita ni se elimina desde el drawer.
+   */
+  locked?: boolean;
 }
 
 export const DEFAULT_ESTADOS_OBJETIVOS: ObjetivoEstadoConfig[] = [
@@ -39,8 +44,9 @@ export const DEFAULT_ESTADOS_OBJETIVOS: ObjetivoEstadoConfig[] = [
     maxPorcentaje: 0,
     variant: "neutral",
     colorHex: "#CBD5E1",
-    descripcion: "El objetivo ha sido creado pero aún no reporta avances (0%).",
+    descripcion: "Aprobado, pero todavía sin ningún avance reportado (0 %).",
     isDefault: true,
+    locked: true,
   },
   {
     id: "resto",
@@ -68,7 +74,10 @@ export const DEFAULT_ESTADOS_OBJETIVOS: ObjetivoEstadoConfig[] = [
     minPorcentaje: 1,
     maxPorcentaje: 69,
     variant: "warning",
-    colorHex: "#FDBA74",
+    // Un naranja distinto del de "Denegado" (#FDBA74): comparten familia de
+    // color pero no pueden ser el mismo hex, porque ese es el que queda
+    // reservado para el estado fijo.
+    colorHex: "#F97316",
     descripcion: "El objetivo no alcanzó la meta mínima al cierre.",
     isDefault: true,
   },
@@ -79,8 +88,9 @@ export const DEFAULT_ESTADOS_OBJETIVOS: ObjetivoEstadoConfig[] = [
     maxPorcentaje: 69,
     variant: "warning",
     colorHex: "#FCD34D",
-    descripcion: "El objetivo tiene avances registrados pero está por debajo del umbral esperado.",
+    descripcion: "Tiene avance reportado y todavía no llega a la meta.",
     isDefault: true,
+    locked: true,
   },
   {
     id: "cumplio-parcialmente",
@@ -114,6 +124,88 @@ export const DEFAULT_ESTADOS_OBJETIVOS: ObjetivoEstadoConfig[] = [
   },
 ];
 
+/**
+ * Un estado fijo del objetivo: los cuatro que no son una opinión de la empresa
+ * sino el flujo mismo por el que pasa un objetivo — se envía, el líder lo
+ * aprueba o lo deniega, arranca y avanza.
+ *
+ * Van quemados a propósito. "Por aprobar" y "Denegado" describen la revisión
+ * del líder, y "Por iniciar" y "En progreso" el arranque del avance: su
+ * significado es absoluto y el módulo lo da por cierto en todas partes
+ * (aprobaciones pendientes, cuentas del resumen, cálculo del avance), así que
+ * renombrarlos, moverles el rango o borrarlos rompería esa lectura. Lo que sí
+ * se configura son las bandas de resultado — cuánto cumplió — más abajo.
+ */
+export interface EstadoFijoObjetivo {
+  id: string;
+  nombre: string;
+  colorHex: string;
+  descripcion: string;
+  /** El rango de avance que le corresponde, o null si no depende de un rango. */
+  rango: { min: number; max: number } | null;
+  /**
+   * Qué decir en vez del rango cuando `rango` es null. Por defecto es "Antes
+   * de arrancar" —el caso de "Por aprobar" y "Denegado"—, pero "Inactivo"
+   * también carece de rango sin ser un estado previo al arranque: puede pasar
+   * en cualquier punto del avance.
+   */
+  rangoLabel?: string;
+}
+
+/** Los dos estados de la revisión del líder, previos a que el objetivo arranque. */
+const ESTADOS_FIJOS_APROBACION: readonly EstadoFijoObjetivo[] = [
+  {
+    id: "por-aprobar",
+    nombre: "Por aprobar",
+    colorHex: "#A78BFA",
+    descripcion: "Escrito y enviado. Espera el visto bueno del líder para poder arrancar.",
+    rango: null,
+  },
+  {
+    id: "denegado",
+    nombre: "Denegado",
+    colorHex: "#FDBA74",
+    descripcion: "El líder pidió cambios. Vuelve a quien lo escribió y no arranca hasta reenviarlo.",
+    rango: null,
+  },
+];
+
+/**
+ * El objetivo dejó de estar en juego porque alguien lo inactivó a mitad de
+ * camino, no porque el flujo lo haya movido de etapa. Por eso no tiene rango
+ * como los demás: puede pasar en cualquier punto del avance, y lo que importa
+ * no es cuánto llevaba sino que ya no cuenta.
+ */
+const ESTADOS_FIJOS_INACTIVACION: readonly EstadoFijoObjetivo[] = [
+  {
+    id: "inactivo",
+    nombre: "Inactivo",
+    colorHex: "#94A3B8",
+    descripcion:
+      "Se inactivó a mitad de camino y ya no cuenta en el peso ni en el promedio de la persona, pero conserva el avance que había alcanzado.",
+    rango: null,
+    rangoLabel: "En cualquier momento",
+  },
+];
+
+/**
+ * Los cinco estados fijos como los ve el drawer. Los dos que sí tienen rango
+ * salen de `DEFAULT_ESTADOS_OBJETIVOS` —donde viven porque el cálculo del
+ * avance los necesita— para no tener su nombre, color y rango escritos dos
+ * veces y que se separen con el primer cambio.
+ */
+export const ESTADOS_FIJOS_OBJETIVO: readonly EstadoFijoObjetivo[] = [
+  ...ESTADOS_FIJOS_APROBACION,
+  ...DEFAULT_ESTADOS_OBJETIVOS.filter((estado) => estado.locked).map((estado) => ({
+    id: estado.id,
+    nombre: estado.nombre,
+    colorHex: estado.colorHex,
+    descripcion: estado.descripcion,
+    rango: { min: estado.minPorcentaje, max: estado.maxPorcentaje },
+  })),
+  ...ESTADOS_FIJOS_INACTIVACION,
+];
+
 export interface EstadoBadgeConfig {
   bg: string;
   text: string;
@@ -124,7 +216,7 @@ export interface EstadoBadgeConfig {
 }
 
 /**
- * Los colores de "Estados y rangos" (`colorHex`) son tonos pastel pensados
+ * Los colores de "Estados de los objetivos" (`colorHex`) son tonos pastel pensados
  * para la barra de distribución, no para texto: usarlos tal cual como color
  * de letra sobre su propio fondo tintado da muy poco contraste (el verde
  * pastel de "Cumplió" o el gris de "Por iniciar" son casi ilegibles). Esta
@@ -224,7 +316,7 @@ export function getEstadoBadgeConfig(est: ObjetivoEstadoConfig): EstadoBadgeConf
   };
 }
 
-export const DEFAULT_ALLOW_NEGATIVE_RESULTS = true;
+export const DEFAULT_ALLOW_NEGATIVE_RESULTS = false;
 
 /**
  * Un nivel de desempeño: la calificación que recibe una persona según su
@@ -245,6 +337,42 @@ export const DEFAULT_NIVELES_DESEMPENO: NivelDesempenoConfig[] = [
   { id: "nivel-2", nombre: "Bueno", minPorcentaje: 34, maxPorcentaje: 66, colorHex: "#FCD34D" },
   { id: "nivel-3", nombre: "Excelente", minPorcentaje: 67, maxPorcentaje: 100, colorHex: "#86EFAC" },
 ];
+
+/**
+ * Si los niveles de desempeño son una copia de las bandas de cumplimiento en
+ * vez de una escala propia.
+ *
+ * Por defecto no: un objetivo y una persona se leen distinto —"Sobrecumplió"
+ * describe un resultado, "Excelente" califica a alguien—, y ese es justo el
+ * motivo de que sean dos ejes. Pero hay empresas que los quieren idénticos,
+ * y mantener a mano dos listas que tienen que coincidir es la vía corta a
+ * que dejen de coincidir.
+ */
+export const DEFAULT_NIVELES_SIGUEN_ESTADOS = false;
+
+/**
+ * Las bandas de cumplimiento traducidas a niveles de desempeño: mismo nombre,
+ * mismo rango y mismo color.
+ *
+ * Los estados del flujo quedan fuera —"Por iniciar" y "En progreso" describen
+ * el arranque de un objetivo, no cómo cerró una persona—, así que se copian
+ * las mismas bandas que se editan en el drawer, incluida la negativa cuando
+ * el permiso la mantiene encendida.
+ */
+export function nivelesDesdeEstados(
+  estados: readonly ObjetivoEstadoConfig[]
+): NivelDesempenoConfig[] {
+  return estados
+    .filter((estado) => !estado.locked)
+    .map((estado) => ({
+      id: `nivel-${estado.id}`,
+      nombre: estado.nombre,
+      minPorcentaje: estado.minPorcentaje,
+      maxPorcentaje: estado.maxPorcentaje,
+      colorHex: estado.colorHex,
+    }))
+    .sort((a, b) => a.minPorcentaje - b.minPorcentaje);
+}
 
 /**
  * Un estado del participante: en qué situación está una persona dentro del
@@ -318,6 +446,13 @@ interface ObjetivosConfigState {
   niveles: NivelDesempenoConfig[];
   estadosParticipante: EstadoParticipanteConfig[];
   allowNegativeResults: boolean;
+  /**
+   * Los niveles son copia de las bandas de cumplimiento. `niveles` ya viene
+   * resuelto con esa copia, así que quien solo necesita leerlos no tiene que
+   * saber de dónde salieron; esta bandera es para el drawer, que sí necesita
+   * saber si la escala se edita o se espeja.
+   */
+  nivelesSiguenEstados: boolean;
 }
 
 let state: ObjetivosConfigState = {
@@ -325,6 +460,7 @@ let state: ObjetivosConfigState = {
   niveles: DEFAULT_NIVELES_DESEMPENO,
   estadosParticipante: DEFAULT_ESTADOS_PARTICIPANTE,
   allowNegativeResults: DEFAULT_ALLOW_NEGATIVE_RESULTS,
+  nivelesSiguenEstados: DEFAULT_NIVELES_SIGUEN_ESTADOS,
 };
 
 const listeners = new Set<() => void>();
@@ -351,7 +487,7 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-/** El estado (de "Estados y rangos") al que pertenece un porcentaje dado, o
+/** El estado (de "Estados de los objetivos") al que pertenece un porcentaje dado, o
  * null si ningún rango configurado lo cubre. */
 export function findEstadoForPercent(
   estados: readonly ObjetivoEstadoConfig[],
