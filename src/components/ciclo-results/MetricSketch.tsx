@@ -24,10 +24,7 @@ const DEMO_PERCENTS = [38, 62, 77, 91];
 const DEMO_COLORS = ["#4F46E5", "#0EA5E9", "#8B5CF6", "#14B8A6"];
 
 export function MetricSketch({ metric }: { metric: MetricDefinition }) {
-  const shape = shapeOf(metric);
   const measure = measureOf(metric);
-  const dimension = dimensionOf(metric);
-  const labels = dimension.examples;
 
   return (
     <figure className="m-0 overflow-hidden rounded-xl border border-border/60 bg-surface">
@@ -40,6 +37,28 @@ export function MetricSketch({ metric }: { metric: MetricDefinition }) {
         </span>
       </figcaption>
       <div className="px-3.5 py-3.5">
+        <MetricChart metric={metric} />
+      </div>
+    </figure>
+  );
+}
+
+/**
+ * El gráfico solo, sin tarjeta alrededor.
+ *
+ * La vista previa del compositor lo enmarca en su `figure` con la etiqueta de
+ * "datos de ejemplo"; la métrica ya creada lo monta dentro de la tarjeta del
+ * resumen, que trae su propia cabecera. El dibujo es el mismo en los dos
+ * sitios y vive una sola vez.
+ */
+export function MetricChart({ metric }: { metric: MetricDefinition }) {
+  const shape = shapeOf(metric);
+  const measure = measureOf(metric);
+  const dimension = dimensionOf(metric);
+  const labels = dimension.examples;
+
+  return (
+    <>
         {shape.id === "kpi" && <KpiSketch measureLabel={measure.label} value={measure.sample(3)} />}
         {shape.id === "barras" && (
           <RankedBarList
@@ -111,10 +130,9 @@ export function MetricSketch({ metric }: { metric: MetricDefinition }) {
             </p>
           </div>
         )}
-        {shape.id === "tabla" && <TableSketch labels={labels} dimension={dimension.label} measure={measure} />}
-        {shape.id === "mapa" && <HeatmapSketch labels={labels} />}
-      </div>
-    </figure>
+      {shape.id === "tabla" && <TableSketch labels={labels} dimension={dimension.label} measure={measure} />}
+      {shape.id === "mapa" && <HeatmapSketch labels={labels} />}
+    </>
   );
 }
 

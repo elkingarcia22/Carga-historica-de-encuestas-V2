@@ -1,11 +1,14 @@
 import * as React from "react";
-import { Building2, Plus, Target } from "lucide-react";
+import { Building2, Lock, Plus, Target } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { ObjectiveCardCompact } from "./ObjectiveCardCompact";
-import { AiObjectiveComposer, type AiComposerMode, type AiReviewActions } from "./AiObjectiveComposer";
+import { AiAgentDrawer } from "@/components/ai/AiAgentDrawer";
+import type { AiComposerMode, AiReviewActions } from "./AiObjectiveComposer";
 import { AiTriggerButton } from "./AiObjectiveControls";
+import { AiAnalyzingState } from "@/components/ai-interaction/AiAnalyzingState";
 import { MAX_AI_OBJECTIVES } from "./aiObjectiveBrief";
 import type { Objective } from "./cicloBuilderTypes";
+import type { ObjectiveModelId, ObjectiveModelRules } from "./objectiveModel";
 
 interface CompanyObjectivesEditorProps {
   objectives: readonly Objective[];
@@ -30,6 +33,15 @@ interface CompanyObjectivesEditorProps {
   showValidation: boolean;
   enabled: boolean;
   onEnabledChange: (enabled: boolean) => void;
+  /** Reglas del modelo del ciclo: aquí solo ponen el vocabulario, porque el
+   *  norte no cuelga de nada ni lleva nada colgando. */
+  rules?: ObjectiveModelRules;
+  model?: ObjectiveModelId | null;
+  /**
+   * Por qué el norte no se puede apagar —"Obligatorio en OKR"—. Con esto
+   * puesto el interruptor se reemplaza por esa marca: el modelo ya decidió.
+   */
+  lockedReason?: string;
   composerMode: AiComposerMode | null;
   onComposerModeChange: (mode: AiComposerMode | null) => void;
 }
@@ -64,6 +76,9 @@ export function CompanyObjectivesEditor({
   showValidation,
   enabled,
   onEnabledChange,
+  lockedReason,
+  rules,
+  model,
   composerMode,
   onComposerModeChange,
 }: CompanyObjectivesEditorProps) {
@@ -79,6 +94,25 @@ export function CompanyObjectivesEditor({
   const [hiddenWhileComposing, setHiddenWhileComposing] = React.useState<ReadonlySet<string> | null>(
     null
   );
+  const [workingState, setWorkingState] = React.useState<{
+    progress: number;
+    caption: string;
+    detail: string;
+  } | null>(null);
+  /**
+   * La tanda que la IA acaba de proponer y que todavía no se conserva.
+   *
+   * Se dibuja con el borde degradado del Agente mientras la decisión siga
+   * abierta —"otra propuesta" y "modificar" no la limpian, siguen dentro de
+   * la misma revisión—, y se apaga en cuanto el chat decide: conservar,
+   * descartar, o cerrar el generador de cualquier otra forma.
+   */
+  const [aiDraftIds, setAiDraftIds] = React.useState<ReadonlySet<string>>(() => new Set());
+
+  React.useEffect(() => {
+    onAiWorkingChange?.(workingState !== null);
+  }, [workingState, onAiWorkingChange]);
+
   React.useEffect(() => {
     setHiddenWhileComposing(
       composerMode === null ? null : new Set(objectives.map((objective) => objective.id))
@@ -86,24 +120,44 @@ export function CompanyObjectivesEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [composerMode]);
 
+  React.useEffect(() => {
+    if (composerMode === null) setAiDraftIds(new Set());
+  }, [composerMode]);
+
+  const handleAddFromAI = (incoming: Objective[]) => {
+    onAddFromAI(incoming);
+    setAiDraftIds(new Set(incoming.map((objective) => objective.id)));
+  };
+
   const visibleObjectives = hiddenWhileComposing
     ? objectives.filter((objective) => !hiddenWhileComposing.has(objective.id))
     : objectives;
   const isEmpty = visibleObjectives.length === 0;
 
-  const composer =
-    composerMode === null ? null : (
-      <AiObjectiveComposer
-        mode={composerMode}
-        onConfirm={onAddFromAI}
-        onCancel={() => onComposerModeChange(null)}
-        onRemoveObjectives={onRemoveMany}
-        maxCount={remaining}
-        scopeLabel="de la empresa"
-        onWorkingChange={onAiWorkingChange}
-        onReviewActionsChange={onReviewActionsChange}
-      />
-    );
+  const composer = (
+    <AiAgentDrawer
+      open={composerMode !== null}
+      onOpenChange={(open) => {
+        if (!open) onComposerModeChange(null);
+      }}
+      context="objectives"
+      objectiveCallbacks={{
+        mode: composerMode || "set",
+        onConfirm: handleAddFromAI,
+        onKeep: () => onComposerModeChange(null),
+        onRemoveObjectives: onRemoveMany,
+        maxCount: remaining,
+        scopeLabel: "de la empresa",
+        onWorkingStateChange: (isWorking, progress, caption, detail) => {
+          if (isWorking) {
+            setWorkingState({ progress, caption, detail });
+          } else {
+            setWorkingState(null);
+          }
+        },
+      }}
+    />
+  );
 
   return (
     <section className="flex min-w-0 flex-1 flex-col gap-4 self-start">
@@ -129,15 +183,22 @@ export function CompanyObjectivesEditor({
             </p>
           </div>
 
-          <label className="ml-4 flex shrink-0 cursor-pointer items-center gap-2 text-[12px] font-medium text-text-primary mt-1">
-            <span>Usar objetivos de empresa</span>
-            <Switch
-              checked={enabled}
-              onCheckedChange={onEnabledChange}
-              aria-label="Usar objetivos de empresa"
-              className="data-[state=checked]:bg-status-positive"
-            />
-          </label>
+          {lockedReason ? (
+            <span className="ml-4 mt-1 inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-surface-muted px-2.5 text-[11.5px] font-semibold text-text-secondary ring-1 ring-inset ring-border/60">
+              <Lock className="size-3.5" strokeWidth={2.2} />
+              {lockedReason}
+            </span>
+          ) : (
+            <label className="ml-4 flex shrink-0 cursor-pointer items-center gap-2 text-[12px] font-medium text-text-primary mt-1">
+              <span>Usar objetivos de empresa</span>
+              <Switch
+                checked={enabled}
+                onCheckedChange={onEnabledChange}
+                aria-label="Usar objetivos de empresa"
+                className="data-[state=checked]:bg-status-positive"
+              />
+            </label>
+          )}
         </div>
       </header>
 
@@ -147,6 +208,15 @@ export function CompanyObjectivesEditor({
           brief, la tanda pendiente de revisión— en cuanto isEmpty pasa a
           false a mitad de esa misma generación. */}
       {enabled && composer}
+
+      {enabled && workingState !== null && (
+        <AiAnalyzingState
+          title="Analizando"
+          progress={workingState.progress}
+          caption={workingState.caption}
+          detail={workingState.detail}
+        />
+      )}
 
       {enabled && isEmpty && composerMode === null && (
         <div className="flex flex-col items-center gap-3 rounded-2xl border border-border bg-surface px-6 py-12 text-center">
@@ -192,6 +262,9 @@ export function CompanyObjectivesEditor({
                 onRemove={() => onRemove(objective.id)}
                 canRemove={true}
                 showValidation={showValidation}
+                rules={rules}
+                model={model}
+                isAiDraft={aiDraftIds.has(objective.id)}
               />
               );
             })}

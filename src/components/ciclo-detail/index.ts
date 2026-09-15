@@ -1,6 +1,12 @@
 export * from "./cicloDetailTypes";
 export * from "./cicloProgress";
-export { buildCicloDetail, parseSpanishDate, type CicloListRow } from "./cicloDetailMock";
+export {
+  buildCicloDetail,
+  buildCicloSetup,
+  parseSpanishDate,
+  type CicloListRow,
+  type CicloSetup,
+} from "./cicloDetailMock";
 export {
   CicloDownloadDrawer,
   CicloDownloadsWidget,

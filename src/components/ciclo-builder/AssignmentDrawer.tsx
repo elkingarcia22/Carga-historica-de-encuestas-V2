@@ -11,25 +11,35 @@ import {
   Sparkles,
   Target,
   Trash2,
-  TriangleAlert,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { DrawerShell } from "@/components/overlays";
 import { DrawerActionRail, DrawerRailButton } from "@/components/action-rail";
 import { WeightBalanceDialog, weightBalanceGroup } from "./WeightBalanceDialog";
-import { WeightConflictDialog } from "./WeightConflictDialog";
-import { loadsForTargets, tightestFreeShare, type PersonLoad } from "./weightConflicts";
+import { WeightConflictView, useWeightShares } from "./WeightConflictView";
+import {
+  loadsForTargets,
+  sourceLabels,
+  tightestFreeShare,
+  type PersonLoad,
+} from "./weightConflicts";
 import { COLLABORATORS } from "@/mocks/collaborators";
 import { formatCount, type SegmentKey } from "@/components/survey-builder";
 import { AutoIncludeToggle, GroupsPanel } from "@/components/survey-builder/ParticipantsEditor";
 import { CollaboratorTable } from "@/components/survey-builder/CollaboratorTable";
 import { groupMemberIds } from "@/components/survey-builder/participants";
 import { ObjectiveCardCompact } from "./ObjectiveCardCompact";
-import { AiObjectiveComposer, type AiReviewActions } from "./AiObjectiveComposer";
-import { AiTriggerButton } from "./AiObjectiveControls";
-import { ObjectiveBankDrawer } from "./ObjectiveBankDrawer";
+import { AiAnalyzingState } from "@/components/ai-interaction/AiAnalyzingState";
+import { AiAgentDrawer } from "@/components/ai/AiAgentDrawer";
+import type { AiReviewActions } from "./AiObjectiveComposer";
+import {
+  ObjectiveBankPanel,
+  ObjectiveBankStepHeader,
+  useObjectiveBank,
+} from "./ObjectiveBankPanel";
 import { MAX_AI_OBJECTIVES } from "./aiObjectiveBrief";
 import {
   createBlankObjective,
@@ -54,6 +64,7 @@ import {
   setWeightShare,
   targetLabel,
 } from "./objectiveSets";
+import type { ObjectiveModelId, ObjectiveModelRules } from "./objectiveModel";
 
 type Phase = "targets" | "objectives";
 
@@ -96,6 +107,10 @@ interface AssignmentDrawerProps {
   autoInclude: boolean;
   onAutoIncludeChange: (value: boolean) => void;
   companyObjectives: readonly Objective[];
+  /** Reglas del modelo del ciclo: qué cuelga de cada objetivo y si tiene
+   *  que colgar de uno de la empresa. */
+  rules?: ObjectiveModelRules;
+  model?: ObjectiveModelId | null;
   /** Fires once, on "Guardar", with the finished assignment. */
   onSave: (set: ObjectiveSet) => void;
   onAiWorkingChange?: (working: boolean) => void;
@@ -127,6 +142,8 @@ export function AssignmentDrawer({
   autoInclude,
   onAutoIncludeChange,
   companyObjectives,
+  rules,
+  model,
   onSave,
   onAiWorkingChange,
 }: AssignmentDrawerProps) {
@@ -164,27 +181,35 @@ export function AssignmentDrawer({
   // IA. Mientras existan, la barra de acciones del drawer las muestra y deja
   // de bloquearse — es la decisión pendiente, no el generador.
   const [reviewActions, setReviewActions] = React.useState<AiReviewActions | null>(null);
+  /** El banco no se abre en otro cajón encima de este: se saca aquí dentro,
+   *  en el sitio de la lista, una vez ya está decidido a quién se le asigna.
+   *  Por eso su estado vive en este drawer y no en una concha aparte. */
   const [isBankOpen, setIsBankOpen] = React.useState(false);
+  const bank = useObjectiveBank(isGroup ? "grupo" : "individual", isBankOpen);
+  /** El menú de "añadir objetivo" de la barra flotante: las tres formas de
+   *  traer uno viven ahí abajo, no sobre la lista. */
+  const [isAddMenuOpen, setIsAddMenuOpen] = React.useState(false);
   const [isBalanceOpen, setIsBalanceOpen] = React.useState(false);
   const [isConflictOpen, setIsConflictOpen] = React.useState(false);
   const [showValidation, setShowValidation] = React.useState(false);
-  // Los objetivos que ya existían antes de abrir el generador: se ocultan
-  // mientras dura esa experiencia para que la atención quede solo en la
-  // tanda que la IA está armando y revisando. Capturados una vez al abrir,
-  // no en cada render, así lo que entra durante la revisión sí se ve.
-  const [hiddenWhileComposing, setHiddenWhileComposing] = React.useState<ReadonlySet<string> | null>(
-    null
-  );
-  React.useEffect(() => {
-    setHiddenWhileComposing(
-      isComposerOpen ? new Set(draft.objectives.map((objective) => objective.id)) : null
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isComposerOpen]);
+  const [workingState, setWorkingState] = React.useState<{ progress: number; caption: string; detail: string } | null>(null);
 
-  const visibleDraftObjectives = hiddenWhileComposing
-    ? draft.objectives.filter((objective) => !hiddenWhileComposing.has(objective.id))
-    : draft.objectives;
+  /**
+   * La tanda que la IA acaba de proponer y que todavía no se ha conservado.
+   *
+   * Lo que la asignación ya tenía escrito no se esconde mientras se conversa:
+   * esconderlo dejaba la lista vacía y un estado vacío mintiendo sobre una
+   * asignación que sí tenía objetivos. Se queda a la vista, y lo que se marca
+   * —con el borde degradado del Agente— es lo nuevo, hasta que el chat decide
+   * si se conserva o se descarta.
+   */
+  const [aiDraftIds, setAiDraftIds] = React.useState<ReadonlySet<string>>(() => new Set());
+
+  // Cerrar el panel cierra la decisión: conservar, descartar y modificar
+  // salen todos por ahí, y lo que quede en la lista ya es del borrador.
+  React.useEffect(() => {
+    if (!isComposerOpen) setAiDraftIds(new Set());
+  }, [isComposerOpen]);
 
   // Everything is local until "Guardar", so each opening starts from the
   // assignment as it is stored — a drawer closed halfway leaves no trace.
@@ -195,9 +220,11 @@ export function AssignmentDrawer({
     setHasNavigated(false);
     setExpandedObjectiveIds(new Set());
     setIsComposerOpen(false);
+    setIsBankOpen(false);
     setIsBalanceOpen(false);
     setIsConflictOpen(false);
     setShowValidation(false);
+    setAiDraftIds(new Set());
     intentApplied.current = false;
     // `buildBlankDraft` reads `intent`/`templateObjectives`/`kind` off the
     // current render, which is what should seed the draft: this effect only
@@ -247,6 +274,14 @@ export function AssignmentDrawer({
   const budget = setWeightBudget(draft);
 
   /**
+   * El reparto ya quedó resuelto: a este borrador le tocó un cupo que cabe en
+   * lo que quedaba libre. Resuelto, ni el aviso ni "Repartir el peso" tienen
+   * nada más que decir — se apagan los dos en vez de quedarse confirmando algo
+   * que ya no hace falta confirmar.
+   */
+  const isPriorLoadResolved = draft.weightShare !== undefined && draft.weightShare <= freeShare;
+
+  /**
    * Los mismos conflictos, pero contando también la asignación que se está
    * armando. El modal reparte el 100 % de una persona entre sus vías, y esta
    * es una de ellas aunque todavía no exista en el ciclo: sin ella, bajarle el
@@ -278,7 +313,48 @@ export function AssignmentDrawer({
    * que alguien ya lleve algo —todavía no hay pesos que comparar—, y en la de
    * objetivos, que lo repartido se pase del hueco que quedaba.
    */
-  const hasBlockingConflict = priorLoads.length > 0;
+  const hasBlockingConflict = priorLoads.length > 0 && !isPriorLoadResolved;
+
+  /**
+   * Alguien de los marcados ya reparte su 100 %: no queda ni un punto donde
+   * meter un objetivo nuevo.
+   *
+   * Eso no se resuelve escribiendo —el peso sale de algún lado— así que el
+   * paso no deja pasar: lo que toca es bajarle el peso a lo que esa gente ya
+   * lleva, y para eso está "Ajustar sus pesos" del aviso de arriba.
+   */
+  const isFullyLoaded = priorLoads.length > 0 && freeShare === 0;
+
+  const conflictShares = useWeightShares(conflictLoads, isConflictOpen);
+
+  /**
+   * Escribe el reparto decidido en la página de peso.
+   *
+   * El cupo del borrador se queda en el borrador —todavía no es parte del
+   * ciclo—; el de las demás asignaciones sí se escribe ya, que es lo que abre
+   * el hueco donde esta va a caber.
+   */
+  const applyConflictShares = () => {
+    const shares = conflictShares.shareMap();
+    const ownShare = shares.get(draft.id);
+    if (ownShare !== undefined) {
+      setDraft((current) => ({
+        ...current,
+        weightShare: ownShare === TOTAL_WEIGHT ? undefined : ownShare,
+        objectives: rescaleObjectives(current.objectives, ownShare),
+      }));
+    }
+    const others = [...shares.entries()].filter(([setId]) => setId !== draft.id);
+    if (others.length > 0) {
+      onAllSetsChange(
+        others.reduce(
+          (current, [setId, share]) => setWeightShare(current, setId, share),
+          allSets
+        )
+      );
+    }
+    setIsConflictOpen(false);
+  };
 
   /** Le pone a este borrador el cupo que le queda libre y reparte dentro. */
   const applyFreeShare = () => {
@@ -292,9 +368,38 @@ export function AssignmentDrawer({
   // ── Objectives, on the local draft ───────────────────────────────────────
 
   const total = totalWeight(draft.objectives);
-  const issue = objectiveSetIssue(draft);
+  const issue = objectiveSetIssue(draft, {
+    rules,
+    requireAlignment:
+      rules?.alignment === "required" &&
+      rules.companyObjectives !== "off" &&
+      companyObjectives.length > 0,
+  });
 
   const applySets = (next: readonly ObjectiveSet[]) => setDraft(next[0]);
+
+  /**
+   * Guarda sola la asignación si con lo que acaba de llegar ya no falta nada.
+   *
+   * Lo que trae el banco o lo que la IA deja al conservar es una decisión ya
+   * tomada, no un borrador a medio llenar: si eso alcanza para completar la
+   * asignación, pedir además "Guardar asignación" repetiría un paso que el
+   * autor ya dio. Si sigue faltando algo —peso, alineación—, se queda en la
+   * pantalla de objetivos exactamente como antes.
+   */
+  const finishIfComplete = (nextDraft: ObjectiveSet): boolean => {
+    const nextIssue = objectiveSetIssue(nextDraft, {
+      rules,
+      requireAlignment:
+        rules?.alignment === "required" &&
+        rules.companyObjectives !== "off" &&
+        companyObjectives.length > 0,
+    });
+    if (nextIssue !== null) return false;
+    onSave(nextDraft);
+    onOpenChange(false);
+    return true;
+  };
 
   const addObjective = () => {
     const objective = createBlankObjective(freeWeight(draft));
@@ -302,13 +407,54 @@ export function AssignmentDrawer({
     setExpandedObjectiveIds(new Set([objective.id]));
   };
 
-  /** Punto de entrada de los objetivos que llegan ya escritos —de la IA o del
-   *  banco—. `insertObjectivesFromAI` reparte entre ellos el peso que quede
-   *  libre, así que el que los trae no tiene que calcularlo. */
-  const addWrittenObjectives = (incoming: readonly Objective[]) => {
+  /**
+   * Punto de entrada de los objetivos que llegan ya escritos —de la IA o del
+   * banco—. `insertObjectivesFromAI` reparte entre ellos el peso que quede
+   * libre, así que el que los trae no tiene que calcularlo.
+   *
+   * `expand` decide si el primero cae abierto. Del banco sí, porque se elige
+   * de uno en uno y abrirlo es seguir mirándolo; de la IA no, porque llega
+   * una tanda y abrir uno de cinco no es revisar la tanda, es tapar el
+   * resto con una tarjeta larga.
+   */
+  const addWrittenObjectives = (
+    incoming: readonly Objective[],
+    { expand = true, fromAi = false }: { expand?: boolean; fromAi?: boolean } = {}
+  ) => {
     if (incoming.length === 0) return;
     applySets(insertObjectivesFromAI([draft], draft.id, incoming));
+    setExpandedObjectiveIds(expand ? new Set([incoming[0].id]) : new Set());
+    if (fromAi) setAiDraftIds(new Set(incoming.map((objective) => objective.id)));
+  };
+
+  /**
+   * Cierra el banco llevándose lo marcado. El peso libre se calcula en este
+   * momento y no al abrirlo: entre medias pudo entrar algo más.
+   *
+   * Elegir del banco es la decisión completa —a diferencia de la IA, aquí no
+   * hay una revisión posterior—, así que si con esto la asignación ya queda
+   * completa se guarda sola en vez de dejar un "Guardar asignación" de más.
+   */
+  const addFromBank = () => {
+    const incoming = bank.buildObjectives(freeWeight(draft));
+    if (incoming.length === 0) return;
+    const next = insertObjectivesFromAI([draft], draft.id, incoming)[0];
+    setIsBankOpen(false);
+    if (finishIfComplete(next)) return;
+    setDraft(next);
     setExpandedObjectiveIds(new Set([incoming[0].id]));
+  };
+
+  /**
+   * "Conservar todos" del panel de IA. Los objetivos ya están en `draft`
+   * desde que se generaron (`onConfirm`); aquí solo se decide si con ellos ya
+   * queda todo listo —y entonces se guarda y se cierra— o si sigue faltando
+   * algo, en cuyo caso solo se cierra el panel y la asignación sigue en
+   * pantalla para completarla.
+   */
+  const keepAiDraft = () => {
+    setIsComposerOpen(false);
+    finishIfComplete(draft);
   };
 
   /** Quita varios objetivos de una tanda de IA en un solo cambio de estado.
@@ -322,6 +468,7 @@ export function AssignmentDrawer({
       ...current,
       objectives: current.objectives.filter((objective) => !idSet.has(objective.id)),
     }));
+    setAiDraftIds((current) => new Set([...current].filter((id) => !idSet.has(id))));
   };
 
   /**
@@ -396,20 +543,32 @@ export function AssignmentDrawer({
    * drawer gives this corner.
    */
   const footerHint =
-    phase === "targets"
+    isBankOpen
+      ? bank.selectedCount === 0
+        ? "Marca en el banco los objetivos que quieras traer"
+        : `${bank.selectedCount} ${
+            bank.selectedCount === 1 ? "objetivo" : "objetivos"
+          } del banco · se añadirán a esta asignación`
+      : phase === "targets"
       ? selection.length === 0
         ? `Marca al menos ${isGroup ? "un grupo" : "una persona"} para continuar`
-        : priorLoads.length > 0
-          ? `${priorLoads.length} ${
-              priorLoads.length === 1 ? "persona ya lleva" : "personas ya llevan"
-            } objetivos · quedan ${freeShare} %`
-          : isGroup
-            ? `${selection.length} ${selection.length === 1 ? "grupo" : "grupos"} · ${reach} ${
-                reach === 1 ? "persona" : "personas"
-              }`
-            : `${selection.length} ${selection.length === 1 ? "persona" : "personas"} seleccionada${
-                selection.length === 1 ? "" : "s"
-              }`
+        : isFullyLoaded
+          ? `${
+              priorLoads.length === 1
+                ? `${priorLoads[0].name} ya reparte`
+                : `${priorLoads.length} personas ya reparten`
+            } todo su ${TOTAL_WEIGHT} % de peso · reparte ese peso antes de crear objetivos`
+          : priorLoads.length > 0 && !isPriorLoadResolved
+            ? `${priorLoads.length} ${
+                priorLoads.length === 1 ? "persona ya lleva" : "personas ya llevan"
+              } objetivos · solo les queda ${freeShare} % de peso libre`
+            : isGroup
+              ? `${selection.length} ${selection.length === 1 ? "grupo" : "grupos"} · ${reach} ${
+                  reach === 1 ? "persona" : "personas"
+                }`
+              : `${selection.length} ${
+                  selection.length === 1 ? "persona" : "personas"
+                } seleccionada${selection.length === 1 ? "" : "s"}`
       : draft.objectives.length === 0
         ? "Añade al menos un objetivo para guardar"
         : total === budget
@@ -423,12 +582,42 @@ export function AssignmentDrawer({
       open={open}
       onOpenChange={onOpenChange}
       title={drawerTitle}
+      description={phase === "targets" ? stepDescription : undefined}
       size="5xl"
       // La tabla de colaboradores trae columnas, buscador y paginación, y la
       // fase de objetivos apila "Tipo de medida" y "Dirección" en la misma
       // fila: ambas se aprietan por debajo de ~1000 px, así que el drawer
       // pide más ancho y cede solo donde no lo hay.
-      className="!w-[min(1280px,96vw)] !max-w-[min(1280px,96vw)]"
+      //
+      // Con el Agente IA abierto el drawer no se convierte en otra cosa: es
+      // el mismo cajón —mismo borde, misma altura, mismo sitio— corrido a la
+      // izquierda para hacerle hueco al panel. Se quedó en tarjeta flotante
+      // durante un tiempo, con margen arriba y abajo y esquinas redondas por
+      // los cuatro lados, y eso leía como un drawer nuevo que solo servía
+      // para escribir objetivos: el paso de elegir grupos y personas parecía
+      // haberse quedado en otro sitio.
+      className={cn(
+        "!w-[min(1280px,96vw)] !top-0 !bottom-0 !h-dvh !rounded-none sm:!rounded-l-2xl !border-y-0",
+        "transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
+        (phase === "objectives" && isComposerOpen)
+          // 448 px = el panel (416) más el aire que deja ver que detrás sigue
+          // estando la app, para que el cajón no se coma la pantalla entera.
+          ? "!max-w-[calc(100vw_-_448px)] !right-[416px] !border-r !border-border/60"
+          : "!max-w-[min(1280px,96vw)] !right-0 !border-r-0"
+      )}
+      /*
+       * Con el generador abierto el drawer deja de ser modal. El panel del
+       * Agente IA vive en la concha de la app, fuera del portal del drawer, y
+       * un diálogo modal apaga los eventos de puntero de todo lo que no sea
+       * él: el chat quedaba dibujado pero inerte. El velo sigue estando —lo
+       * dibuja `SheetContent`—, recortado justo donde empieza el panel.
+       */
+      modal={!isComposerOpen}
+      overlayClassName={isComposerOpen ? "right-[416px]" : undefined}
+      onInteractOutside={(e) => {
+        // Prevent closing the Drawer if the AI panel is open (because clicks in the AI panel are outside the DrawerShell)
+        if (isComposerOpen) e.preventDefault();
+      }}
       disablePadding
       footer={
         // La barra flotante del constructor, también aquí: se recoge sola
@@ -439,32 +628,90 @@ export function AssignmentDrawer({
         // cuanto queda lista para revisar, la barra se desbloquea y son sus
         // propios botones los que deciden qué hacer con ella.
         <DrawerActionRail
-          hint={footerHint}
+          hint={isConflictOpen ? conflictShares.status.text : footerHint}
           isBlocked={isComposerOpen && reviewActions === null}
           keepOpen={
-            hasBlockingConflict || (phase === "objectives" && total !== budget) || reviewActions !== null
+            hasBlockingConflict ||
+            isBankOpen ||
+            isConflictOpen ||
+            (phase === "objectives" && total !== budget) ||
+            reviewActions !== null
           }
           minimal={reviewActions !== null}
           tools={
-            phase === "targets" ? (
-              priorLoads.length > 0 ? (
+            // Con el banco o el reparto sacados en el cuerpo, la barra solo
+            // tiene que rematarlos: volver a ofrecer "añadir objetivo" desde
+            // aquí sería ofrecer salir del sitio donde ya se está trabajando.
+            isConflictOpen ? (
+              <DrawerRailButton
+                icon={Sparkles}
+                label="Repartir por mí"
+                onClick={conflictShares.autoAdjust}
+              />
+            ) : isBankOpen ? null : phase === "targets" ? (
+              priorLoads.length > 0 && !isPriorLoadResolved ? (
                 <DrawerRailButton
-                  icon={TriangleAlert}
+                  icon={Scale}
                   variant="warning"
-                  label="Resolver conflicto"
+                  label="Repartir el peso"
                   onClick={() => setIsConflictOpen(true)}
                 />
               ) : null
-            ) : draft.objectives.length > 1 ? (
-              <DrawerRailButton
-                icon={Scale}
-                label="Ajustar pesos"
-                onClick={() => setIsBalanceOpen(true)}
-              />
-            ) : null
+            ) : (
+              // Las tres formas de traer un objetivo —a mano, del banco o con
+              // IA— viven aquí y no sobre la lista: es la misma barra que
+              // termina el paso, y así la lista empieza en el primer objetivo.
+              <>
+                <AddObjectiveMenu
+                  open={isAddMenuOpen}
+                  onOpenChange={setIsAddMenuOpen}
+                  isEmpty={draft.objectives.length === 0}
+                  onAddBlank={addObjective}
+                  onOpenBank={() => setIsBankOpen(true)}
+                  onOpenComposer={() => setIsComposerOpen(true)}
+                />
+                {draft.objectives.length > 1 && (
+                  <DrawerRailButton
+                    icon={Scale}
+                    label="Ajustar pesos"
+                    onClick={() => setIsBalanceOpen(true)}
+                  />
+                )}
+              </>
+            )
           }
           actions={
-            reviewActions ? (
+            isConflictOpen ? (
+              <>
+                <DrawerRailButton
+                  icon={ArrowLeft}
+                  label="Volver"
+                  onClick={() => setIsConflictOpen(false)}
+                />
+                <DrawerRailButton
+                  icon={Check}
+                  variant="primary"
+                  label="Aplicar pesos"
+                  disabled={!conflictShares.canApply}
+                  onClick={applyConflictShares}
+                />
+              </>
+            ) : isBankOpen ? (
+              <>
+                <DrawerRailButton
+                  icon={ArrowLeft}
+                  label="Volver"
+                  onClick={() => setIsBankOpen(false)}
+                />
+                <DrawerRailButton
+                  icon={Check}
+                  variant="primary"
+                  label={`Agregar (${bank.selectedCount})`}
+                  disabled={bank.selectedCount === 0}
+                  onClick={addFromBank}
+                />
+              </>
+            ) : reviewActions ? (
               <>
                 <DrawerRailButton
                   icon={Trash2}
@@ -496,7 +743,7 @@ export function AssignmentDrawer({
                   icon={ArrowRight}
                   variant="primary"
                   label="Continuar"
-                  disabled={selection.length === 0}
+                  disabled={selection.length === 0 || isFullyLoaded}
                   onClick={() => goToPhase("objectives")}
                 />
               </>
@@ -514,36 +761,55 @@ export function AssignmentDrawer({
         />
       }
     >
-      {phase === "targets" ? (
+      {isConflictOpen ? (
+        // El reparto del peso es otra página de este mismo cajón, igual que el
+        // banco: se entra con "Repartir el peso", se sale con "Volver", y sus
+        // dos acciones viven en la barra flotante como las de cualquier paso.
+        <div key="conflict" className={cn(bodyCascade, "flex min-h-0 flex-1 flex-col gap-3 bg-background p-4")}>
+          <WeightConflictView
+            controller={conflictShares}
+            affected={conflictLoads.length}
+            onBack={() => setIsConflictOpen(false)}
+            onSeparate={(setId, personId) =>
+              onAllSetsChange(excludeFromSet(allSets, setId, personId))
+            }
+          />
+        </div>
+      ) : phase === "targets" ? (
         <div key="targets" className={cn(bodyCascade, "flex min-h-0 flex-1 flex-col gap-3 bg-background p-4")}>
-          <section className="shrink-0 rounded-2xl border border-border/60 bg-surface p-3.5 shadow-card">
-            <StepHeading title={stepTitle} description={stepDescription} />
-
-            {priorLoads.length > 0 && (
-              <PriorLoadNotice
-                loads={priorLoads}
-                freeShare={freeShare}
-                onResolve={() => setIsConflictOpen(true)}
-                onUseFreeShare={applyFreeShare}
-                appliedShare={draft.weightShare}
-              />
-            )}
-
-            {isGroup && (
-              <div className="mt-3 border-t border-border/50 pt-3.5">
-                <AutoIncludeToggle
-                  checked={autoInclude}
-                  onCheckedChange={onAutoIncludeChange}
-                  title="Incluir automáticamente nuevos colaboradores"
-                  description="Si alguien entra a uno de estos grupos durante el ciclo, hereda sus objetivos automáticamente."
+          {((priorLoads.length > 0 && !isPriorLoadResolved) || isGroup) && (
+            <section className="shrink-0 rounded-2xl border border-border/60 bg-surface p-3.5 shadow-card">
+              {priorLoads.length > 0 && !isPriorLoadResolved && (
+                <PriorLoadNotice
+                  loads={priorLoads}
+                  freeShare={freeShare}
+                  onResolve={() => setIsConflictOpen(true)}
+                  onUseFreeShare={applyFreeShare}
                 />
-              </div>
-            )}
-          </section>
+              )}
+
+              {isGroup && (
+                <div
+                  className={cn(
+                    priorLoads.length > 0 && !isPriorLoadResolved && "mt-3 border-t border-border/50 pt-3.5"
+                  )}
+                >
+                  <AutoIncludeToggle
+                    checked={autoInclude}
+                    onCheckedChange={onAutoIncludeChange}
+                    title="Sincronizar automáticamente con el grupo"
+                    description="Sigue el organigrama de la empresa: si alguien entra a uno de estos grupos durante el ciclo hereda sus objetivos, y si sale —cambia de área, de líder, o se desvincula— se los retiramos solos."
+                  />
+                </div>
+              )}
+            </section>
+          )}
 
           <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border/60 bg-surface p-3.5 shadow-card">
           {isGroup ? (
             <GroupsPanel
+              // La sección del cajón lleva `p-3.5`, no los `px-6` del paso.
+              bleed="-mx-3.5"
               segmentBy={segmentBy}
               onSegmentByChange={(value) => {
                 onSegmentByChange(value);
@@ -555,13 +821,11 @@ export function AssignmentDrawer({
                 setSelection(values.filter((v) => !takenIds.has(v) || selection.includes(v)))
               }
               onClearAll={() => setSelection([])}
-              copy={{
-                lead: "Elige cómo agrupar a tus colaboradores y marca los grupos que compartirán este set de objetivos.",
-              }}
               disabledGroups={{ ids: takenIds, reason: "Ya tiene objetivos" }}
             />
           ) : (
             <CollaboratorTable
+              bleed="-mx-3.5"
               collaborators={available}
               selectedIds={selection}
               onChange={(ids) => setSelection(ids)}
@@ -576,8 +840,21 @@ export function AssignmentDrawer({
           )}
           </section>
         </div>
+      ) : isBankOpen ? (
+        // El banco, dentro del mismo cajón y en el sitio de la lista: primero
+        // se decidió a quién se le asigna, ahora se elige qué. Apilarlo en un
+        // segundo cajón encima de este tapaba justo esa respuesta.
+        <div key="bank" className={cn(bodyCascade, "flex min-h-0 flex-1 flex-col gap-3 bg-background p-4")}>
+          <ObjectiveBankStepHeader
+            onBack={() => setIsBankOpen(false)}
+            kindLabel={isGroup ? "de área" : "individuales"}
+            targetName={headline}
+            selectedCount={bank.selectedCount}
+          />
+          <ObjectiveBankPanel bank={bank} />
+        </div>
       ) : (
-        <div key="objectives" className={cn(bodyCascade, "flex flex-col gap-3 bg-background p-4")}>
+        <div key="objectives" className={cn(bodyCascade, "flex min-h-0 flex-1 flex-col gap-3 bg-background p-4")}>
           <ObjectivesHeader
             title={stepTitle}
             description={stepDescription}
@@ -613,51 +890,54 @@ export function AssignmentDrawer({
             </div>
           )}
 
-          {priorLoads.length > 0 && !isComposerOpen && (
+          {priorLoads.length > 0 && !isPriorLoadResolved && !isComposerOpen && (
             <PriorLoadNotice
               loads={priorLoads}
               freeShare={freeShare}
               onResolve={() => setIsConflictOpen(true)}
               onUseFreeShare={applyFreeShare}
-              appliedShare={draft.weightShare}
             />
-          )}
-
-          {!isComposerOpen && (
-            <div className="flex flex-wrap items-center justify-end gap-2.5">
-              <AddObjectiveButton
-                onClick={addObjective}
-                label={draft.objectives.length === 0 ? "Crear un objetivo" : "Añadir otro objetivo"}
-              />
-              <button
-                type="button"
-                onClick={() => setIsBankOpen(true)}
-                className="group flex h-11 items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-surface px-4 text-[13px] font-semibold text-text-secondary transition-all hover:border-primary/40 hover:bg-primary/5 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 active:scale-[0.98]"
-              >
-                <Library className="size-4" strokeWidth={2.2} />
-                Elegir del banco
-              </button>
-              <AiTriggerButton label="Proponer con IA" onClick={() => setIsComposerOpen(true)} />
-            </div>
           )}
 
           {/* Antes de la lista y no después: "otra propuesta" y "descartar"
               actúan sobre lo que la IA acaba de dejar puesto en `draft`, y la
               tarjeta debe quedar fija arriba de eso mientras se decide. */}
-          {isComposerOpen && (
-            <AiObjectiveComposer
-              mode="set"
-              onConfirm={addWrittenObjectives}
-              onCancel={() => setIsComposerOpen(false)}
-              onRemoveObjectives={removeManyFromAI}
-              maxCount={Math.max(1, MAX_AI_OBJECTIVES - draft.objectives.length)}
-              scopeLabel={isGroup ? "del grupo" : "de la persona"}
-              onWorkingChange={onAiWorkingChange}
-              onReviewActionsChange={setReviewActions}
-            />
+          <AiAgentDrawer
+            open={isComposerOpen}
+            onOpenChange={(open) => {
+              if (!open) setIsComposerOpen(false);
+            }}
+            context="objectives"
+            objectiveCallbacks={{
+              mode: "set",
+              onConfirm: (incoming) =>
+                addWrittenObjectives(incoming, { expand: false, fromAi: true }),
+              onKeep: keepAiDraft,
+              onRemoveObjectives: removeManyFromAI,
+              maxCount: Math.max(1, MAX_AI_OBJECTIVES - draft.objectives.length),
+              scopeLabel: isGroup ? "del grupo" : "de la persona",
+              onWorkingStateChange: (isWorking, progress, caption, detail) => {
+                if (isWorking) {
+                  setWorkingState({ progress, caption, detail });
+                } else {
+                  setWorkingState(null);
+                }
+              },
+            }}
+          />
+
+          {workingState !== null && (
+            <div className="mb-4">
+              <AiAnalyzingState
+                title="Analizando"
+                progress={workingState.progress}
+                caption={workingState.caption}
+                detail={workingState.detail}
+              />
+            </div>
           )}
 
-          {visibleDraftObjectives.length === 0 && !isComposerOpen ? (
+          {draft.objectives.length === 0 && !isComposerOpen ? (
             <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border bg-surface-muted/30 px-6 py-10 text-center">
               <span className="flex size-11 items-center justify-center rounded-2xl bg-surface text-text-secondary">
                 <Target className="size-5" strokeWidth={2} />
@@ -666,18 +946,29 @@ export function AssignmentDrawer({
                 Esta asignación se quedó sin objetivos
               </p>
               <p className="max-w-[52ch] text-[12.5px] leading-relaxed text-text-secondary">
-                Añade al menos uno con los botones de arriba antes de guardar.
+                Añade al menos uno desde la barra de acciones antes de guardar.
               </p>
             </div>
+          ) : draft.objectives.length === 0 && isComposerOpen && workingState === null ? (
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-border bg-surface px-6 py-16 text-center">
+              <div className="relative flex size-14 items-center justify-center rounded-2xl bg-surface shadow-sm">
+                <Sparkles className="size-6 text-primary" strokeWidth={2.2} />
+                <div className="absolute -bottom-1 -right-1 flex size-5 items-center justify-center rounded-full bg-surface shadow-sm">
+                  <Target className="size-3 text-text-secondary" strokeWidth={2.5} />
+                </div>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <p className="text-[14px] font-semibold text-text-primary">
+                  Creando objetivos con IA
+                </p>
+                <p className="max-w-[42ch] text-[12.5px] leading-relaxed text-text-secondary">
+                  Dile al Agente IA en el panel derecho qué necesitas medir. Los objetivos que genere aparecerán aquí para que los revises.
+                </p>
+              </div>
+            </div>
           ) : (
-            visibleDraftObjectives.length > 0 && (
             <div className="flex flex-col gap-3">
-              {draft.objectives.map((objective, index) => {
-                // El índice se calcula sobre la lista completa y no sobre la
-                // visible, para que el número no salte cuando el generador
-                // se cierra y los ocultos vuelven a aparecer.
-                if (hiddenWhileComposing?.has(objective.id)) return null;
-                return (
+              {draft.objectives.map((objective, index) => (
                 <ObjectiveCardCompact
                   key={objective.id}
                   objective={objective}
@@ -699,24 +990,14 @@ export function AssignmentDrawer({
                   otherObjectivesWeight={total - objective.weight}
                   weightBudget={budget}
                   companyObjectives={companyObjectives}
+                  rules={rules}
+                  model={model}
                   cycleObjectives={isGroup ? [] : draft.objectives.filter(o => o.id !== objective.id)}
+                  isAiDraft={aiDraftIds.has(objective.id)}
                 />
-                );
-              })}
+              ))}
             </div>
-            )
           )}
-
-          {/* El banco se abre encima de este drawer y ya viene filtrado por el
-              tipo de asignación: en una grupal ofrece objetivos de área, en una
-              individual objetivos de una sola persona. */}
-          <ObjectiveBankDrawer
-            open={isBankOpen}
-            onOpenChange={setIsBankOpen}
-            scope={isGroup ? "grupo" : "individual"}
-            availableWeight={freeWeight(draft)}
-            onAddObjectives={addWrittenObjectives}
-          />
 
           {/* Cuadrar los pesos de esta tanda sin abrir tarjeta por tarjeta. Se
               aplica sobre el borrador, así que cerrar el drawer sin guardar
@@ -743,39 +1024,6 @@ export function AssignmentDrawer({
         </div>
       )}
 
-      {/* El conflicto se arregla tocando asignaciones que ya existen, no este
-          borrador, así que el modal vive fuera de las dos fases y escribe
-          directo sobre el ciclo. */}
-      <WeightConflictDialog
-        open={isConflictOpen}
-        onOpenChange={setIsConflictOpen}
-        loads={conflictLoads}
-        onSeparate={(setId, personId) =>
-          onAllSetsChange(excludeFromSet(allSets, setId, personId))
-        }
-        onApply={(shares) => {
-          // El cupo del borrador se queda en el borrador —todavía no es parte
-          // del ciclo—; el de las demás asignaciones sí se escribe ya, que es
-          // lo que abre el hueco donde esta va a caber.
-          const ownShare = shares.get(draft.id);
-          if (ownShare !== undefined) {
-            setDraft((current) => ({
-              ...current,
-              weightShare: ownShare === TOTAL_WEIGHT ? undefined : ownShare,
-              objectives: rescaleObjectives(current.objectives, ownShare),
-            }));
-          }
-          const others = [...shares.entries()].filter(([setId]) => setId !== draft.id);
-          if (others.length > 0) {
-            onAllSetsChange(
-              others.reduce(
-                (current, [setId, share]) => setWeightShare(current, setId, share),
-                allSets
-              )
-            );
-          }
-        }}
-      />
     </DrawerShell>
   );
 }
@@ -793,79 +1041,75 @@ function PriorLoadNotice({
   freeShare,
   onResolve,
   onUseFreeShare,
-  appliedShare,
 }: {
   loads: readonly PersonLoad[];
   freeShare: number;
   onResolve: () => void;
   onUseFreeShare: () => void;
-  appliedShare?: number;
 }) {
-  const isResolved = appliedShare !== undefined && appliedShare <= freeShare;
+  const isFull = freeShare === 0;
   const names = loads.slice(0, 3).map((load) => load.name).join(", ");
+  const sources = sourceLabels(loads);
+  const via =
+    sources.slice(0, 2).join(" y ") + (sources.length > 2 ? ` y ${sources.length - 2} más` : "");
+
+  /** El titular dice el número que importa: cuánto peso les queda. */
+  const headline =
+    loads.length === 1
+      ? isFull
+        ? `${names} ya reparte todo su ${TOTAL_WEIGHT} % de peso`
+        : `A ${names} solo le queda ${freeShare} % de peso libre`
+      : isFull
+        ? `${loads.length} personas ya reparten todo su ${TOTAL_WEIGHT} % de peso`
+        : `A ${loads.length} personas solo les queda ${freeShare} % de peso libre`;
+
+  const detail = isFull
+    ? `Ya reciben objetivos por ${via}. Los objetivos de una persona reparten ${TOTAL_WEIGHT} % entre todos, así que aquí no cabe ninguno más hasta que le bajes el peso a esos.`
+    : `Ya reciben objetivos por ${via}. Lo que crees aquí solo puede llevarse ese ${freeShare} %, salvo que le bajes el peso a lo que ya tienen.`;
 
   return (
-    <div
-      className={cn(
-        "mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-3.5 py-3",
-        isResolved
-          ? "border-status-positive/30 bg-status-positive/5"
-          : "border-status-warning/30 bg-status-warning/5"
-      )}
-    >
-      <div className="flex min-w-0 items-start gap-2.5">
-        <TriangleAlert
-          className={cn(
-            "mt-0.5 size-4 shrink-0",
-            isResolved ? "text-status-positive" : "text-status-warning"
-          )}
-          strokeWidth={2.2}
-        />
-        <p className="min-w-0 text-[12.5px] leading-relaxed text-text-secondary">
-          <strong className="text-text-primary">
-            {loads.length === 1
-              ? `${names} ya lleva objetivos`
-              : `${loads.length} personas ya llevan objetivos`}
-          </strong>{" "}
-          {loads.length > 1 && <span className="text-text-muted">({names}
-          {loads.length > 3 ? ` y ${loads.length - 3} más` : ""}). </span>}
-          {freeShare === 0
-            ? "No les queda nada libre: hay que bajarle el peso a lo que ya tienen."
-            : `Solo les quedan ${freeShare} % libres del ciclo.`}
-        </p>
+    <div className="mt-3 flex flex-wrap items-start justify-between gap-x-4 gap-y-3 rounded-xl border border-status-warning/30 bg-status-warning/5 px-3.5 py-3">
+      <div className="flex min-w-[16rem] flex-1 items-start gap-2.5">
+        <span className="mt-px flex size-7 shrink-0 items-center justify-center rounded-lg bg-status-warning/15 text-status-warning">
+          <Scale className="size-4" strokeWidth={2.2} />
+        </span>
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <p className="text-[12.5px] font-bold leading-snug text-text-primary">{headline}</p>
+          <p className="text-[12px] leading-relaxed text-text-secondary">
+            {detail}
+            {loads.length > 1 && (
+              <span className="text-text-muted">
+                {" "}
+                ({names}
+                {loads.length > 3 ? ` y ${loads.length - 3} más` : ""})
+              </span>
+            )}
+          </p>
+        </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        {freeShare > 0 && !isResolved && (
+        {freeShare > 0 && (
           <button
             type="button"
             onClick={onUseFreeShare}
-            className="rounded-lg border border-border bg-surface px-3 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:border-primary/40 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+            className="h-9 rounded-lg border border-border bg-surface px-3 text-[12px] font-semibold text-text-secondary transition-colors hover:border-primary/40 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
           >
-            Usar {freeShare} %
+            Usar solo ese {freeShare} %
           </button>
         )}
         <button
           type="button"
           onClick={onResolve}
-          className="rounded-lg bg-status-warning px-3 py-1.5 text-[12px] font-semibold text-white transition-colors hover:bg-status-warning/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-warning/30"
+          className="flex h-9 items-center gap-1.5 rounded-lg bg-status-warning px-3 text-[12px] font-semibold text-white transition-colors hover:bg-status-warning/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-warning/30"
         >
-          Ajustar sus pesos
+          <Scale className="size-3.5" strokeWidth={2.4} />
+          Repartir el peso
         </button>
       </div>
     </div>
   );
 }
 
-/** What the current phase is about, inside the body — the drawer's own title
- * stays fixed across both phases. */
-function StepHeading({ title, description }: { title: string; description: string }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <h2 className="text-[15px] font-bold tracking-tight text-text-primary">{title}</h2>
-      <p className="text-[12.5px] text-text-secondary">{description}</p>
-    </div>
-  );
-}
 
 /**
  * The objectives phase's own header, pinned above its list.
@@ -928,12 +1172,11 @@ function ObjectivesHeader({
           <TooltipProvider>
             <Tooltip delayDuration={200}>
               <TooltipTrigger asChild>
-                <button
-                  type="button"
+                <div
                   className="inline-flex h-6 cursor-default items-center gap-1.5 rounded-md bg-surface-muted px-2 text-[11.5px] font-semibold text-text-secondary transition-colors hover:text-text-primary"
                 >
                   {targetLabelText}
-                </button>
+                </div>
               </TooltipTrigger>
               <TooltipContent side="bottom" align="start" className="max-w-[280px] p-3 text-white">
                 <div className="flex flex-col gap-2">
@@ -1023,15 +1266,130 @@ function WeightMeter({
   );
 }
 
-function AddObjectiveButton({ onClick, label }: { onClick: () => void; label: string }) {
+
+
+/**
+ * Las tres formas de traer un objetivo, recogidas en un solo botón de la
+ * barra flotante.
+ *
+ * Es el mismo menú que el "+" del constructor por detrás —crear con IA,
+ * elegir del banco, escribirlo a mano, con su renglón de explicación— para
+ * que abrir una asignación no cambie el gesto: la barra de abajo es donde
+ * están las acciones del paso, y añadir es una de ellas.
+ */
+function AddObjectiveMenu({
+  open,
+  onOpenChange,
+  isEmpty,
+  onAddBlank,
+  onOpenBank,
+  onOpenComposer,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  isEmpty: boolean;
+  onAddBlank: () => void;
+  onOpenBank: () => void;
+  onOpenComposer: () => void;
+}) {
+  const choose = (action: () => void) => () => {
+    onOpenChange(false);
+    action();
+  };
+
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="group flex h-11 items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-surface px-4 text-[13px] font-semibold text-text-secondary transition-all hover:border-primary/40 hover:bg-primary/5 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 active:scale-[0.98]"
-    >
-      <Plus className="size-4 transition-transform group-hover:rotate-90" strokeWidth={2.4} />
-      {label}
-    </button>
+    <Popover open={open} onOpenChange={onOpenChange}>
+      <PopoverTrigger asChild>
+        {/* El disparador envuelve al botón de la barra para que el rótulo y
+            el estado sigan siendo los del propio rail. */}
+        <div>
+          {/* Se queda en el tono de la barra aunque la lista esté vacía: el
+              azul es de la acción que cierra el paso, y dos azules seguidos
+              dejarían de señalar nada. La pista de al lado es la que avisa
+              de que todavía falta un objetivo. */}
+          <DrawerRailButton
+            icon={Plus}
+            label={isEmpty ? "Crear un objetivo" : "Añadir objetivo"}
+            onClick={() => {}}
+          />
+        </div>
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="center"
+        sideOffset={16}
+        avoidCollisions={false}
+        className="w-[280px] rounded-2xl border-white/10 bg-surface-nav p-2 text-white/60 shadow-rail"
+      >
+        <div className="flex flex-col gap-0.5">
+          <svg width="0" height="0" className="absolute">
+            <defs>
+              <linearGradient id="ai-icon-gradient-assignment-add" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="hsl(var(--ai-gradient-start))" />
+                <stop offset="100%" stopColor="hsl(var(--ai-gradient-end))" />
+              </linearGradient>
+            </defs>
+          </svg>
+
+          <button
+            type="button"
+            onClick={choose(onOpenComposer)}
+            className="hover-icon-pop group flex w-full items-center gap-3 rounded-xl p-2.5 text-left transition-colors hover:bg-white/5"
+          >
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/5 transition-colors group-hover:bg-white/10">
+              <Sparkles
+                className="h-5 w-5"
+                strokeWidth={2.5}
+                stroke="url(#ai-icon-gradient-assignment-add)"
+              />
+            </span>
+            <span className="flex flex-col gap-0.5">
+              <span className="text-[14px] font-bold tracking-tight text-ai-gradient">
+                Proponer con IA
+              </span>
+              <span className="text-[11px] font-medium text-white/45">
+                Genera una propuesta base.
+              </span>
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={choose(onOpenBank)}
+            className="hover-icon-pop group flex w-full items-center gap-3 rounded-xl p-2.5 text-left transition-colors hover:bg-white/5"
+          >
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/5 text-white/60 transition-colors group-hover:bg-white/10 group-hover:text-white">
+              <Library className="h-5 w-5" strokeWidth={2} />
+            </span>
+            <span className="flex flex-col gap-0.5">
+              <span className="text-[14px] font-bold tracking-tight text-white">
+                Elegir del banco
+              </span>
+              <span className="text-[11px] font-medium text-white/45">
+                Objetivos ya escritos por área y tema.
+              </span>
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={choose(onAddBlank)}
+            className="hover-icon-pop group flex w-full items-center gap-3 rounded-xl p-2.5 text-left transition-colors hover:bg-white/5"
+          >
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/5 text-white/60 transition-colors group-hover:bg-white/10 group-hover:text-white">
+              <Plus className="h-5 w-5" strokeWidth={2} />
+            </span>
+            <span className="flex flex-col gap-0.5">
+              <span className="text-[14px] font-bold tracking-tight text-white">
+                Crear manualmente
+              </span>
+              <span className="text-[11px] font-medium text-white/45">
+                Redacta un objetivo desde cero.
+              </span>
+            </span>
+          </button>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }

@@ -22,13 +22,24 @@ import {
 } from "@/components/ui/select";
 import type { Collaborator } from "@/mocks/collaborators";
 import { formatCount, resolveImportedRows, type ImportedUser, type ResolvedImportRow } from "./participants";
+import { PagerButton } from "./CollaboratorTableParts";
 import {
-  CollaboratorRow,
-  FilterMenu,
-  PagerButton,
-  SortableHeader,
-} from "./CollaboratorTableParts";
-import { initials } from "./collaboratorTableShared";
+  COLLABORATOR_COLUMNS,
+  collaboratorTableCells,
+  type CollaboratorCellRow,
+} from "./collaboratorTableColumns";
+import {
+  ConfigurableHeaderCells,
+  ConfigurableRowCells,
+  HeaderSelectAllCheckbox,
+  LazyRowsSentinel,
+  LazyRowsSummary,
+  TableBleedBox,
+  TableConfigButton,
+  useColumnDrag,
+  useLazyRows,
+  useTableConfig,
+} from "@/components/data-display";
 
 interface ImportedUsersTableProps {
   /** The directory the import is resolved against: rows found in it (by
@@ -48,6 +59,8 @@ interface ImportedUsersTableProps {
    * rather than replacing this table's contents. Omitted, the "Subir otro
    * archivo" button doesn't render. */
   onAddFile?: (file: File) => void;
+  /** El relleno del panel, en negativo: ver `TableBleedBox`. */
+  bleed?: string;
 }
 
 type Tab = "new" | "existing";
@@ -96,6 +109,24 @@ function rowId(row: ResolvedImportRow): string {
   return row.user.username + "|" + row.user.email;
 }
 
+/**
+ * La fila tal como la pintan las columnas compartidas con el directorio.
+ *
+ * Una persona que el archivo trae pero la plataforma no conoce todavía se
+ * distingue por `known`: su avatar va en gris en vez de con el color que la
+ * plataforma le asigna a cada quien, porque ese color solo existe para las
+ * que ya están.
+ */
+const importedCellRow = (row: ResolvedImportRow): CollaboratorCellRow => ({
+  id: rowId(row),
+  name: displayName(row),
+  username: (row.person ? row.person.username : row.user.username) || "—",
+  email: displayEmail(row),
+  area: areaKey(row),
+  leader: leaderKey(row),
+  known: row.person != null,
+});
+
 function fold(value: string): string {
   return value
     .normalize("NFD")
@@ -143,6 +174,7 @@ export function ImportedUsersTable({
   onRemoveUsers,
   onSelectionChange,
   onAddFile,
+  bleed,
 }: ImportedUsersTableProps) {
   const [tab, setTab] = React.useState<Tab>("new");
   const [sortKey, setSortKey] = React.useState<SortKey | null>(null);
@@ -312,6 +344,16 @@ export function ImportedUsersTable({
         ? "indeterminate"
         : false;
 
+  /*
+   * La lectura de la casilla cambia con el modo: por páginas habla de la
+   * página que se está viendo, bajando de corrido habla de todo lo que pasó
+   * los filtros —no hay página que nombrar, así que "marcada" solo puede
+   * querer decir "está todo".
+   */
+  const selectedMatches = filtered.filter((row) => selected.has(rowId(row))).length;
+  const matchState: boolean | "indeterminate" =
+    selectedMatches === 0 ? false : selectedMatches === filtered.length ? true : "indeterminate";
+
   const toggleOne = (id: string) => {
     setSelected((current) => {
       const next = new Set(current);
@@ -338,6 +380,36 @@ export function ImportedUsersTable({
   const showDeselectPage = isPageFullySelected;
   const showSelectAll = filtered.length > 0 && !allMatchesSelected;
   const showDeselectAll = allMatchesSelected;
+
+  const config = useTableConfig("constructor-usuarios-importados", COLLABORATOR_COLUMNS);
+  const drag = useColumnDrag({ axis: "x", onReorder: config.moveColumn });
+  const lazy = useLazyRows({
+    total: sorted.length,
+    enabled: config.isLazy,
+    step: pageSize,
+    resetKey: sorted,
+  });
+  const shown = config.isLazy ? sorted.slice(0, lazy.count) : visible;
+
+  const cells = collaboratorTableCells({
+    sortKey,
+    sortDir,
+    onToggleSort: toggleSort,
+    areas,
+    areaFilter,
+    onToggleArea: toggleAreaFilter,
+    onClearArea: () => {
+      setAreaFilter(new Set());
+      setPage(1);
+    },
+    leaders,
+    leaderFilter,
+    onToggleLeader: toggleLeaderFilter,
+    onClearLeader: () => {
+      setLeaderFilter(new Set());
+      setPage(1);
+    },
+  });
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
@@ -448,6 +520,8 @@ export function ImportedUsersTable({
                 </button>
               </div>
 
+              <TableConfigButton config={config} noun="personas" />
+
               {onAddFile && <AddFileButton onAddFile={onAddFile} />}
             </div>
           </div>
@@ -543,16 +617,31 @@ export function ImportedUsersTable({
               </button>
             </div>
 
-            {onAddFile && <AddFileButton onAddFile={onAddFile} />}
+            <TableConfigButton config={config} noun="personas" />
+
+              {onAddFile && <AddFileButton onAddFile={onAddFile} />}
           </div>
         </div>
       )}
 
-      <div className="overflow-hidden rounded-xl border border-border/60">
+      <TableBleedBox bleed={bleed}>
         <Table>
           <TableHeader>
             <TableRow className="border-border/60 bg-muted/40 hover:bg-muted/40">
               <TableHead className="w-[50px] pl-4 pr-0">
+                {/* Bajando de corrido no hay "esta página" que marcar: la
+                    casilla vuelve a ser una casilla y el menú aparece solo
+                    cuando la tabla se lee por páginas. */}
+                {config.isLazy ? (
+                  <HeaderSelectAllCheckbox
+                    state={matchState}
+                    disabled={filtered.length === 0}
+                    onSelectAll={selectAll}
+                    onDeselectAll={deselectAll}
+                    align="start"
+                    label="Seleccionar todo"
+                  />
+                ) : (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <button
@@ -580,61 +669,14 @@ export function ImportedUsersTable({
                     )}
                   </DropdownMenuContent>
                 </DropdownMenu>
+                )}
               </TableHead>
-              <TableHead
-                aria-sort={sortKey === "name" ? (sortDir === "asc" ? "ascending" : "descending") : undefined}
-                className="min-w-[200px] py-3"
-              >
-                <SortableHeader
-                  label="Colaborador"
-                  active={sortKey === "name"}
-                  direction={sortDir}
-                  onToggle={() => toggleSort("name")}
-                />
-              </TableHead>
-              <TableHead className="py-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Username
-              </TableHead>
-              <TableHead
-                aria-sort={sortKey === "email" ? (sortDir === "asc" ? "ascending" : "descending") : undefined}
-                className="py-3"
-              >
-                <SortableHeader
-                  label="Correo electrónico"
-                  active={sortKey === "email"}
-                  direction={sortDir}
-                  onToggle={() => toggleSort("email")}
-                />
-              </TableHead>
-              <TableHead className="py-3">
-                <FilterMenu
-                  label="Área"
-                  options={areas}
-                  selected={areaFilter}
-                  onToggle={toggleAreaFilter}
-                  onClear={() => {
-                    setAreaFilter(new Set());
-                    setPage(1);
-                  }}
-                />
-              </TableHead>
-              <TableHead className="py-3 pr-4">
-                <FilterMenu
-                  label="Líder"
-                  options={leaders}
-                  selected={leaderFilter}
-                  onToggle={toggleLeaderFilter}
-                  onClear={() => {
-                    setLeaderFilter(new Set());
-                    setPage(1);
-                  }}
-                />
-              </TableHead>
+              <ConfigurableHeaderCells config={config} drag={drag} cells={cells} />
             </TableRow>
           </TableHeader>
 
           <TableBody>
-            {visible.map((row) => (
+            {shown.map((row) => (
               <TableRow key={rowId(row)} className="border-border/60">
                 <TableCell className="w-[50px] py-2.5 pl-4 pr-0">
                   <Checkbox
@@ -644,13 +686,14 @@ export function ImportedUsersTable({
                     className="border-input/50 bg-surface data-[state=checked]:border-primary data-[state=checked]:bg-primary"
                   />
                 </TableCell>
-                {row.person ? (
-                  <CollaboratorRow person={row.person} />
-                ) : (
-                  <NewUserRow user={row.user} />
-                )}
+                <ConfigurableRowCells config={config} cells={cells} row={importedCellRow(row)} />
               </TableRow>
             ))}
+            <LazyRowsSentinel
+              lazy={lazy}
+              colSpan={config.columns.length + 1}
+              noun="personas"
+            />
           </TableBody>
         </Table>
 
@@ -677,56 +720,62 @@ export function ImportedUsersTable({
             )}
           </div>
         )}
-      </div>
+      </TableBleedBox>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-[12px] text-muted-foreground">
-          {sorted.length === 0
-            ? "0 personas"
-            : `${formatCount(firstIndex + 1)}–${formatCount(firstIndex + visible.length)} de ${formatCount(sorted.length)}`}
-        </p>
+        {config.isLazy ? (
+          <LazyRowsSummary lazy={lazy} total={sorted.length} noun="personas" />
+        ) : (
+          <>
+            <p className="text-[12px] text-muted-foreground">
+              {sorted.length === 0
+                ? "0 personas"
+                : `${formatCount(firstIndex + 1)}–${formatCount(firstIndex + visible.length)} de ${formatCount(sorted.length)}`}
+            </p>
 
-        <div className="flex items-center gap-2">
-          <Select
-            value={String(pageSize)}
-            onValueChange={(value) => {
-              setPageSize(Number(value));
-              setPage(1);
-            }}
-          >
-            <SelectTrigger
-              aria-label="Personas por página"
-              className="h-8 w-[130px] rounded-lg px-2.5 text-[12px]"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent position="popper" sideOffset={6}>
-              {PAGE_SIZES.map((size) => (
-                <SelectItem key={size} value={String(size)} className="text-[13px]">
-                  {size} por página
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            <div className="flex items-center gap-2">
+              <Select
+                value={String(pageSize)}
+                onValueChange={(value) => {
+                  setPageSize(Number(value));
+                  setPage(1);
+                }}
+              >
+                <SelectTrigger
+                  aria-label="Personas por página"
+                  className="h-8 w-[130px] rounded-lg px-2.5 text-[12px]"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper" sideOffset={6}>
+                  {PAGE_SIZES.map((size) => (
+                    <SelectItem key={size} value={String(size)} className="text-[13px]">
+                      {size} por página
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
 
-          <PagerButton
-            label="Página anterior"
-            disabled={currentPage <= 1}
-            onClick={() => setPage(currentPage - 1)}
-          >
-            Anterior
-          </PagerButton>
-          <span className="text-[12px] tabular-nums text-text-secondary">
-            {formatCount(currentPage)} / {formatCount(pageCount)}
-          </span>
-          <PagerButton
-            label="Página siguiente"
-            disabled={currentPage >= pageCount}
-            onClick={() => setPage(currentPage + 1)}
-          >
-            Siguiente
-          </PagerButton>
-        </div>
+              <PagerButton
+                label="Página anterior"
+                disabled={currentPage <= 1}
+                onClick={() => setPage(currentPage - 1)}
+              >
+                Anterior
+              </PagerButton>
+              <span className="text-[12px] tabular-nums text-text-secondary">
+                {formatCount(currentPage)} / {formatCount(pageCount)}
+              </span>
+              <PagerButton
+                label="Página siguiente"
+                disabled={currentPage >= pageCount}
+                onClick={() => setPage(currentPage + 1)}
+              >
+                Siguiente
+              </PagerButton>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -865,28 +914,3 @@ function SingleGroupNotice({ tab, count, fileName }: { tab: Tab; count: number; 
 
 /** A row that has no directory entry yet: it shows the file's own data, the
  * derived email and dashes for whatever the file did not provide. */
-function NewUserRow({ user }: { user: ImportedUser }) {
-  const label = user.name || fallbackLabel(user.username);
-  const email = user.email || (user.username ? `${user.username}@ubits.co` : "—");
-  return (
-    <>
-      <TableCell className="min-w-[200px] py-2.5">
-        <div className="flex items-center gap-2.5">
-          <span
-            aria-hidden
-            className={cn(
-              "flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-bold text-muted-foreground"
-            )}
-          >
-            {initials(label)}
-          </span>
-          <p className="min-w-0 truncate text-[13px] font-semibold text-text-primary">{label}</p>
-        </div>
-      </TableCell>
-      <TableCell className="text-[13px] text-text-secondary">{user.username || "—"}</TableCell>
-      <TableCell className="text-[13px] text-text-secondary">{email}</TableCell>
-      <TableCell className="text-[13px] text-text-secondary">{user.area || "—"}</TableCell>
-      <TableCell className="pr-4 text-[13px] text-text-secondary">{user.leader || "—"}</TableCell>
-    </>
-  );
-}

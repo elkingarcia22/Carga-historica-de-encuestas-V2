@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Plus, SlidersHorizontal, Edit2, Copy, Trash2, CheckSquare, Sparkles, Upload, GitCompare } from "lucide-react";
+import { Plus, Edit2, Copy, Trash2, CheckSquare, Sparkles, Upload, GitCompare } from "lucide-react";
 import {
   ActionRailShell,
   RailButton,
@@ -15,7 +15,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { AiAgentDrawer } from "@/components/ai/AiAgentDrawer";
 import { MovingBorderBeam } from "@/components/ui/moving-border-beam";
 import { CICLO_ACTIONS, splitCicloActions, type CicloActionId } from "@/components/ciclo-list";
-import { ObjetivosConfigDrawerWide } from "./ObjetivosConfigDrawerWide";
 
 interface ObjetivosListActionRailProps {
   /** A row is mid date-edit — an immersive, in-row decision that the rail
@@ -31,8 +30,6 @@ interface ObjetivosListActionRailProps {
   isBlocked?: boolean;
   selectedCount: number;
   onClearSelection: () => void;
-  isPermisosOpen: boolean;
-  setIsPermisosOpen: (open: boolean) => void;
   activeTab: "ciclos" | "usuarios";
   /** The estado of the lone selected ciclo — decides which actions apply. */
   selectedCicloEstado?: string;
@@ -56,8 +53,6 @@ export function ObjetivosListActionRail({
   isBlocked = false,
   selectedCount,
   onClearSelection,
-  isPermisosOpen,
-  setIsPermisosOpen,
   activeTab,
   selectedCicloEstado,
   onCreateCiclo,
@@ -185,18 +180,12 @@ export function ObjetivosListActionRail({
   return (
     <>
       <ActionRailShell
-        keepOpen={selectedCount > 0 || isPermisosOpen || isMenuOpen || aiDrawerOpen}
+        keepOpen={selectedCount > 0 || isMenuOpen || aiDrawerOpen}
         isBlocked={isBlocked}
         contextual={contextual}
         persistent={
           selectedCount === 0 ? (
             <>
-              <RailButton
-                icon={<SlidersHorizontal className="h-[20px] w-[20px]" strokeWidth={2} />}
-                label="Configuración"
-                onClick={() => setIsPermisosOpen(true)}
-              />
-
               <RailButton
                 icon={<GitCompare className="h-[20px] w-[20px]" strokeWidth={2} />}
                 label="Comparar ciclos"
@@ -265,7 +254,6 @@ export function ObjetivosListActionRail({
           ) : null
         }
       />
-      <ObjetivosConfigDrawerWide open={isPermisosOpen} onOpenChange={setIsPermisosOpen} />
       <AiAgentDrawer open={aiDrawerOpen} onOpenChange={setAiDrawerOpen} context="dashboard" />
     </>
   );

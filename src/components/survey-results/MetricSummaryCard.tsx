@@ -66,10 +66,109 @@ interface MetricSummaryCardProps {
   rings: readonly RingItem[];
   ringsLabel: string;
   ringsTotal: string;
+  /**
+   * Cómo se dibuja el desglose del medio.
+   *
+   * `ring` (por defecto) son los anillos de siempre: con tres tramos —los
+   * niveles de desempeño del Resumen— caben de sobra y cada uno se lee como
+   * un medidor propio.
+   *
+   * `bar` es un gráfico de barras de verdad, para cuando hay cinco o seis
+   * tramos: las bandas de cumplimiento. Seis anillos de 72 px no caben en la
+   * columna, y lo que importa cuando son muchos ya no es cada tramo por
+   * separado sino compararlos entre sí, que es justo lo que una barra hace y
+   * un anillo no.
+   */
+  ringsVariant?: "ring" | "bar";
   topAreasTitle: string;
   topAreas: readonly TopArea[];
   chartTitle?: string;
   chart?: React.ReactNode;
+}
+
+/** Alto del área de dibujo, con la cifra de cada barra dentro. */
+const BAR_PLOT_HEIGHT = 84;
+/** Lo que le queda a la barra más alta una vez su cifra se sienta encima. */
+const BAR_MAX_HEIGHT = 62;
+
+/**
+ * El desglose como gráfico de barras: una columna por tramo, la cifra pegada
+ * encima de su barra y el nombre debajo.
+ *
+ * Las barras se miden contra la más alta, no contra el 100 %: en un reparto
+ * donde el tramo que manda es el 33 %, medirlas contra la escala completa
+ * dejaría seis muñones de un tercio de alto y no habría nada que comparar,
+ * que es justo para lo que sirve un gráfico de barras. La cifra exacta va
+ * escrita encima de cada una, así que la escala relativa no engaña a nadie.
+ *
+ * La cifra viaja con la barra —no clavada arriba del todo— porque si no, el
+ * 9 % queda con dos centímetros de aire entre su número y su barra y deja de
+ * leerse como suyo.
+ */
+function RingBars({ rings }: { rings: readonly RingItem[] }) {
+  const peak = Math.max(1, ...rings.map((ring) => ring.percentage));
+
+  return (
+    // Las columnas reparten el ancho de la tarjeta en vez de apelotonarse en
+    // el centro: agrupadas dejaban un margen muerto a cada lado y el gráfico
+    // se leía como un recorte pegado ahí, no como el contenido de su columna.
+    <div className="flex flex-1 items-end justify-between gap-x-2">
+      {rings.map((ring) => {
+        const height =
+          ring.percentage === 0 ? 0 : Math.max(4, (ring.percentage / peak) * BAR_MAX_HEIGHT);
+        const content = (
+          <>
+            <span
+              className="flex w-full flex-col items-center justify-end"
+              style={{ height: BAR_PLOT_HEIGHT }}
+            >
+              <span className="mb-1.5 text-[13px] font-extrabold leading-none tabular-nums text-text-primary">
+                {ring.percentage}%
+              </span>
+              <span
+                aria-hidden
+                className="pulse-bar-grow-y w-7 origin-bottom rounded-[5px]"
+                style={{ height: `${height}px`, backgroundColor: ring.color }}
+              />
+            </span>
+            <span className="text-center text-[10px] font-semibold leading-[1.25] text-text-secondary">
+              {ring.label}
+            </span>
+            <span className="text-[10px] font-bold leading-none tabular-nums text-text-muted">
+              {ring.count}
+            </span>
+          </>
+        );
+
+        if (ring.interactive === false) {
+          return (
+            <div
+              key={ring.id}
+              className="flex min-w-0 flex-1 flex-col items-center gap-1.5 rounded-lg px-0.5 py-1 opacity-55"
+            >
+              {content}
+            </div>
+          );
+        }
+        return (
+          <button
+            key={ring.id}
+            type="button"
+            onClick={ring.onToggle}
+            aria-pressed={ring.active}
+            aria-label={`${ring.label}: ${ring.percentage} %, ${ring.count}`}
+            className={cn(
+              "flex min-w-0 flex-1 flex-col items-center gap-1.5 rounded-lg px-0.5 py-1 transition-colors duration-200",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
+              ring.active ? "bg-primary/[0.08]" : "hover:bg-surface-muted/60"
+            )}
+          >
+            {content}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 export function MetricSummaryCard({
@@ -82,6 +181,7 @@ export function MetricSummaryCard({
   rings,
   ringsLabel,
   ringsTotal,
+  ringsVariant = "ring",
   topAreasTitle,
   topAreas,
   chartTitle,
@@ -123,59 +223,63 @@ export function MetricSummaryCard({
           </div>
         </div>
 
-        {/* Middle Column: Ring Gauges */}
+        {/* Middle Column: el desglose, en anillos o en barras */}
         <div className="flex flex-col">
           <div className="flex items-baseline justify-between mb-4">
             <span className="text-[11px] font-semibold text-text-muted">{ringsLabel}</span>
             <span className="text-[11px] font-medium tabular-nums text-text-muted">{ringsTotal}</span>
           </div>
-          <div className="flex flex-1 items-center justify-between gap-2">
-            {rings.map((ring) => {
-              const chipContent = (
-                <>
-                  <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: ring.color }} />
-                  {ring.label}
-                  <span className="font-bold tabular-nums text-text-primary ml-0.5">{ring.count}</span>
-                </>
-              );
+          {ringsVariant === "bar" ? (
+            <RingBars rings={rings} />
+          ) : (
+            <div className="flex flex-1 items-center justify-between gap-2">
+              {rings.map((ring) => {
+                const chipContent = (
+                  <>
+                    <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: ring.color }} />
+                    {ring.label}
+                    <span className="font-bold tabular-nums text-text-primary ml-0.5">{ring.count}</span>
+                  </>
+                );
 
-              return (
-                <div key={ring.id} className="flex flex-col items-center gap-2.5">
-                  <div className="relative" style={{ color: ring.color }}>
-                    <svg width="72" height="72" viewBox="0 0 72 72" aria-label={ring.label}>
-                      <circle cx="36" cy="36" r="30" fill="none" stroke="currentColor" strokeWidth="6.5" strokeOpacity="0.15" />
-                      <circle
-                        cx="36" cy="36" r="30" fill="none" stroke="currentColor" strokeWidth="6.5"
-                        strokeDasharray={`${(ring.percentage / 100) * 188.5} 188.5`}
-                        strokeDashoffset="0" strokeLinecap="round" transform="rotate(-90 36 36)"
-                      />
-                    </svg>
-                    <span className="absolute inset-0 flex items-center justify-center text-[15px] font-extrabold text-text-primary">
-                      {ring.percentage}%
-                    </span>
+                return (
+                  <div key={ring.id} className="flex flex-col items-center gap-2.5">
+                    <div className="relative" style={{ color: ring.color }}>
+                      <svg width="72" height="72" viewBox="0 0 72 72" aria-label={ring.label}>
+                        <circle cx="36" cy="36" r="30" fill="none" stroke="currentColor" strokeWidth="6.5" strokeOpacity="0.15" />
+                        <circle
+                          cx="36" cy="36" r="30" fill="none" stroke="currentColor" strokeWidth="6.5"
+                          strokeDasharray={`${(ring.percentage / 100) * 188.5} 188.5`}
+                          strokeDashoffset="0" strokeLinecap="round" transform="rotate(-90 36 36)"
+                        />
+                      </svg>
+                      <span className="absolute inset-0 flex items-center justify-center text-[15px] font-extrabold text-text-primary">
+                        {ring.percentage}%
+                      </span>
+                    </div>
+                    {ring.interactive === false ? (
+                      <span className="flex items-center gap-1.5 rounded-full border border-border/70 bg-surface-muted/60 px-2.5 py-1 text-[11px] font-semibold text-text-secondary">
+                        {chipContent}
+                      </span>
+                    ) : (
+                      <button
+                        type="button" onClick={ring.onToggle} aria-pressed={ring.active}
+                        className={cn(
+                          "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-colors duration-200",
+                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
+                          ring.active
+                            ? "border-primary bg-primary/[0.08] text-primary"
+                            : "border-border/70 bg-surface-muted/60 text-text-secondary hover:border-primary/40 hover:text-text-primary"
+                        )}
+                      >
+                        {chipContent}
+                      </button>
+                    )}
                   </div>
-                  {ring.interactive === false ? (
-                    <span className="flex items-center gap-1.5 rounded-full border border-border/70 bg-surface-muted/60 px-2.5 py-1 text-[11px] font-semibold text-text-secondary">
-                      {chipContent}
-                    </span>
-                  ) : (
-                    <button
-                      type="button" onClick={ring.onToggle} aria-pressed={ring.active}
-                      className={cn(
-                        "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-colors duration-200",
-                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
-                        ring.active
-                          ? "border-primary bg-primary/[0.08] text-primary"
-                          : "border-border/70 bg-surface-muted/60 text-text-secondary hover:border-primary/40 hover:text-text-primary"
-                      )}
-                    >
-                      {chipContent}
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Right Column: Top 3 Areas */}

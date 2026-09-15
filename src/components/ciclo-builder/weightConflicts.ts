@@ -126,6 +126,46 @@ export function loadsForTargets(
     .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
 }
 
+/**
+ * Las personas que están exactamente en el mismo enredo: les llegan objetivos
+ * por las mismas asignaciones y con los mismos pesos.
+ *
+ * Existe porque el cupo pertenece a la asignación y no a la persona: cuando
+ * 750 personas comparten las mismas dos vías, hay *un* reparto que decidir, no
+ * 750. Listarlas de a una repetía el mismo par de campos cientos de veces y
+ * mentía sobre lo que hacía editarlos —movían el cupo de todo el mundo—.
+ */
+export interface ConflictGroup {
+  key: string;
+  /** Las vías que comparten. Los pesos son los mismos para todas ellas. */
+  sources: readonly LoadSource[];
+  people: readonly PersonLoad[];
+}
+
+export function groupLoadsBySources(loads: readonly PersonLoad[]): readonly ConflictGroup[] {
+  const groups = new Map<string, PersonLoad[]>();
+
+  loads.forEach((load) => {
+    const key = [...load.sources.map((source) => source.setId)].sort().join("|");
+    const current = groups.get(key);
+    if (current) current.push(load);
+    else groups.set(key, [load]);
+  });
+
+  return [...groups.entries()].map(([key, people]) => ({
+    key,
+    sources: people[0].sources,
+    people,
+  }));
+}
+
+/** Los nombres de las asignaciones por las que ya les llegan objetivos. */
+export function sourceLabels(loads: readonly PersonLoad[]): readonly string[] {
+  const labels = new Set<string>();
+  loads.forEach((load) => load.sources.forEach((source) => labels.add(source.label)));
+  return [...labels];
+}
+
 /** El cupo que le queda libre a la persona más cargada del grupo destino. */
 export function tightestFreeShare(loads: readonly PersonLoad[]): number {
   if (loads.length === 0) return TOTAL_WEIGHT;

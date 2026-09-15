@@ -278,7 +278,7 @@ export function AlignmentCanvas({
       // Al soltar se devuelve el mapa entero: la tarjeta se resaltó para
       // seguir el gesto, y dejarla resaltada apaga todo lo demás justo
       // cuando el autor va a por la siguiente.
-      setSelectedId(null);
+      onSelectId(null);
     }
   };
 

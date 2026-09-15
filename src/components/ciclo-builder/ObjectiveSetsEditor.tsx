@@ -1,18 +1,40 @@
 import * as React from "react";
-import { Info, Library, Scale, Sparkles, Plus, TriangleAlert, UserRound, UsersRound } from "lucide-react";
+import {
+  Info,
+  Layers,
+  Library,
+  Rows3,
+  Scale,
+  Sparkles,
+  Plus,
+  TriangleAlert,
+  UserRound,
+  UsersRound,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Switch } from "@/components/ui/switch";
-import type { TableSelectionActions } from "@/components/action-rail";
+import { SegmentedControl } from "@/components/selection/SegmentedControl";
 import { formatCount, type SegmentKey } from "@/components/survey-builder";
 import { AssignmentDrawer, type AssignmentIntent } from "./AssignmentDrawer";
 import { AssignmentGroupList } from "./AssignmentGroupList";
+import { AssignmentRowsTable } from "./AssignmentRowsTable";
+import {
+  assignmentRowId,
+  assignmentRows,
+  assignmentSetSummaries,
+  splitAssignmentRowId,
+} from "./assignmentRows";
+import type { AssignmentSelection } from "./assignmentSelection";
 import {
   WeightBalanceDialog,
   weightBalanceGroup,
   type WeightBalanceGroup,
   type WeightBalanceResult,
 } from "./WeightBalanceDialog";
-import { WeightConflictDialog } from "./WeightConflictDialog";
+import {
+  WeightConflictActions,
+  WeightConflictView,
+  useWeightShares,
+} from "./WeightConflictView";
 import {
   assignedObjectiveCount,
   isObjectiveSetComplete,
@@ -29,6 +51,13 @@ import {
   setWeightShare,
 } from "./objectiveSets";
 import { conflictedLoads } from "./weightConflicts";
+import type { ObjectiveModelId, ObjectiveModelRules } from "./objectiveModel";
+
+/**
+ * Cómo se está mirando lo repartido: agrupado por quién comparte objetivos, o
+ * de corrido, un grupo (o una persona) por fila.
+ */
+export type AssignmentView = "asignacion" | "lista";
 
 /** What the drawer is currently building. */
 export interface AssignmentDrawerRequest {
@@ -58,6 +87,10 @@ export interface ObjectiveSetsEditorProps {
   autoInclude: boolean;
   onAutoIncludeChange: (value: boolean) => void;
   companyObjectives: readonly Objective[];
+  /** Las reglas del modelo del ciclo, que deciden qué se le pide a cada
+   *  objetivo. Bajan hasta la tarjeta y hasta la validación del set. */
+  rules?: ObjectiveModelRules;
+  model?: ObjectiveModelId | null;
   /** Null while the drawer is closed. Owned by the builder so the action bar
    * can open it — the step itself carries no "add" button. */
   drawerRequest: AssignmentDrawerRequest | null;
@@ -66,11 +99,9 @@ export interface ObjectiveSetsEditorProps {
   /** Drops these groups (or people) from their assignments; an assignment left
    * with nobody goes with them. */
   onRemoveTargets: (targets: readonly { setId: string; targetId: string }[]) => void;
-  /** Ticked rows, reported up so the action bar can act on them — the same
-   * contract the participants table uses. */
-  onSelectionChange?: (count: number, actions: TableSelectionActions) => void;
-  /** Fires when the bar's "editar" acts on a single ticked row. */
-  onRequestEdit?: (setId: string) => void;
+  /** Lo marcado y lo que se puede hacer con ello, para la barra flotante —
+   *  que es donde viven todas las acciones del paso. Null sin nada marcado. */
+  onSelectionChange?: (selection: AssignmentSelection | null) => void;
   onAiWorkingChange?: (working: boolean) => void;
   showValidation: boolean;
   /** People already covered on the *other* step, so the individual step can
@@ -83,6 +114,9 @@ export interface ObjectiveSetsEditorProps {
   onResumeTemplateSeed?: () => void;
   enabled: boolean;
   onEnabledChange: (enabled: boolean) => void;
+  /** El nivel ya se decidió en la parametrización: la cabecera no ofrece
+   *  apagarlo desde aquí. */
+  hideSwitch?: boolean;
 }
 
 const COPY: Readonly<
@@ -103,7 +137,7 @@ const COPY: Readonly<
     title: "Objetivos individuales",
     lead: "Objetivos que se le asignan a personas concretas, cuando lo que se mide cambia de una a otra.",
     empty: "Todavía no has creado ninguna asignación individual",
-    hint: "Este paso es opcional: si todo tu ciclo se reparte por grupos, puedes continuar sin agregar nada.",
+    hint: "Elige a las personas y escribe los objetivos que va a llevar cada una, sin salir del mismo panel.",
     unit: "Persona",
     switchLabel: "Usar objetivos individuales",
   },
@@ -131,12 +165,13 @@ export function ObjectiveSetsEditor({
   autoInclude,
   onAutoIncludeChange,
   companyObjectives,
+  rules,
+  model,
   drawerRequest,
   onDrawerRequestChange,
   onSaveSet,
   onRemoveTargets,
   onSelectionChange,
-  onRequestEdit,
   onAiWorkingChange,
   showValidation,
   coveredElsewhere,
@@ -144,6 +179,7 @@ export function ObjectiveSetsEditor({
   onResumeTemplateSeed,
   enabled,
   onEnabledChange,
+  hideSwitch = false,
 }: ObjectiveSetsEditorProps) {
   const [selectedRowIds, setSelectedRowIds] = React.useState<ReadonlySet<string>>(
     () => new Set()
@@ -151,15 +187,33 @@ export function ObjectiveSetsEditor({
   /** Los sets que el modal de pesos está cuadrando, o null mientras está cerrado. */
   const [balancingSetIds, setBalancingSetIds] = React.useState<readonly string[] | null>(null);
   const [isConflictOpen, setIsConflictOpen] = React.useState(false);
+  /**
+   * Agrupado por quién comparte objetivos, o de corrido.
+   *
+   * No son dos pantallas: son la misma selección leída de dos formas, y por
+   * eso el estado de lo marcado vive aquí arriba y no dentro de ninguna de las
+   * dos. Cambiar de vista con tres grupos marcados los deja marcados.
+   */
+  const [view, setView] = React.useState<AssignmentView>("asignacion");
 
   const copy = COPY[kind];
   const isGroup = kind === "grupal";
   const Icon = isGroup ? UsersRound : UserRound;
 
-  const rows = React.useMemo(
-    () => sets.flatMap((set) => set.targetIds.map((targetId) => `${set.id}::${targetId}`)),
-    [sets]
+  const requireAlignment =
+    rules?.alignment === "required" &&
+    rules.companyObjectives !== "off" &&
+    companyObjectives.length > 0;
+
+  const summaries = React.useMemo(
+    () => assignmentSetSummaries(sets, segmentBy, { rules, requireAlignment }),
+    [sets, segmentBy, rules, requireAlignment]
   );
+  const tableRows = React.useMemo(
+    () => assignmentRows(summaries, segmentBy),
+    [summaries, segmentBy]
+  );
+  const rows = React.useMemo(() => tableRows.map((row) => row.id), [tableRows]);
 
   const editing =
     drawerRequest?.setId != null
@@ -188,48 +242,147 @@ export function ObjectiveSetsEditor({
     });
   }, [rows]);
 
-  // Los callbacks del padre se llegan por ref: el paso los recrea en cada
-  // render, y meterlos en las dependencias haría que `removeSelected` cambie
-  // de identidad siempre, que el efecto que la publica se dispare siempre, y
-  // que el render se realimente a sí mismo.
+  // Los callbacks del padre y las listas se leen por ref dentro de las
+  // acciones: el paso los recrea en cada render, y meterlos en las
+  // dependencias haría que la selección cambie de identidad siempre, que el
+  // efecto que la publica se dispare siempre, y que el render se realimente a
+  // sí mismo. Con refs, lo único que mueve la selección es marcar o desmarcar.
   const onRemoveTargetsRef = React.useRef(onRemoveTargets);
   onRemoveTargetsRef.current = onRemoveTargets;
+  const onDrawerRequestChangeRef = React.useRef(onDrawerRequestChange);
+  onDrawerRequestChangeRef.current = onDrawerRequestChange;
+  const onAllSetsChangeRef = React.useRef(onAllSetsChange);
+  onAllSetsChangeRef.current = onAllSetsChange;
+  const allSetsRef = React.useRef(allSets);
+  allSetsRef.current = allSets;
+  const setsRef = React.useRef(sets);
+  setsRef.current = sets;
 
   const clearSelection = React.useCallback(() => setSelectedRowIds(new Set()), []);
 
   const removeSelected = React.useCallback(() => {
-    const targets = [...selectedRowIds].map((rowId) => {
-      const [setId, targetId] = rowId.split("::");
-      return { setId, targetId };
-    });
+    const targets = [...selectedRowIds].map(splitAssignmentRowId);
     if (targets.length > 0) onRemoveTargetsRef.current(targets);
     setSelectedRowIds(new Set());
   }, [selectedRowIds]);
 
-  // The single ticked row's assignment, for the bar's "editar objetivos".
-  const singleSelectedSetId = React.useMemo(() => {
-    if (selectedRowIds.size !== 1) return null;
-    const [rowId] = [...selectedRowIds];
-    return rowId.split("::")[0] ?? null;
+  /** Las agrupaciones que toca la selección, sin repetir. */
+  const selectedSetIds = React.useMemo(() => {
+    const ids: string[] = [];
+    selectedRowIds.forEach((rowId) => {
+      const { setId } = splitAssignmentRowId(rowId);
+      if (!ids.includes(setId)) ids.push(setId);
+    });
+    return ids;
   }, [selectedRowIds]);
+
+  /**
+   * Cuántas filas marcadas comparten agrupación con alguien más — las únicas
+   * que se pueden sacar aparte, porque a las que ya están solas separarlas no
+   * les cambiaría nada.
+   */
+  const detachableCount = React.useMemo(() => {
+    let count = 0;
+    selectedRowIds.forEach((rowId) => {
+      const { setId } = splitAssignmentRowId(rowId);
+      const set = setsRef.current.find((candidate) => candidate.id === setId);
+      if (set && set.targetIds.length > 1) count += 1;
+    });
+    return count;
+  }, [selectedRowIds]);
+
+  const adjustSelectedWeights = React.useCallback(() => {
+    if (selectedSetIds.length > 0) setBalancingSetIds(selectedSetIds);
+  }, [selectedSetIds]);
+
+  /**
+   * Saca lo marcado a agrupaciones propias, con copia de los objetivos.
+   *
+   * Con una sola fila abre su agrupación recién creada: separar es el paso
+   * previo a editarla, y no hacerlo dejaría al usuario buscando la copia que
+   * acaba de pedir. Con varias no, porque no hay una sola que abrir.
+   */
+  const detachSelected = React.useCallback(() => {
+    const rowIds = [...selectedRowIds];
+    const result = rowIds.reduce(
+      (current, rowId) => {
+        const { setId, targetId } = splitAssignmentRowId(rowId);
+        const source = current.sets.find((set) => set.id === setId);
+        if (!source || source.targetIds.length < 2) return current;
+        const next = detachTarget(current.sets, setId, targetId);
+        return {
+          sets: next.sets,
+          created: next.created ? [...current.created, next.created] : current.created,
+        };
+      },
+      { sets: allSetsRef.current, created: [] as ObjectiveSet[] }
+    );
+
+    if (result.created.length === 0) return;
+    onAllSetsChangeRef.current(result.sets);
+    setSelectedRowIds(new Set());
+    if (result.created.length === 1) {
+      onDrawerRequestChangeRef.current({
+        setId: result.created[0].id,
+        phase: "objectives",
+        intent: "manual",
+      });
+    }
+  }, [selectedRowIds]);
+
+  const openSelectedSet = React.useCallback(
+    (phase: "targets" | "objectives") => () => {
+      const setId = selectedSetIds[0];
+      if (setId === undefined) return;
+      onDrawerRequestChangeRef.current({ setId, phase, intent: "manual" });
+    },
+    [selectedSetIds]
+  );
+
+  /**
+   * Lo marcado, ya traducido a lo que la barra puede ofrecer.
+   *
+   * Una sola agrupación marcada permite editar sus objetivos y cambiar sus
+   * destinatarios; varias, no —eso serían dos ediciones, no una—. Cuadrar
+   * pesos y quitar sí valen para varias a la vez, porque cada agrupación
+   * resuelve su propio reparto.
+   */
+  const selection = React.useMemo<AssignmentSelection | null>(() => {
+    if (selectedRowIds.size === 0) return null;
+    const singleSet = selectedSetIds.length === 1;
+    return {
+      count: selectedRowIds.size,
+      unit: isGroup ? "grupo" : "persona",
+      setCount: selectedSetIds.length,
+      detachableCount,
+      clear: clearSelection,
+      editObjectives: singleSet ? openSelectedSet("objectives") : null,
+      editTargets: singleSet ? openSelectedSet("targets") : null,
+      adjustWeights: adjustSelectedWeights,
+      detach: detachableCount > 0 ? detachSelected : null,
+      remove: removeSelected,
+    };
+  }, [
+    selectedRowIds,
+    selectedSetIds,
+    detachableCount,
+    isGroup,
+    clearSelection,
+    openSelectedSet,
+    adjustSelectedWeights,
+    detachSelected,
+    removeSelected,
+  ]);
 
   const onSelectionChangeRef = React.useRef(onSelectionChange);
   onSelectionChangeRef.current = onSelectionChange;
-  const onRequestEditRef = React.useRef(onRequestEdit);
-  onRequestEditRef.current = onRequestEdit;
 
   React.useEffect(() => {
-    onSelectionChangeRef.current?.(selectedRowIds.size, {
-      clear: clearSelection,
-      remove: removeSelected,
-    });
-  }, [selectedRowIds, clearSelection, removeSelected]);
+    onSelectionChangeRef.current?.(selection);
+  }, [selection]);
 
-  // The bar's "editar" needs to know which assignment is ticked; it is handed
-  // over the same way the count is.
-  React.useEffect(() => {
-    onRequestEditRef.current?.(singleSelectedSetId ?? "");
-  }, [singleSelectedSetId]);
+  // Salir del paso no puede dejar la barra armada sobre filas que ya no se ven.
+  React.useEffect(() => () => onSelectionChangeRef.current?.(null), []);
 
   const toggleRow = (rowId: string) =>
     setSelectedRowIds((current) => {
@@ -244,10 +397,18 @@ export function ObjectiveSetsEditor({
     setSelectedRowIds((current) => {
       const set = sets.find((candidate) => candidate.id === setId);
       if (!set) return current;
-      const ids = set.targetIds.map((targetId) => `${setId}::${targetId}`);
+      const ids = set.targetIds.map((targetId) => assignmentRowId(setId, targetId));
       const allOn = ids.every((id) => current.has(id));
       const next = new Set(current);
       ids.forEach((id) => (allOn ? next.delete(id) : next.add(id)));
+      return next;
+    });
+
+  /** La casilla del encabezado de la lista: marca o desmarca de un tirón. */
+  const setSelection = (rowIds: readonly string[], selected: boolean) =>
+    setSelectedRowIds((current) => {
+      const next = new Set(current);
+      rowIds.forEach((id) => (selected ? next.add(id) : next.delete(id)));
       return next;
     });
 
@@ -273,6 +434,7 @@ export function ObjectiveSetsEditor({
     () => conflictedLoads(allSets, segmentBy),
     [allSets, segmentBy]
   );
+  const conflictShares = useWeightShares(conflicts, isConflictOpen);
 
   const balancingGroups = React.useMemo<readonly WeightBalanceGroup[]>(() => {
     if (balancingSetIds === null) return [];
@@ -298,15 +460,6 @@ export function ObjectiveSetsEditor({
     onAllSetsChange(next);
   };
 
-  /** Saca a un destinatario de una agrupación compartida y abre la suya. */
-  const editOne = (setId: string, targetId: string) => {
-    const { sets: next, created } = detachTarget(allSets, setId, targetId);
-    onAllSetsChange(next);
-    if (created) {
-      onDrawerRequestChange({ setId: created.id, phase: "objectives", intent: "manual" });
-    }
-  };
-
   const overlapping = React.useMemo(() => {
     if (isGroup || coveredElsewhere.size === 0) return 0;
     const ids = new Set<string>();
@@ -314,77 +467,99 @@ export function ObjectiveSetsEditor({
     return ids.size;
   }, [isGroup, sets, coveredElsewhere]);
 
-  // Por grupos ya no lleva su propio header con switch: activar/desactivar
-  // vive en el checkbox de la tarjeta "Por grupos" de arriba, y este panel se
-  // reduce siempre al mismo empty state o lista, sin un segundo interruptor
-  // duplicando la misma decisión.
-  const showContent = isGroup || enabled;
+  const showContent = enabled;
+
+  if (isConflictOpen) {
+    // El reparto del peso ocupa el paso entero, como dentro del cajón: no es
+    // una ventana encima de la lista, es a dónde se va desde ella. Aquí las
+    // acciones van al pie de la propia tarjeta porque este paso no tiene una
+    // barra flotante propia que las recoja.
+    return (
+      <section className="flex min-w-0 w-full flex-1 flex-col gap-5">
+        <div className="flex flex-col gap-4 rounded-2xl border border-border/60 bg-surface p-6 pt-4 shadow-card">
+          <WeightConflictView
+            controller={conflictShares}
+            affected={conflicts.length}
+            onBack={() => setIsConflictOpen(false)}
+            onSeparate={(setId, personId) =>
+              onAllSetsChange(excludeFromSet(allSets, setId, personId))
+            }
+          />
+          <div className="border-t border-border/60 pt-4">
+            <WeightConflictActions
+              controller={conflictShares}
+              onCancel={() => setIsConflictOpen(false)}
+              onApply={() => {
+                applyShares(conflictShares.shareMap());
+                setIsConflictOpen(false);
+              }}
+            />
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="flex min-w-0 w-full flex-1 flex-col gap-5">
-      {!isGroup && (
-        <header className="rounded-2xl border border-border/60 bg-surface p-6 shadow-card">
-          <div className="flex items-start gap-3">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-              <Icon className="size-[18px]" strokeWidth={2.2} />
-            </span>
-            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-              <h2 className="text-[16px] font-bold tracking-tight text-text-primary">
-                {copy.title}
-              </h2>
-              <p className="text-[13px] leading-relaxed text-text-secondary">{copy.lead}</p>
-            </div>
-
-            <label className="ml-4 mt-1 flex shrink-0 cursor-pointer items-center gap-2 text-[12px] font-medium text-text-primary">
-              <span>{copy.switchLabel}</span>
-              <Switch
-                checked={enabled}
-                onCheckedChange={onEnabledChange}
-                aria-label={copy.switchLabel}
-                className="data-[state=checked]:bg-status-positive"
-              />
-            </label>
-          </div>
-        </header>
-      )}
-
       {showContent && (
         <div className="flex flex-col gap-4 rounded-2xl border border-border/60 bg-surface p-6 shadow-card">
           {sets.length > 0 && (
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-border/60 bg-surface-muted/40 px-4 py-3">
-              <Stat
-                label={sets.length === 1 ? "agrupación" : "agrupaciones"}
-                value={sets.length}
+            <div className="flex items-center justify-between gap-4 rounded-xl border border-border/60 bg-surface-muted/40 px-4 py-2.5">
+              {/* Lo que no cambia entre una vista y otra: a cuánta gente llega
+                  y cuántos objetivos reparte. Las otras dos cuentas
+                  —agrupaciones y grupos— se fueron a las pestañas, que es
+                  donde significan algo: cada una dice cuántas filas vas a ver
+                  si la abres. */}
+              <div className="flex min-w-0 items-center gap-x-4 overflow-hidden">
+                <Stat label="personas alcanzadas" value={formatCount(reach)} />
+                <Divider />
+                <Stat
+                  label={objectivesCount === 1 ? "objetivo" : "objetivos"}
+                  value={objectivesCount}
+                />
+                {pending > 0 && (
+                  <>
+                    <Divider />
+                    <span
+                      className={cn(
+                        "inline-flex shrink-0 items-center rounded-full px-2.5 py-0.5 text-[11.5px] font-bold",
+                        showValidation
+                          ? "bg-destructive/10 text-destructive"
+                          : "bg-surface text-text-secondary"
+                      )}
+                    >
+                      {pending} sin terminar
+                    </span>
+                  </>
+                )}
+              </div>
+
+              {/* Las dos lecturas de lo mismo, cada una con su cuenta dentro:
+                  "Agrupaciones" es la misma palabra con la que se nombra cada
+                  tarjeta —Agrupación 1, Agrupación 2—, y la lista de corrido
+                  cuenta destinatarios. Llevar el número dentro de la pestaña
+                  es lo que hace que "1 agrupación / 2 grupos" deje de ser un
+                  dato suelto: es cuántas filas tiene cada vista. */}
+              <SegmentedControl
+                ariaLabel="Cómo ver lo asignado"
+                size="sm"
+                className="w-auto shrink-0"
+                options={[
+                  {
+                    value: "asignacion",
+                    label: `Agrupaciones (${sets.length})`,
+                    icon: Layers,
+                  },
+                  {
+                    value: "lista",
+                    label: `${isGroup ? "Lista de grupos" : "Lista de colaboradores"} (${rows.length})`,
+                    icon: Rows3,
+                  },
+                ]}
+                value={view}
+                onChange={(next) => setView(next as AssignmentView)}
               />
-              <Divider />
-              <Stat
-                label={
-                  rows.length === 1 ? copy.unit.toLowerCase() : `${copy.unit.toLowerCase()}s`
-                }
-                value={rows.length}
-              />
-              <Divider />
-              <Stat label="personas alcanzadas" value={formatCount(reach)} />
-              <Divider />
-              <Stat
-                label={objectivesCount === 1 ? "objetivo" : "objetivos"}
-                value={objectivesCount}
-              />
-              {pending > 0 && (
-                <>
-                  <Divider />
-                  <span
-                    className={cn(
-                      "inline-flex items-center rounded-full px-2.5 py-0.5 text-[11.5px] font-bold",
-                      showValidation
-                        ? "bg-destructive/10 text-destructive"
-                        : "bg-surface text-text-secondary"
-                    )}
-                  >
-                    {pending} sin terminar
-                  </span>
-                </>
-              )}
             </div>
           )}
 
@@ -413,11 +588,11 @@ export function ObjectiveSetsEditor({
               icon={TriangleAlert}
               message={
                 conflicts.length === 1
-                  ? `${conflicts[0].name} recibe objetivos por ${conflicts[0].sources.length} vías y suma ${conflicts[0].total} %.`
-                  : `${conflicts.length} personas reciben objetivos por más de una vía y no cierran en 100 %.`
+                  ? `El peso de los objetivos de ${conflicts[0].name} suma ${conflicts[0].total} %, no 100 %.`
+                  : `A ${conflicts.length} personas el peso de sus objetivos no les suma 100 %.`
               }
-              detail="Reparte su 100 % entre las asignaciones que las alcanzan, o deja que se ajuste solo."
-              actionLabel="Resolver conflictos"
+              detail="Les llegan objetivos por más de una asignación, y entre todas tienen que repartir ese 100 %."
+              actionLabel="Repartir el peso"
               onAction={() => setIsConflictOpen(true)}
             />
           )}
@@ -427,8 +602,8 @@ export function ObjectiveSetsEditor({
               <Info className="mt-px size-4 shrink-0 text-status-warning" strokeWidth={2} />
               <span>
                 {overlapping === 1 ? "1 persona ya recibe" : `${overlapping} personas ya reciben`}{" "}
-                objetivos por su grupo. Lo que definas aquí se suma a lo que ya llevan, así que
-                entre las dos vías tiene que dar 100 %.
+                objetivos por su grupo. El peso de lo que definas aquí se suma al que ya llevan, y
+                entre las dos asignaciones tiene que dar 100 %.
               </span>
             </p>
           )}
@@ -523,24 +698,28 @@ export function ObjectiveSetsEditor({
               </div>
             </div>
           ) : (
-            <AssignmentGroupList
-              kind={kind}
-              sets={sets}
-              segmentBy={segmentBy}
-              showValidation={showValidation}
-              selectedRowIds={selectedRowIds}
-              onToggleRow={toggleRow}
-              onToggleSet={toggleSet}
-              onEditObjectives={(setId) =>
-                onDrawerRequestChange({ setId, phase: "objectives", intent: "manual" })
-              }
-              onEditTargets={(setId) =>
-                onDrawerRequestChange({ setId, phase: "targets", intent: "manual" })
-              }
-              onEditOne={editOne}
-              onRemoveTarget={(setId, targetId) => onRemoveTargets([{ setId, targetId }])}
-              onAdjustWeights={(setId) => setBalancingSetIds([setId])}
-            />
+            <>
+              {view === "asignacion" ? (
+                <AssignmentGroupList
+                  kind={kind}
+                  summaries={summaries}
+                  segmentBy={segmentBy}
+                  showValidation={showValidation}
+                  selectedRowIds={selectedRowIds}
+                  onToggleRow={toggleRow}
+                  onToggleSet={toggleSet}
+                />
+              ) : (
+                <AssignmentRowsTable
+                  kind={kind}
+                  rows={tableRows}
+                  showValidation={showValidation}
+                  selectedRowIds={selectedRowIds}
+                  onToggleRow={toggleRow}
+                  onSetSelection={setSelection}
+                />
+              )}
+            </>
           )}
         </div>
       )}
@@ -561,6 +740,8 @@ export function ObjectiveSetsEditor({
         autoInclude={autoInclude}
         onAutoIncludeChange={onAutoIncludeChange}
         companyObjectives={companyObjectives}
+        rules={rules}
+        model={model}
         onSave={(set) => {
           onSaveSet(set);
           onDrawerRequestChange(null);
@@ -575,15 +756,6 @@ export function ObjectiveSetsEditor({
         onApply={applyBalance}
       />
 
-      <WeightConflictDialog
-        open={isConflictOpen}
-        onOpenChange={setIsConflictOpen}
-        loads={conflicts}
-        onSeparate={(setId, personId) =>
-          onAllSetsChange(excludeFromSet(allSets, setId, personId))
-        }
-        onApply={applyShares}
-      />
     </section>
   );
 }

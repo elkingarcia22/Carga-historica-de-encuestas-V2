@@ -3,10 +3,10 @@ import { Plus, Send } from "lucide-react";
 import { DrawerShell } from "@/components/overlays";
 import { Button } from "@/components/ui/button";
 import { SheetFooter } from "@/components/ui/sheet";
-import { InitialsAvatar, formatRelativeDate } from "@/components/ciclo-detail";
+import { InitialsAvatar, formatPercent, formatRelativeDate } from "@/components/ciclo-detail";
 import { LifecycleChip } from "./ResultsChips";
 import { SearchBox } from "./tableBridge";
-import type { CicloResults } from "./resultsModel";
+import { RISK_META, type CicloResults } from "./resultsModel";
 
 /**
  * Lo pendiente, en una lista sobre la que se puede actuar.
@@ -16,7 +16,7 @@ import type { CicloResults } from "./resultsModel";
  * hace lo único que hay que hacer con esa lista.
  */
 
-export type PendingKind = "sin-objetivos" | "por-aprobar" | "por-ajustar";
+export type PendingKind = "sin-objetivos" | "por-aprobar" | "por-ajustar" | "sin-avance" | "riesgo-alto";
 
 const COPY: Readonly<
   Record<PendingKind, { title: string; description: string; action: string; noun: string }>
@@ -41,6 +41,19 @@ const COPY: Readonly<
       "Su líder pidió cambios y volvieron a quien los escribió. Tampoco cuentan hasta que se reenvíen y se aprueben.",
     action: "Recordar los ajustes pendientes",
     noun: "objetivos",
+  },
+  "sin-avance": {
+    title: "Colaboradores sin avance",
+    description:
+      "Cuentan en los resultados pero todavía no reportaron ningún avance en sus objetivos.",
+    action: "Recordar avance a los seleccionados",
+    noun: "colaboradores",
+  },
+  "riesgo-alto": {
+    title: "Colaboradores en riesgo alto",
+    description: RISK_META.alto.description,
+    action: "Recordar avance a los seleccionados",
+    noun: "colaboradores",
   },
 };
 
@@ -80,6 +93,40 @@ export function PendingDrawer({
           name: collaborator.name,
           meta: `${collaborator.area} · ${collaborator.leader ?? "Sin líder"}`,
           detail: "",
+          lifecycle: null,
+        }));
+    }
+
+    if (kind === "sin-avance") {
+      return results.scored
+        .filter((row) => row.reportedCount === 0)
+        .filter(
+          (row) =>
+            term === "" ||
+            `${row.collaborator.name} ${row.area} ${row.leader}`.toLowerCase().includes(term)
+        )
+        .map((row) => ({
+          id: row.person.id,
+          name: row.collaborator.name,
+          meta: `${row.area} · ${row.leader}`,
+          detail: "",
+          lifecycle: null,
+        }));
+    }
+
+    if (kind === "riesgo-alto") {
+      return results.scored
+        .filter((row) => row.risk === "alto")
+        .filter(
+          (row) =>
+            term === "" ||
+            `${row.collaborator.name} ${row.area} ${row.leader}`.toLowerCase().includes(term)
+        )
+        .map((row) => ({
+          id: row.person.id,
+          name: row.collaborator.name,
+          meta: `${row.area} · ${row.leader}`,
+          detail: `${formatPercent(row.percent)} de avance`,
           lifecycle: null,
         }));
     }

@@ -15,6 +15,7 @@ import {
   Scale,
   SlidersHorizontal,
   Sparkles,
+  SplitSquareHorizontal,
   Target,
   Unlink,
   Users,
@@ -27,14 +28,17 @@ import { Popover, PopoverContent, PopoverTrigger, PopoverTitle } from "@/compone
 import {
   AnimatedActionItem,
   RailButton,
+  RailConfirmButton,
   RailDragHandle,
   RailSelectionChip,
   RailSettingsMenu,
+  useContextChangeKey,
   useDraggableRail,
   useRailAutoHide,
 } from "@/components/action-rail";
 import { formatCount, type ParticipantsGroupBreakdown } from "@/components/survey-builder";
 import type { AiReviewActions } from "./AiObjectiveComposer";
+import type { AssignmentSelection } from "./assignmentSelection";
 import type { CicloStepId } from "./cicloStepper";
 
 interface CicloBuilderRailProps {
@@ -92,15 +96,14 @@ interface CicloBuilderRailProps {
   participantsSelectionCount?: number;
   onClearParticipantsSelection?: (() => void) | null;
   onDeleteParticipantsSelection?: (() => void) | null;
-  /** Ticked rows in the assignments table. One row is one group (or one
-   * person), so the actions read in those terms rather than in "asignación". */
-  assignmentSelectionCount?: number;
-  assignmentUnit?: "grupo" | "persona";
-  onClearAssignmentSelection?: (() => void) | null;
-  onRemoveAssignmentSelection?: (() => void) | null;
-  /** Only offered on a single ticked row: editing two sets of objectives at
-   * once is not an action, it is two actions. */
-  onEditAssignmentSelection?: (() => void) | null;
+  /**
+   * Lo marcado en el paso de objetivos asignados, ya con sus acciones.
+   *
+   * Llega entero y no en cinco props sueltas porque la barra no decide nada
+   * sobre ello: el paso, que es quien sabe cómo están repartidos los
+   * objetivos, dice qué se puede hacer con lo marcado, y la barra lo dibuja.
+   */
+  assignmentSelection?: AssignmentSelection | null;
   /** Acciones específicas del paso de alineación (ej: Popover de alinear). */
   alignmentActions?: React.ReactNode;
 }
@@ -141,11 +144,7 @@ export function CicloBuilderRail({
   participantsSelectionCount = 0,
   onClearParticipantsSelection,
   onDeleteParticipantsSelection,
-  assignmentSelectionCount = 0,
-  assignmentUnit = "grupo",
-  onClearAssignmentSelection,
-  onRemoveAssignmentSelection,
-  onEditAssignmentSelection,
+  assignmentSelection = null,
   alignmentActions,
 }: CicloBuilderRailProps) {
   const [autoHide] = useRailAutoHide();
@@ -174,6 +173,25 @@ export function CicloBuilderRail({
   const previousStep = React.useRef(activeStep);
   const [stepChangeKey, setStepChangeKey] = React.useState(0);
   const [addMenuOpen, setAddMenuOpen] = React.useState(false);
+  const [isRemoveOpen, setIsRemoveOpen] = React.useState(false);
+
+  /**
+   * Las acciones de la selección vuelven a entrar escalonadas cuando cambia lo
+   * que se puede hacer con ella —al pasar de una agrupación a varias, por
+   * ejemplo—, no en cada fila que se marca: repetir la animación en cada clic
+   * la convierte en parpadeo.
+   */
+  const selectionKey = useContextChangeKey(
+    assignmentSelection === null
+      ? "vacio"
+      : `${assignmentSelection.setCount}:${assignmentSelection.detachableCount > 0}`
+  );
+
+  // Una confirmación abierta sobre filas que ya no están marcadas preguntaría
+  // por algo que ya no existe.
+  React.useEffect(() => {
+    if (assignmentSelection === null) setIsRemoveOpen(false);
+  }, [assignmentSelection]);
 
   React.useEffect(() => {
     if (previousStep.current !== activeStep) {
@@ -265,8 +283,17 @@ export function CicloBuilderRail({
   const isFinalStep = continueLabel === "Finalizar";
   const hasParticipantsSelection =
     activeStep === "participants" && participantsSelectionCount > 0;
-  const hasAssignmentSelection = assignmentSelectionCount > 0;
-  const assignmentUnitPlural = assignmentUnit === "grupo" ? "grupos" : "personas";
+  const assignmentUnitPlural = assignmentSelection?.unit === "persona" ? "personas" : "grupos";
+  /**
+   * Con algo marcado la barra deja de hablarle al paso y le habla a la
+   * selección: "Crear asignación", "Resumen del ciclo", "Salir", "Guardar" y
+   * la navegación entre pasos no son acciones sobre lo marcado, y ofrecerlas
+   * junto a "Quitar" mezclaba dos conversaciones en una tira. Mismo patrón
+   * que la barra de resultados (`persistent={selectedCount === 0 ? … : null}`
+   * en `CicloResultsActionRail`): estas se retiran del todo mientras hay
+   * selección, no se quedan atenuadas.
+   */
+  const hasAnySelection = hasParticipantsSelection || assignmentSelection !== null;
 
   return (
     <>
@@ -364,38 +391,97 @@ export function CicloBuilderRail({
                 </>
               )}
 
-              {hasAssignmentSelection && (
+              {assignmentSelection && (
                 <>
-                  <AnimatedActionItem animKey={stepChangeKey} staggerIndex={0} skipColorFlash>
+                  <AnimatedActionItem animKey={selectionKey} staggerIndex={0} skipColorFlash>
                     <RailSelectionChip
-                      count={assignmentSelectionCount}
-                      onClear={() => onClearAssignmentSelection?.()}
-                      gender={assignmentUnit === "grupo" ? "m" : "f"}
+                      count={assignmentSelection.count}
+                      onClear={assignmentSelection.clear}
+                      gender={assignmentSelection.unit === "grupo" ? "m" : "f"}
                     />
                   </AnimatedActionItem>
 
-                  {onEditAssignmentSelection && (
-                    <AnimatedActionItem animKey={stepChangeKey} staggerIndex={1}>
+                  {/* Igual que en la tabla de colaboradores: la barra no
+                      enseña las cinco acciones con dos apagadas, muestra
+                      solo las que sirven para lo marcado ahora mismo. "Editar
+                      objetivos" y "Cambiar destinatarios" son gestos de una
+                      sola agrupación —editarlos a la vez sería prometer algo
+                      que dos agrupaciones distintas no pueden cumplir sin
+                      preguntar de cuál se trata—, así que solo aparecen con
+                      una marcada. "Sacar" solo aparece si hay algo que
+                      separar. Ajustar pesos y quitar sirven igual para una
+                      fila que para diez. */}
+                  {assignmentSelection.editObjectives && (
+                    <AnimatedActionItem animKey={selectionKey} staggerIndex={1}>
                       <RailButton
                         icon={<Target className="h-[20px] w-[20px]" strokeWidth={2} />}
                         label="Editar objetivos"
-                        onClick={() => onEditAssignmentSelection()}
+                        onClick={() => assignmentSelection.editObjectives?.()}
                       />
                     </AnimatedActionItem>
                   )}
 
-                  {onRemoveAssignmentSelection && (
-                    <AnimatedActionItem animKey={stepChangeKey} staggerIndex={2}>
+                  {assignmentSelection.editTargets && (
+                    <AnimatedActionItem animKey={selectionKey} staggerIndex={2}>
                       <RailButton
-                        icon={<Trash2 className="h-[20px] w-[20px]" strokeWidth={2} />}
-                        label={`Quitar los objetivos de ${assignmentSelectionCount} ${
-                          assignmentSelectionCount === 1 ? assignmentUnit : assignmentUnitPlural
-                        }`}
-                        onClick={() => onRemoveAssignmentSelection()}
-                        tone="danger"
+                        icon={<Users className="h-[20px] w-[20px]" strokeWidth={2} />}
+                        label={`Cambiar ${assignmentUnitPlural} de la agrupación`}
+                        onClick={() => assignmentSelection.editTargets?.()}
                       />
                     </AnimatedActionItem>
                   )}
+
+                  <AnimatedActionItem animKey={selectionKey} staggerIndex={3}>
+                    <RailButton
+                      icon={<Scale className="h-[20px] w-[20px]" strokeWidth={2} />}
+                      label={
+                        assignmentSelection.setCount === 1
+                          ? "Ajustar los pesos de esta agrupación"
+                          : `Ajustar los pesos de ${assignmentSelection.setCount} agrupaciones`
+                      }
+                      onClick={assignmentSelection.adjustWeights}
+                    />
+                  </AnimatedActionItem>
+
+                  {assignmentSelection.detach && (
+                    <AnimatedActionItem animKey={selectionKey} staggerIndex={4}>
+                      <RailButton
+                        icon={<SplitSquareHorizontal className="h-[20px] w-[20px]" strokeWidth={2} />}
+                        label={
+                          assignmentSelection.detachableCount <= 1
+                            ? "Sacar a su propia agrupación, con una copia de estos objetivos"
+                            : `Sacar ${assignmentSelection.detachableCount} a agrupaciones propias, cada una con su copia de los objetivos`
+                        }
+                        onClick={() => assignmentSelection.detach?.()}
+                      />
+                    </AnimatedActionItem>
+                  )}
+
+                  <AnimatedActionItem animKey={selectionKey} staggerIndex={5}>
+                    <RailConfirmButton
+                      icon={<Trash2 className="h-[20px] w-[20px]" strokeWidth={2} />}
+                      label={`Quitar los objetivos de ${assignmentSelection.count} ${
+                        assignmentSelection.count === 1
+                          ? assignmentSelection.unit
+                          : assignmentUnitPlural
+                      }`}
+                      tone="danger"
+                      open={isRemoveOpen}
+                      onOpenChange={setIsRemoveOpen}
+                      title={
+                        assignmentSelection.count === 1
+                          ? `¿Quitar los objetivos de este ${assignmentSelection.unit}?`
+                          : `¿Quitar los objetivos de ${assignmentSelection.count} ${assignmentUnitPlural}?`
+                      }
+                      description="Dejan de tener objetivos en este ciclo. Una agrupación que se quede sin nadie se va con ellos."
+                      confirmLabel="Quitar"
+                      confirmTone="destructive"
+                      onConfirm={() => {
+                        assignmentSelection.remove();
+                        setIsRemoveOpen(false);
+                      }}
+                    />
+                  </AnimatedActionItem>
 
                   <div className="-mx-1 my-2 w-px self-stretch bg-white/10" />
                 </>
@@ -439,6 +525,8 @@ export function CicloBuilderRail({
                 </>
               )}
 
+              {!hasAnySelection && (
+                <>
               {onAddObjective && (
                 <>
                   <div
@@ -661,6 +749,8 @@ export function CicloBuilderRail({
                   <ArrowRight className="h-4 w-4" strokeWidth={2} />
                 )}
               </Button>
+                </>
+              )}
                 </>
               )}
             </div>

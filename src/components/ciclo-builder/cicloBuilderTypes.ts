@@ -20,6 +20,12 @@
 
 import type { ParticipantMode, ParticipantsSelection, SegmentKey } from "@/components/survey-builder";
 import { trackBlockingIssue } from "./complianceRules";
+import {
+  DEFAULT_OBJECTIVE_MODEL_RULES,
+  objectiveModelVocab,
+  type ObjectiveModelId,
+  type ObjectiveModelRules,
+} from "./objectiveModel";
 
 /** How an objective's result is expressed. */
 export type MeasureType = "money" | "percentage" | "numeric" | "boolean";
@@ -37,12 +43,13 @@ export type ObjectiveDirection = "increase" | "decrease";
  * different for each: a leader starts from their team (grupos, agrupados por
  * líder), a collaborator starts from the widest net (toda la empresa).
  */
-export type CicloObjectiveCreator = "leader" | "collaborator" | "hr";
+export type CicloObjectiveCreator = "leader" | "collaborator" | "hr" | "custom";
 
 export const CICLO_OBJECTIVE_CREATOR_LABELS: Readonly<Record<CicloObjectiveCreator, string>> = {
   leader: "Líder",
   collaborator: "Colaboradores",
   hr: "Recursos Humanos",
+  custom: "Personalizado",
 };
 
 /** One line under each option, so the choice reads as a real consequence and
@@ -51,23 +58,42 @@ export const CICLO_OBJECTIVE_CREATOR_TAGLINES: Readonly<Record<CicloObjectiveCre
   leader: "El líder define los objetivos de su equipo",
   collaborator: "Cada colaborador propone los suyos",
   hr: "Tú los defines; no hace falta elegir participantes",
+  custom: "Eliges puntualmente quién los crea",
 };
 
 /**
  * Menu order for "Por grupos", "Por colaborador", "Toda la empresa" e
  * "Importar archivo" once it is known who is writing the objectives. RH has
  * no entry here — that creator skips the participants step entirely, so no
- * order is ever needed for it.
+ * order is ever needed for it. Otros funciona igual que colaboradores (gente
+ * elegida a mano que crea lo suyo fuera de este constructor), así que
+ * comparte su mismo orden.
  */
 export const PARTICIPANT_MODES_BY_CREATOR: Readonly<
   Record<Exclude<CicloObjectiveCreator, "hr">, readonly ParticipantMode[]>
 > = {
   leader: ["groups", "individual", "company", "import"],
-  collaborator: ["company", "individual", "groups", "import"],
+  collaborator: ["individual", "company", "groups", "import"],
+  custom: ["individual", "company", "groups", "import"],
+};
+
+/**
+ * La frase bajo el título del paso de participantes. Con líder se eligen las
+ * personas que van a redactar los objetivos de su equipo; con colaborador u
+ * Otros, las que van a redactar los suyos —Otros es el mismo flujo que
+ * colaborador, solo que la gente se elige puntualmente en vez de venir dada
+ * por el rol—. RH no llega a este paso.
+ */
+export const CICLO_PARTICIPANTS_DESCRIPTIONS: Readonly<
+  Record<Exclude<CicloObjectiveCreator, "hr">, string>
+> = {
+  leader: "Elige los líderes que van a crear los objetivos de sus equipos.",
+  collaborator: "Elige los colaboradores que van a crear sus propios objetivos.",
+  custom: "Elige las personas que van a crear sus propios objetivos.",
 };
 
 /** Whether a set of objectives is handed to groups or to individual people. */
-export type ObjectiveSetKind = "grupal" | "individual";
+export type ObjectiveSetKind = "grupal" | "individual" | "custom";
 
 /** Length of the ciclo. Presets derive the closing date from the start. */
 export type CicloPeriod =
@@ -355,14 +381,47 @@ export interface CicloBuilderAssignmentSeed {
 
 /**
  * Settings every group set shares: how the directory is bucketed into groups,
- * and whether someone who joins a group later inherits its objectives.
- * They sit outside the sets because changing the bucketing re-defines what a
- * "group" even is, so it cannot belong to one set and not the next.
+ * and whether group membership follows the org chart live — someone who
+ * joins a group later (a transfer, a new hire) inherits its objectives
+ * automatically, and someone who leaves one (changes area, changes leader,
+ * is offboarded) has them withdrawn automatically. They sit outside the sets
+ * because changing the bucketing re-defines what a "group" even is, so it
+ * cannot belong to one set and not the next.
  */
 export interface CicloAssignment {
   groupSegmentBy: SegmentKey;
   groupsAutoInclude: boolean;
 }
+
+/**
+ * Qué pasa con el avance de alguien cuando el paso de Participantes lo
+ * sincroniza en vivo con el organigrama y detecta que salió de la empresa o
+ * que cambió de área/grupo a mitad del ciclo. Solo importa mientras esa
+ * sincronización está activa (`companyAutoInclude`/`groupsAutoInclude` en
+ * `ParticipantsSelection`) — con la lista congelada no hay evento que dispare
+ * ninguna de las dos.
+ *
+ * Vive aparte de `ParticipantsSelection` a propósito: esa selección es
+ * compartida con la encuesta, que no tiene avance que contar o no contar.
+ */
+export interface CicloResultsPolicy {
+  /** Se desvincula de la empresa: ¿su avance hasta ese momento se retira de
+   *  los promedios (false), o sigue contando igual (true)? */
+  onCompanyLeaveCounts: boolean;
+  /** Cambia de área o de grupo ("Por grupos" solamente): en el grupo
+   *  anterior queda marcado inactivo siempre — eso no se elige—; esto decide
+   *  si ese avance sigue contando ahí o no. En el grupo nuevo entra activo,
+   *  sin relación con esta bandera. */
+  onGroupChangeCounts: boolean;
+}
+
+/** Igual que "Retirado" en los estados de participante hoy: alguien que se va
+ *  deja de contar por defecto, pero un traslado de área sí conserva lo
+ *  avanzado en el equipo anterior. */
+export const DEFAULT_CICLO_RESULTS_POLICY: CicloResultsPolicy = {
+  onCompanyLeaveCounts: false,
+  onGroupChangeCounts: true,
+};
 
 /** Lifecycle of a ciclo. Mirrors the survey's own states. */
 export type CicloStatus = "draft" | "scheduled" | "live" | "closed";
@@ -382,10 +441,22 @@ export interface CicloDraft {
   startDate: string;
   endDate: string;
   description: string;
+  /** Con qué gramática se escriben los objetivos (OKR, KPI, SMART…). Solo
+   * pone nombre, icono y vocabulario; las consecuencias viven en `modelRules`.
+   * `null` mientras el autor no ha elegido. */
+  objectiveModel: ObjectiveModelId | null;
+  /** Las reglas resueltas del modelo. Todo lo que sigue a Datos generales lee
+   * esto y nunca `objectiveModel`, así "Personalizado" y un preset recorren
+   * el mismo código. */
+  modelRules: ObjectiveModelRules;
   /** Who writes the objectives — decides whether the participants step even
    * applies, and in what order it offers its methods. */
-  objectiveCreator: CicloObjectiveCreator;
+  objectiveCreator: CicloObjectiveCreator | null;
   participants: ParticipantsSelection;
+  /** Qué pasa con el avance de alguien a quien la sincronización automática
+   *  del paso de Participantes le detecta una salida de la empresa o un
+   *  cambio de área/grupo. Ver `CicloResultsPolicy`. */
+  resultsPolicy: CicloResultsPolicy;
   /** Whether the company has top-level objectives for this ciclo. */
   useCompanyObjectives: boolean;
   /** Company-level objectives. Carry no weight: they frame the ciclo, they
@@ -397,10 +468,19 @@ export interface CicloDraft {
   useGroupObjectives: boolean;
   /** Same switch as `useGroupObjectives`, for the individual step. */
   useIndividualObjectives: boolean;
+  /** Whether this ciclo has custom assignment levels. */
+  useCustomObjectives: boolean;
   assignment: CicloAssignment;
   /** The handouts. Both kinds live in one array — they are the same shape and
    * obey the same rules; the step each belongs to is `kind`. */
   objectiveSets: readonly ObjectiveSet[];
+  /** El paso donde el autor dejó el borrador. Al reabrirlo se retoma ahí. */
+  _lastStep?: import("./cicloStepper").CicloStepId;
+  /** El bloque de la parametrización que estaba abierto al guardar. Retomar
+   *  en el paso correcto pero con el acordeón plegado desde el principio
+   *  sigue siendo empezar de nuevo. */
+  _lastSetupBlock?: import("./cicloSetup").SetupBlockId | null;
+  _id?: string;
 }
 
 /** Longest description accepted anywhere in the ciclo forms. */
@@ -456,33 +536,52 @@ export const keyActionsTotal = (actions: readonly KeyAction[]): number =>
  * Los aportes solo son obligatorios cuando las acciones mandan el avance —si
  * son un plan de apoyo, no reparten nada y no hay 100 % que cuadrar.
  */
-export function keyActionsIssue(objective: Objective): string | null {
+export function keyActionsIssue(
+  objective: Objective,
+  rules: ObjectiveModelRules = DEFAULT_OBJECTIVE_MODEL_RULES
+): string | null {
+  // El modelo decide si debajo del objetivo cuelga algo. Con "nada" —KPI—
+  // no hay lista que revisar, aunque el objetivo arrastre acciones de un
+  // modelo anterior: no se le piden, así que tampoco se le exigen.
+  if (rules.children === "none") return null;
+
+  const vocab = objectiveModelVocab(null, rules);
+  const child = vocab.child?.toLowerCase() ?? "acción clave";
+  const children = vocab.children?.toLowerCase() ?? "acciones clave";
+  const isMasculine = vocab.childrenGender === "m";
+  // Los resultados clave siempre miden el objetivo; las acciones solo si el
+  // modelo —o el propio objetivo— dice que mueven el avance.
+  const drivesProgress = rules.children === "results" || objective.keyActionsDriveProgress;
+
   const actions = objective.keyActions;
   if (actions.length === 0) {
-    return objective.keyActionsDriveProgress
-      ? "Añade al menos una acción clave o desactiva el avance por acciones"
+    if (rules.childrenRequired) {
+      return `Añade al menos ${isMasculine ? "un" : "una"} ${child}`;
+    }
+    return drivesProgress
+      ? `Añade al menos ${isMasculine ? "un" : "una"} ${child} o desactiva el avance por ${children}`
       : null;
   }
 
   const unnamed = actions.filter((action) => action.title.trim() === "").length;
   if (unnamed > 0) {
-    return `Ponle nombre a ${unnamed} ${unnamed === 1 ? "acción clave" : "acciones clave"}`;
+    return `Ponle nombre a ${unnamed} ${unnamed === 1 ? child : children}`;
   }
 
   const countless = actions.filter(
     (action) => action.kind === "cantidad" && parseAmount(action.targetCount) === null
   ).length;
   if (countless > 0) {
-    return `Dile cuántas veces se hace ${countless === 1 ? "1 acción" : `${countless} acciones`}`;
+    return `Dile cuántas veces se hace ${countless === 1 ? `1 ${child}` : `${countless} ${children}`}`;
   }
 
-  if (!objective.keyActionsDriveProgress) return null;
+  if (!drivesProgress) return null;
 
   const total = keyActionsTotal(actions);
   if (total !== TOTAL_WEIGHT) {
     return total < TOTAL_WEIGHT
-      ? `Falta repartir ${TOTAL_WEIGHT - total} % entre las acciones`
-      : `Las acciones se pasan ${total - TOTAL_WEIGHT} % de la meta`;
+      ? `Falta repartir ${TOTAL_WEIGHT - total} % entre ${isMasculine ? "los" : "las"} ${children}`
+      : `${isMasculine ? "Los" : "Las"} ${children} se pasan ${total - TOTAL_WEIGHT} % de la meta`;
   }
   return null;
 }
@@ -531,7 +630,23 @@ export function formatRawValue(raw: string, measure: MeasureType | null): string
  * header, the step gate, the finalize toast — wants to say *what* is missing,
  * and re-deriving that three times would let the three answers drift apart.
  */
-export function objectiveIssue(objective: Objective, options: { requireWeight: boolean }): string | null {
+export interface ObjectiveIssueOptions {
+  requireWeight: boolean;
+  /** Las reglas del ciclo. Sin ellas se corre con las de SMART, que son el
+   *  constructor de siempre. */
+  rules?: ObjectiveModelRules;
+  /**
+   * Si este objetivo tiene que colgar de uno de la empresa. Lo decide quien
+   * llama y no las reglas por su cuenta: los objetivos de la empresa son el
+   * norte, no cuelgan de nada, y con ellos esto siempre va apagado.
+   */
+  requireAlignment?: boolean;
+}
+
+export function objectiveIssue(
+  objective: Objective,
+  options: ObjectiveIssueOptions
+): string | null {
   if (
     objective.title.trim() === "" ||
     objective.measure === null ||
@@ -552,12 +667,16 @@ export function objectiveIssue(objective: Objective, options: { requireWeight: b
     return `El peso no puede ser inferior al ${MIN_OBJECTIVE_WEIGHT} %`;
   }
 
-  return keyActionsIssue(objective);
+  if (options.requireAlignment && objective.alignedTo === null) {
+    return "Alinéalo a un objetivo de la empresa";
+  }
+
+  return keyActionsIssue(objective, options.rules);
 }
 
 export const isObjectiveComplete = (
   objective: Objective,
-  options: { requireWeight: boolean }
+  options: ObjectiveIssueOptions
 ): boolean => objectiveIssue(objective, options) === null;
 
 export const totalWeight = (objectives: readonly Objective[]): number =>
@@ -610,12 +729,20 @@ export const setsOfKind = (
  * as `objectiveIssue`: the set card's badge, the step gate and the finalize
  * toast all name the gap, and they must name it identically.
  */
-export function objectiveSetIssue(set: ObjectiveSet): string | null {
+export function objectiveSetIssue(
+  set: ObjectiveSet,
+  options: { rules?: ObjectiveModelRules; requireAlignment?: boolean } = {}
+): string | null {
   if (set.targetIds.length === 0) return "Esta asignación se quedó sin destinatarios";
   if (set.objectives.length === 0) return "Crea al menos un objetivo";
 
   const incomplete = set.objectives.filter(
-    (objective) => !isObjectiveComplete(objective, { requireWeight: true })
+    (objective) =>
+      !isObjectiveComplete(objective, {
+        requireWeight: true,
+        rules: options.rules,
+        requireAlignment: options.requireAlignment,
+      })
   );
   if (incomplete.length > 0) {
     return `Completa ${incomplete.length} objetivo${incomplete.length === 1 ? "" : "s"}`;

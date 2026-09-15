@@ -8,7 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
  * El buscador y el filtro de una lista dentro del drawer de carga son, en
  * los dos casos, los mismos controles que usa el resto del proyecto —el
  * buscador de `resultados` (`SearchBox`, en `ciclo-detail/tablePieces`) y el
- * botón "Filtros" con su conteo (mismo trato que `ResultsFilterBar`)—, no una
+ * botón "Filtros" con su conteo (mismo trato que `ResultsGlobalFilters`)—, no una
  * pareja de iconos inventada para este módulo. `SearchBox` ya se usa un panel
  * más adentro, en `UploadDetailPanel`; lo que faltaba era que la revisión
  * misma lo usara también en vez de su propio botón que se abre en un campo.

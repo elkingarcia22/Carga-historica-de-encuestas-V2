@@ -31,7 +31,6 @@ export interface ResultsFilters {
   genders: ReadonlySet<string>;
   customGroups: ReadonlySet<string>;
   groups: ReadonlySet<string>;
-  estadosParticipante: ReadonlySet<string>;
   niveles: ReadonlySet<string>;
   risks: ReadonlySet<RiskLevel>;
   // ── Qué: lo que describe al objetivo ──
@@ -68,12 +67,11 @@ export const FILTER_META: Readonly<Record<FilterKey, FilterMeta>> = {
   genders: { label: "Género", scope: "persona", isDemographic: true },
   customGroups: { label: "Grupo personalizado", scope: "persona", isDemographic: true },
   groups: { label: "Grupo del ciclo", scope: "persona" },
-  estadosParticipante: { label: "Estado del participante", scope: "persona" },
-  niveles: { label: "Nivel de desempeño", scope: "persona" },
+  niveles: { label: "Nivel de cumplimiento", scope: "persona" },
   risks: { label: "Riesgo", scope: "persona" },
   approvals: { label: "Aprobación", scope: "objetivo" },
   lifecycles: { label: "Etapa del objetivo", scope: "objetivo" },
-  estados: { label: "Estado de cumplimiento", scope: "objetivo" },
+  estados: { label: "Estado del objetivo", scope: "objetivo" },
   companyObjectives: { label: "Objetivo de empresa", scope: "objetivo" },
   measures: { label: "Tipo de medida", scope: "objetivo" },
 };
@@ -109,10 +107,18 @@ export interface ResultsFiltersState {
   filters: ResultsFilters;
   activeCount: number;
   toggle: (key: FilterKey, value: string) => void;
+  /**
+   * Deja un filtro con un solo valor, o vacío con `null`. Es lo que necesita
+   * un desplegable de "Sin filtrar / un valor" —el de los demográficos— sobre
+   * el mismo estado de conjuntos que usan las listas de varias marcas.
+   */
+  setOnly: (key: FilterKey, value: string | null) => void;
   setSearch: (value: string) => void;
   clearKey: (key: FilterKey) => void;
   clearAll: () => void;
   isOn: (key: FilterKey, value: string) => boolean;
+  /** El único valor marcado, o null si hay ninguno o varios. */
+  onlyValue: (key: FilterKey) => string | null;
 }
 
 export function useResultsFilters(): ResultsFiltersState {
@@ -122,6 +128,13 @@ export function useResultsFilters(): ResultsFiltersState {
     setFilters((current) => ({
       ...current,
       [key]: toggleIn(current[key] as ReadonlySet<string>, value),
+    }));
+  }, []);
+
+  const setOnly = React.useCallback((key: FilterKey, value: string | null) => {
+    setFilters((current) => ({
+      ...current,
+      [key]: value === null ? new Set() : new Set([value]),
     }));
   }, []);
 
@@ -140,14 +153,24 @@ export function useResultsFilters(): ResultsFiltersState {
     [filters]
   );
 
+  const onlyValue = React.useCallback(
+    (key: FilterKey) => {
+      const set = filters[key] as ReadonlySet<string>;
+      return set.size === 1 ? [...set][0] : null;
+    },
+    [filters]
+  );
+
   return {
     filters,
     activeCount: countActiveFilters(filters),
     toggle,
+    setOnly,
     setSearch,
     clearKey,
     clearAll,
     isOn,
+    onlyValue,
   };
 }
 
@@ -202,7 +225,6 @@ export function filterResults(
       passes(filters.customGroups, row.collaborator.customGroup ?? "") &&
       passes(filters.groups, row.groupLabel) &&
       passes(filters.niveles, row.nivel?.id ?? "") &&
-      passes(filters.estadosParticipante, row.estadoParticipante?.id ?? "") &&
       passes(filters.risks, row.risk) &&
       matchesSearch(row, term)
   );

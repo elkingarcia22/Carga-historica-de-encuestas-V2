@@ -32,6 +32,15 @@ interface DrawerSectionProps {
   collapsible?: boolean;
   /** Si `collapsible`, si arranca abierta. Por defecto arranca cerrada. */
   defaultOpen?: boolean;
+  /**
+   * Clases para la tarjeta. Lo único que se espera aquí es cómo participa en
+   * el layout de su panel —una tarjeta que se lleva el alto sobrante y
+   * desplaza solo su contenido—, nunca su color ni su borde: la anatomía es
+   * la misma en todos lados y por eso vive en este archivo.
+   */
+  className?: string;
+  /** Lo mismo para el bloque del contenido, bajo la divisoria. */
+  contentClassName?: string;
   children: React.ReactNode;
 }
 
@@ -56,13 +65,21 @@ export function DrawerSection({
   stickyHeader,
   collapsible = false,
   defaultOpen = false,
+  className,
+  contentClassName,
   children,
 }: DrawerSectionProps) {
   const [open, setOpen] = React.useState(defaultOpen);
   const isOpen = !collapsible || open;
+  const toggle = () => setOpen((prev) => !prev);
 
   return (
-    <section className="rounded-2xl border border-border/60 bg-surface p-3.5 shadow-card">
+    <section
+      className={cn(
+        "rounded-2xl border border-border/60 bg-surface p-3.5 shadow-card",
+        className
+      )}
+    >
       {/*
         * La divisoria y el espacio bajo el título viven en este bloque y no
         * arriba del contenido: pegada a la cabecera, es ella la que se lleva
@@ -82,7 +99,7 @@ export function DrawerSection({
       >
         <header
           className={cn("flex items-start gap-2.5", collapsible && "cursor-pointer select-none")}
-          onClick={collapsible ? () => setOpen((prev) => !prev) : undefined}
+          onClick={collapsible ? toggle : undefined}
           role={collapsible ? "button" : undefined}
           aria-expanded={collapsible ? open : undefined}
         >
@@ -121,7 +138,7 @@ export function DrawerSection({
           )}
         </header>
       </div>
-      {isOpen && <div className="pt-3.5">{children}</div>}
+      {isOpen && <div className={cn("pt-3.5", contentClassName)}>{children}</div>}
     </section>
   );
 }

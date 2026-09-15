@@ -1,11 +1,10 @@
 import * as React from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { UbitsToaster } from "@/components/feedback";
-import { AdminShell } from "@/components/app-shell";
+import { AdminShell, ShellHeaderSlot } from "@/components/app-shell";
 import { ObjetivosDashboard } from "@/screens/ObjetivosDashboard";
 import { CicloBuilder } from "@/screens/CicloBuilder";
 import { UbitsTabs } from "@/components/navigation";
-import { parseSpanishDate, type CicloListRow } from "@/components/ciclo-detail";
 import { ArrowLeft, Target, UserX } from "lucide-react";
 import { HomePulseStrip, TemplatesStrip, AlertsRow } from "@/components/home";
 import {
@@ -15,57 +14,79 @@ import {
   type CicloTemplate,
 } from "@/components/ciclo-templates";
 import { createBlankCicloDraft } from "@/screens/CicloBuilder";
-import type {
-  CicloBuilderAssignmentSeed,
-  CicloDraft,
-  CicloPeriod,
-  CicloStepId,
+import { cicloRowToDraft } from "@/screens/cicloDraftFromRow";
+import {
+  CICLO_PERIOD_LABELS,
+  CICLO_STATUS_LABELS,
+  assignedObjectiveCount,
+  type CicloBuilderAssignmentSeed,
+  type CicloDraft,
+  type CicloStepId,
 } from "@/components/ciclo-builder";
 import { CICLOS, type CicloRow } from "@/mocks/ciclos";
-import { NO_FILTERS, type CicloListFilters } from "@/components/ciclo-list/cicloListFilters";
+import {
+  NO_FILTERS,
+  mapEstadoToStatusState,
+  type CicloListFilters,
+} from "@/components/ciclo-list/cicloListFilters";
+import { StatusBadge } from "@/components/status-badge";
+import { useElementHeight } from "@/lib/useElementHeight";
 
-/** Maps the list's free-text `periodo` label to the builder's period key. */
-const PERIOD_LABEL_TO_KEY: Readonly<Record<string, CicloPeriod>> = {
-  mes: "mes",
-  bimestre: "bimestre",
-  trimestre: "trimestre",
-  semestre: "semestre",
-  año: "anio",
-  personalizado: "personalizado",
-};
+const SPANISH_MONTHS = [
+  "enero", "febrero", "marzo", "abril", "mayo", "junio",
+  "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+];
+
+/** "2026-07-01" → "01 julio 2026", the long form the list table prints. */
+function formatSpanishDate(isoDate: string): string {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  if (!year || !month || !day) return isoDate;
+  return `${String(day).padStart(2, "0")} ${SPANISH_MONTHS[month - 1]} ${year}`;
+}
 
 /**
- * Seeds a draft from a listed ciclo's known fields, for the "edit" entry
- * points that reopen the wizard on an existing ciclo — participants are left
- * blank rather than guessed, since the list doesn't carry who's already in it.
+ * Turns a builder draft into the row the home list reads — used when the
+ * author leaves the wizard with something worth keeping (autosaved or
+ * finalized) so it doesn't vanish instead of landing in "Lista de ciclos".
+ *
+ * `previous` es la fila del ciclo cuando se editaba uno que ya existía. Su
+ * avance no sale del constructor —nadie reporta progreso ahí—, así que se
+ * conserva: sin esto, entrar a editar un ciclo al 65 % y salir lo dejaría en
+ * la lista como si nadie hubiera reportado nada.
  */
-function cicloRowToDraft(
-  row: Pick<CicloListRow, "nombre" | "periodo" | "fechaInicio" | "fechaCierre">
-): CicloDraft {
+function draftToCicloRow(draft: CicloDraft, previous?: CicloRow): CicloRow {
+  const numObjetivos = draft.companyObjectives.length + assignedObjectiveCount(draft.objectiveSets);
   return {
-    ...createBlankCicloDraft(),
-    name: row.nombre,
-    period: PERIOD_LABEL_TO_KEY[row.periodo.trim().toLowerCase()] ?? null,
-    startDate: parseSpanishDate(row.fechaInicio),
-    endDate: parseSpanishDate(row.fechaCierre),
+    id: draft._id || `draft-${Date.now()}`,
+    nombre: draft.name.trim() || "Ciclo sin título",
+    periodo: draft.period ? CICLO_PERIOD_LABELS[draft.period] : "Personalizado",
+    fechaInicio: formatSpanishDate(draft.startDate),
+    fechaCierre: formatSpanishDate(draft.endDate),
+    estado: CICLO_STATUS_LABELS[draft.status],
+    numObjetivos,
+    progreso: previous?.progreso ?? 0,
+    avance: previous?.avance ?? "0%",
+    tipoProgreso: previous?.tipoProgreso ?? "neutral",
+    _draft: draft,
   };
 }
 
 type HomeTab = "ciclos" | "usuarios";
 
-/** El estado del ciclo en el tono que usa la insignia de la miga de pan. */
-function cicloBadgeTone(estado: string): "positive" | "neutral" | "warning" {
-  if (estado === "Finalizado") return "positive";
-  if (estado === "En curso") return "warning";
-  return "neutral";
-}
-
 function App() {
   const [homeTab, setHomeTab] = React.useState<HomeTab>("ciclos");
-  // Un ciclo se abre en una sola pantalla: sus resultados. El seguimiento era
-  // una segunda lectura del mismo ciclo —con su propia cabecera, sus tablas y
+
+  /*
+   * La tira de pestañas va pegada arriba del contenido que baja. Su alto se
+   * mide y viaja como `--home-sticky-top` para que el encabezado de la tabla
+   * se pegue exactamente debajo: uno solo de los dos escrito a mano dejaría
+   * un hueco o un solape en cuanto las pestañas cambien de alto.
+   */
+  const homeTabsRef = React.useRef<HTMLDivElement>(null);
+  const homeTabsHeight = useElementHeight(homeTabsRef);
+  // Una segunda lectura del mismo ciclo —con su propia cabecera, sus tablas y
   // su barra— y obligaba a elegir por cuál entrar; ya no existe.
-  const [resultsCiclo, setResultsCiclo] = React.useState<CicloListRow | null>(null);
+  const [resultsCiclo, setResultsCiclo] = React.useState<CicloRow | null>(null);
   const [ciclos, setCiclos] = React.useState<readonly CicloRow[]>(CICLOS);
   // The creation wizard takes over the whole content area — it owns its own
   // scroll, stepper and action bar, so the list's tabs step aside while it is up.
@@ -75,7 +96,10 @@ function App() {
   const [builderDraft, setBuilderDraft] = React.useState<CicloDraft | undefined>();
   // Which step the wizard lands on — "general" for a new ciclo, "participants"
   // when it was reopened just to add users to an existing one.
-  const [builderInitialStep, setBuilderInitialStep] = React.useState<CicloStepId>("general");
+  const [builderInitialStep, setBuilderInitialStep] = React.useState<CicloStepId | undefined>(
+    "general"
+  );
+  const [builderInitialObjectiveTab, setBuilderInitialObjectiveTab] = React.useState<"groups" | "individual" | undefined>();
   // Objetivos de grupo/individual de una plantilla, todavía sin destinatario
   // — el constructor los ofrece solo al llegar a cada paso.
   const [builderAssignmentSeeds, setBuilderAssignmentSeeds] = React.useState<
@@ -146,6 +170,7 @@ function App() {
   const startBlank = () => {
     setBuilderDraft(undefined);
     setBuilderInitialStep("general");
+    setBuilderInitialObjectiveTab(undefined);
     setBuilderAssignmentSeeds([]);
     setIsCreatingCiclo(true);
   };
@@ -153,27 +178,55 @@ function App() {
   /** Reopens the wizard on an existing ciclo, landing on the given step —
    * Participantes from "Agregar usuarios al ciclo", Datos generales from
    * "Editar ciclo". */
-  const startEditCiclo = (ciclo: CicloListRow, step: CicloStepId) => {
+  const startEditCiclo = (
+    ciclo: CicloRow,
+    step: CicloStepId | undefined,
+    tab?: "groups" | "individual"
+  ) => {
     setBuilderDraft(cicloRowToDraft(ciclo));
     setBuilderInitialStep(step);
+    setBuilderInitialObjectiveTab(tab);
     setBuilderAssignmentSeeds([]);
     setIsCreatingCiclo(true);
   };
 
-  const startEditParticipants = (ciclo: CicloListRow) => startEditCiclo(ciclo, "participants");
-  const startEditGeneral = (ciclo: CicloListRow) => startEditCiclo(ciclo, "general");
+  const startEditParticipants = (ciclo: CicloRow) => startEditCiclo(ciclo, "participants");
+  /** "Editar ciclo" no pide ningún paso: un borrador se retoma donde lo dejó
+   *  su autor, y el constructor es quien sabe dónde fue (`resumeCicloStep`). */
+  const startEditGeneral = (ciclo: CicloRow) => startEditCiclo(ciclo, undefined);
+  /** El botón "Editar" global de la ficha de resultados, sin nada
+   *  seleccionado: abre el constructor en el paso de objetivos. */
+  const startEditObjectives = (ciclo: CicloRow, tab?: "groups" | "individual") => startEditCiclo(ciclo, "objectives", tab);
 
-  const leaveBuilder = () => {
+  const saveDraft = (draft: CicloDraft) => {
+    setCiclos((current) => {
+      const existing = current.find((c) => c.id === draft._id);
+      const row = draftToCicloRow(draft, existing);
+      if (existing) {
+        return current.map((c) => (c.id === row.id ? row : c));
+      }
+      return [row, ...current];
+    });
+  };
+
+  /** Leaves the wizard. A `draft` here means there's something to keep — the
+   *  author finished the ciclo, or exited after it autosaved — so it lands in
+   *  the list instead of disappearing with the rest of the builder state. */
+  const leaveBuilder = (draft?: CicloDraft) => {
+    if (draft) {
+      saveDraft(draft);
+    }
     setIsCreatingCiclo(false);
     setBuilderDraft(undefined);
     setBuilderInitialStep("general");
+    setBuilderInitialObjectiveTab(undefined);
     setBuilderAssignmentSeeds([]);
   };
 
   /** "Objetivos" in the rail: back to the list, wherever you were. */
   const goHome = () => {
     leaveBuilder();
-    setSelectedCiclo(null);
+    setResultsCiclo(null);
   };
 
   if (isCreatingCiclo) {
@@ -181,23 +234,21 @@ function App() {
       <TooltipProvider>
         <UbitsToaster />
         <AdminShell
-          breadcrumb={{
-            parent: "Objetivos",
-            onParentClick: leaveBuilder,
-          }}
           scrollContent={false}
           showFooter={false}
           onNavigateHome={goHome}
         >
-          {/* Keyed on the draft's name so picking a different template
-              remounts the wizard on it instead of keeping the first one's
-              objectives in state. */}
+          {/* Keyed on the draft so abrir otro ciclo —u otra plantilla—
+              remonta el constructor sobre él en vez de quedarse con los
+              objetivos del primero en estado. */}
           <CicloBuilder
-            key={builderDraft?.name ?? "blank"}
+            key={builderDraft?._id ?? builderDraft?.name ?? "blank"}
             initialDraft={builderDraft}
             initialStep={builderInitialStep}
+            initialObjectiveTab={builderInitialObjectiveTab}
             initialAssignmentSeeds={builderAssignmentSeeds}
             onExit={leaveBuilder}
+            onSaveDraft={saveDraft}
           />
         </AdminShell>
       </TooltipProvider>
@@ -208,42 +259,47 @@ function App() {
     <TooltipProvider>
       <UbitsToaster />
       <AdminShell
-        breadcrumb={
-          resultsCiclo
-            ? {
-                parent: "Objetivos",
-                label: resultsCiclo.nombre,
-                badge: { label: resultsCiclo.estado, tone: cicloBadgeTone(resultsCiclo.estado) },
-                onParentClick: () => setResultsCiclo(null),
-              }
-            : { parent: "Desempeño", label: "Objetivos" }
-        }
         // The list scrolls as one page — title, shelf, pulse, alerts and the
         // table below them. A ciclo's results view owns its own scroll.
         scrollContent={resultsCiclo === null}
         showFooter={true}
         onNavigateHome={goHome}
       >
-        <div className="h-full px-1 pt-2 pb-6 flex-1 flex flex-col min-h-0">
+        {/* El título de la pantalla vive en la cabecera del shell — el mismo
+            hueco que antes ocupaba el breadcrumb — en vez de su propio
+            renglón dentro del contenido. "Objetivos" en el home, nombre +
+            estado del ciclo en resultados: es la misma idea que ya usa el
+            constructor con `CicloIdentity`, la pantalla es la dueña de su
+            identidad y el shell solo le presta el lugar donde mostrarla. */}
+        <ShellHeaderSlot>
           {resultsCiclo ? (
-            <div className="mb-4 flex shrink-0 items-center justify-between gap-3">
-              <div className="flex min-w-0 items-center gap-3">
-                <button
-                  onClick={() => setResultsCiclo(null)}
-                  aria-label="Volver a la lista de ciclos"
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-surface transition-colors hover:bg-surface-muted focus:outline-none"
-                >
-                  <ArrowLeft className="h-4 w-4 text-text-primary" />
-                </button>
-                <h1 className="truncate text-[20px] font-bold text-text-primary">
-                  Resultados del ciclo
-                </h1>
-              </div>
-            </div>
-          ) : (
             <>
-              <h1 className="mb-4 shrink-0 text-2xl font-bold tracking-tight text-text-primary">Objetivos</h1>
+              <button
+                onClick={() => setResultsCiclo(null)}
+                aria-label="Volver a la lista de ciclos"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border/70 bg-surface transition-colors hover:bg-surface-muted focus:outline-none"
+              >
+                <ArrowLeft className="h-4 w-4 text-text-primary" />
+              </button>
+              <h1 className="truncate text-sm font-semibold text-text-primary">
+                {resultsCiclo.nombre}
+              </h1>
+              <StatusBadge
+                state={mapEstadoToStatusState(resultsCiclo.estado)}
+                labels={{ [mapEstadoToStatusState(resultsCiclo.estado)]: resultsCiclo.estado }}
+              />
+            </>
+          ) : (
+            <h1 className="truncate text-2xl font-bold tracking-tight text-text-primary">Objetivos</h1>
+          )}
+        </ShellHeaderSlot>
 
+        <div
+          className="h-full px-1 pt-2 pb-6 flex-1 flex flex-col min-h-0"
+          style={{ "--home-sticky-top": `${homeTabsHeight}px` } as React.CSSProperties}
+        >
+          {resultsCiclo ? null : (
+            <>
               {/* "What can I start from" comes first, then "how are my ciclos
                   doing", then what needs a hand — each step narrower than the
                   last. */}
@@ -276,8 +332,11 @@ function App() {
 
               {/* Pinned to the top of the scroll area — Ciclos can hold far
                   more rows than fit on screen, and losing the way back to
-                  Usuarios sin objetivos on every scroll defeats the tab. */}
-              <div className="sticky top-0 z-20 bg-background pb-4 pt-2 shrink-0">
+                  Usuarios sin objetivos on every scroll defeats the tab.
+                  Su alto se mide y se publica como `--home-sticky-top`: el
+                  encabezado de la tabla se pega justo debajo, y así los dos
+                  se quedan quietos sin pisarse. */}
+              <div ref={homeTabsRef} className="sticky top-0 z-20 bg-background pb-4 pt-2 shrink-0">
                 <UbitsTabs
                   tabs={[
                     { id: "ciclos", label: "Ciclos de objetivos", icon: <Target className="w-4 h-4" /> },
@@ -310,6 +369,7 @@ function App() {
               onCreateCiclo={startBlank}
               onAddUsersToCiclo={startEditParticipants}
               onEditCiclo={startEditGeneral}
+              onEditCicloObjectives={startEditObjectives}
             />
           </div>
         </div>

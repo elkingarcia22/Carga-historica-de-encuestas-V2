@@ -8,6 +8,7 @@
  */
 
 import { parseSpanishDate } from "@/components/ciclo-detail";
+import type { StatusState } from "@/components/status-badge";
 
 export interface CicloFilterableRow {
   periodo: string;
@@ -23,6 +24,18 @@ export interface CicloFilterableRow {
 export const OPEN_ESTADO = "En curso";
 export const CLOSED_ESTADO = "Finalizado";
 export const PENDING_ESTADO = "Por iniciar";
+
+/**
+ * The `StatusBadge` state for a ciclo's estado — shared so every place that
+ * shows a ciclo's estado (the list table, the results header, wherever else)
+ * renders it with the same color and icon instead of each screen inventing
+ * its own mapping.
+ */
+export function mapEstadoToStatusState(estado: string): StatusState {
+  if (estado === CLOSED_ESTADO || estado === "Completado") return "success";
+  if (estado === OPEN_ESTADO) return "pending";
+  return "neutral";
+}
 
 /** Buckets offered by the "Fecha cierre" column, in menu order. */
 export const CLOSE_BUCKETS = [

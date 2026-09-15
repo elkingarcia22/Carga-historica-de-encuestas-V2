@@ -8,10 +8,9 @@ import { AgentView } from "./AgentView";
 import { ShellHeaderSlotProvider } from "./shellHeaderSlot";
 import { ShellRailSlotProvider } from "./shellRailSlot";
 import { ShellAgentPanelSlotProvider } from "./shellAgentPanelSlot";
-import type { ShellBreadcrumb, ShellMode } from "./shellTypes";
+import type { ShellMode } from "./shellTypes";
 
 interface AdminShellProps {
-  breadcrumb: ShellBreadcrumb;
   /**
    * When true the content area scrolls (dashboard-style pages) and shows the
    * legal footer; app-like screens that manage their own scroll pass false.
@@ -26,7 +25,6 @@ interface AdminShellProps {
 
 
 export const AdminShell: React.FC<AdminShellProps> = ({
-  breadcrumb,
   scrollContent = true,
   showFooter,
   onNavigateHome,
@@ -77,7 +75,6 @@ export const AdminShell: React.FC<AdminShellProps> = ({
   };
 
   const isAgent = mode === "agent";
-  const headerBreadcrumb: ShellBreadcrumb = isAgent ? { label: "Agente IA" } : breadcrumb;
 
   return (
     <div
@@ -93,6 +90,7 @@ export const AdminShell: React.FC<AdminShellProps> = ({
         onModeChange={setMode}
         onNavigateHome={onNavigateHome}
         onCloseMobile={() => setMobileOpen(false)}
+        onToggleCollapse={toggleSidebar}
         onOpenFeedback={() => {
           setFeedbackSent(false);
           setFeedbackOpen(true);
@@ -110,7 +108,6 @@ export const AdminShell: React.FC<AdminShellProps> = ({
 
       <div className="flex min-w-0 flex-1 flex-col">
         <AppHeader
-          breadcrumb={headerBreadcrumb}
           onToggleSidebar={toggleSidebar}
           isDark={isDark}
           onToggleDark={() => setIsDark((value) => !value)}
@@ -169,7 +166,7 @@ export const AdminShell: React.FC<AdminShellProps> = ({
           `shellAgentPanelSlot`) carries its own width, so mounting it takes
           space from this row and narrows the column next to it instead of
           floating over the page. */}
-      <div ref={setAgentPanelSlot} className="flex h-full shrink-0" />
+      <div ref={setAgentPanelSlot} className="relative z-[51] flex h-full shrink-0" />
 
       {/* ---------- Feedback ---------- */}
       <Dialog open={feedbackOpen} onOpenChange={setFeedbackOpen}>

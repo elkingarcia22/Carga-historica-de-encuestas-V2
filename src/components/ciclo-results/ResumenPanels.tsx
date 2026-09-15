@@ -9,6 +9,13 @@ import {
   type CompositionSlice,
   type RankedBar,
 } from "@/components/survey-analytics/compositionCharts";
+import {
+  BREAKDOWN_META,
+  type AlignmentBar,
+  type BreakdownKey,
+  type PendingApprovalBar,
+  type WeightBar,
+} from "./resultsBreakdown";
 import type { FilterKey, ResultsFiltersState } from "./useResultsFilters";
 
 /**
@@ -94,19 +101,24 @@ function EmptyPanel() {
 function useSlices(
   segments: readonly Segment[],
   filters: ResultsFiltersState,
-  filterKey: FilterKey
+  /** Sin llave, el reparto no es filtrable: ningún tramo se enciende y pulsar
+   *  solo puede llevar al detalle. Es el caso de las lecturas que se calculan
+   *  —la alineación— en vez de venir de un atributo configurado. */
+  filterKey?: FilterKey
 ): { slices: CompositionSlice[]; sum: number; anyActive: boolean } {
   const slices = segments.map((segment) => ({
     id: segment.id,
     label: segment.label,
     value: segment.count,
     color: segment.color,
-    active: filters.isOn(filterKey, segment.id),
+    active: filterKey ? filters.isOn(filterKey, segment.id) : false,
   }));
   return {
     slices,
     sum: slices.reduce((acc, slice) => acc + slice.value, 0),
-    anyActive: (filters.filters[filterKey] as ReadonlySet<string>).size > 0,
+    anyActive: filterKey
+      ? (filters.filters[filterKey] as ReadonlySet<string>).size > 0
+      : false,
   };
 }
 
@@ -116,7 +128,13 @@ interface DistributionProps {
   total: number;
   segments: readonly Segment[];
   filters: ResultsFiltersState;
-  filterKey: FilterKey;
+  filterKey?: FilterKey;
+  /**
+   * Qué pasa al pulsar un tramo. Por defecto lo enciende como filtro; el
+   * resumen le pasa el que abre el detalle, porque "cuántos" siempre lleva a
+   * "cuáles" y el filtro se sigue pudiendo poner desde ahí dentro.
+   */
+  onSelectSegment?: (id: string) => void;
 }
 
 /**
@@ -133,19 +151,17 @@ export function FlowDistribution({
   segments,
   filters,
   filterKey,
+  onSelectSegment,
 }: DistributionProps) {
   const { slices, sum, anyActive } = useSlices(segments, filters, filterKey);
+  const select =
+    onSelectSegment ?? (filterKey ? (id: string) => filters.toggle(filterKey, id) : undefined);
   return (
     <SummaryPanel title={title} hint={hint} total={total}>
       {sum === 0 ? (
         <EmptyPanel />
       ) : (
-        <MeterList
-          slices={slices}
-          total={sum}
-          dimInactive={anyActive}
-          onSelect={(id) => filters.toggle(filterKey, id)}
-        />
+        <MeterList slices={slices} total={sum} dimInactive={anyActive} onSelect={select} />
       )}
     </SummaryPanel>
   );
@@ -167,11 +183,14 @@ export function DonutDistribution({
   filters,
   filterKey,
   headline,
+  onSelectSegment,
 }: DistributionProps & {
   /** El tramo que va al centro del anillo, por id. */
   headline: { id: string; label: string };
 }) {
   const { slices, sum, anyActive } = useSlices(segments, filters, filterKey);
+  const select =
+    onSelectSegment ?? (filterKey ? (id: string) => filters.toggle(filterKey, id) : undefined);
   const headlineCount = segments.find((segment) => segment.id === headline.id)?.count ?? 0;
 
   return (
@@ -189,14 +208,9 @@ export function DonutDistribution({
             centerLabel={headline.label}
             ariaLabel={`${title}. ${slices.map((slice) => `${slice.label}: ${slice.value}`).join(", ")}`}
             dimInactive={anyActive}
-            onSelect={(id) => filters.toggle(filterKey, id)}
+            onSelect={select}
           />
-          <SegmentLegend
-            slices={slices}
-            sum={sum}
-            anyActive={anyActive}
-            onSelect={(id) => filters.toggle(filterKey, id)}
-          />
+          <SegmentLegend slices={slices} sum={sum} anyActive={anyActive} onSelect={select} />
         </div>
       )}
     </SummaryPanel>
@@ -210,9 +224,10 @@ export function DonutDistribution({
  * estimar: se cuentan celdas. Una barra apilada aquí pedía comparar cuatro
  * tramos de largo parecido, que es el trabajo que un gráfico debería ahorrar.
  *
- * Va a lo ancho de la fila y con la leyenda al lado: a un tercio de pantalla
- * las celdas quedaban en cinco píxeles y la leyenda a dos columnas se cortaba
- * antes de nombrar las cuatro medidas.
+ * Ocupa media fila, con la cuadrícula arriba y la leyenda a dos columnas
+ * debajo: a un tercio de pantalla las celdas quedaban en cinco píxeles, y con
+ * la leyenda al lado en media fila la cuadrícula se comía la mitad de su
+ * propio espacio.
  */
 export function WaffleDistribution({
   title,
@@ -221,8 +236,11 @@ export function WaffleDistribution({
   segments,
   filters,
   filterKey,
+  onSelectSegment,
 }: DistributionProps) {
   const { slices, sum, anyActive } = useSlices(segments, filters, filterKey);
+  const select =
+    onSelectSegment ?? (filterKey ? (id: string) => filters.toggle(filterKey, id) : undefined);
   return (
     <SummaryPanel
       title={title}
@@ -233,23 +251,20 @@ export function WaffleDistribution({
       {sum === 0 ? (
         <EmptyPanel />
       ) : (
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:gap-8">
-          <div className="min-w-0 flex-1 lg:max-w-[680px]">
-            <WaffleGrid
-              slices={slices}
-              ariaLabel={`${title}. ${slices.map((slice) => `${slice.label}: ${slice.value}`).join(", ")}`}
-              dimInactive={anyActive}
-              onSelect={(id) => filters.toggle(filterKey, id)}
-            />
-          </div>
-          <div className="w-full shrink-0 lg:w-[300px]">
-            <SegmentLegend
-              slices={slices}
-              sum={sum}
-              anyActive={anyActive}
-              onSelect={(id) => filters.toggle(filterKey, id)}
-            />
-          </div>
+        <div className="flex flex-col gap-4">
+          <WaffleGrid
+            slices={slices}
+            ariaLabel={`${title}. ${slices.map((slice) => `${slice.label}: ${slice.value}`).join(", ")}`}
+            dimInactive={anyActive}
+            onSelect={select}
+          />
+          <SegmentLegend
+            slices={slices}
+            sum={sum}
+            anyActive={anyActive}
+            twoColumn
+            onSelect={select}
+          />
         </div>
       )}
     </SummaryPanel>
@@ -268,14 +283,27 @@ function SegmentLegend({
   sum,
   anyActive,
   onSelect,
+  twoColumn = false,
 }: {
   slices: readonly CompositionSlice[];
   sum: number;
   anyActive: boolean;
-  onSelect: (id: string) => void;
+  /** Sin él, la leyenda se lee pero no lleva a ninguna parte — el caso de un
+   *  reparto que no es filtro ni tiene detalle. */
+  onSelect?: (id: string) => void;
+  /** Reparte los tramos en dos columnas: para la leyenda que va debajo de la
+   *  cuadrícula, donde una sola columna dejaría media tarjeta vacía. */
+  twoColumn?: boolean;
 }) {
   return (
-    <ul className="flex w-full min-w-0 flex-col gap-0.5 xl:flex-1">
+    <ul
+      className={cn(
+        "w-full min-w-0",
+        twoColumn
+          ? "grid grid-cols-1 gap-x-6 gap-y-0.5 sm:grid-cols-2"
+          : "flex flex-col gap-0.5 xl:flex-1"
+      )}
+    >
       {slices.map((slice) => {
         const row = (
           <>
@@ -297,6 +325,16 @@ function SegmentLegend({
             <li
               key={slice.id}
               className="flex w-full items-center gap-2 px-1.5 py-1 text-left text-[12px] text-text-muted opacity-60"
+            >
+              {row}
+            </li>
+          );
+        }
+        if (!onSelect) {
+          return (
+            <li
+              key={slice.id}
+              className="flex w-full items-center gap-2 px-1.5 py-1 text-left text-[12px] text-text-secondary"
             >
               {row}
             </li>
@@ -344,17 +382,26 @@ export function AreaRanking({
   hint,
   reference,
   filters,
+  breakdown,
+  onSelectBar,
 }: {
-  /** Todas las áreas, ordenadas de menor a mayor avance. La tarjeta se queda
-   *  con la punta que corresponda; el recorte es suyo porque depende de por
-   *  cuál extremo se esté entrando. */
+  /** Todo el corte, ordenado de menor a mayor avance. La tarjeta se queda con
+   *  la punta que corresponda; el recorte es suyo porque depende de por cuál
+   *  extremo se esté entrando. */
   bars: readonly RankedBar[];
   hint: string;
   reference?: { value: number; label: string };
   filters: ResultsFiltersState;
+  /** El corte elegido en el "Ver por" de arriba. */
+  breakdown: BreakdownKey;
+  /** Qué pasa al pulsar una barra. Por defecto, encender su filtro. */
+  onSelectBar?: (id: string) => void;
 }) {
   const [sort, setSort] = React.useState<AreaSort>("rezagadas");
-  const anyActive = filters.filters.areas.size > 0;
+  const meta = BREAKDOWN_META[breakdown];
+  const anyActive =
+    meta.filterKey !== null &&
+    (filters.filters[meta.filterKey] as ReadonlySet<string>).size > 0;
 
   const visible =
     sort === "rezagadas" ? bars.slice(0, AREA_ROWS) : [...bars].reverse().slice(0, AREA_ROWS);
@@ -363,13 +410,15 @@ export function AreaRanking({
 
   return (
     <SummaryPanel
-      title="Avance por área"
+      title={`Avance por ${meta.noun}`}
       hint={hint}
       total={bars.length}
       aside={
         bars.length > 1 && (
           <div className="flex shrink-0 rounded-lg bg-muted/60 p-0.5" role="radiogroup" aria-label="Orden">
-            <SortOption label="Más rezagadas" active={sort === "rezagadas"} onSelect={() => setSort("rezagadas")} />
+            {/* "Menor avance" y no "Más rezagadas": el rótulo tiene que servir
+                para áreas, líderes, países y colaboradores por igual. */}
+            <SortOption label="Menor avance" active={sort === "rezagadas"} onSelect={() => setSort("rezagadas")} />
             <SortOption label="Mejor avance" active={sort === "mejores"} onSelect={() => setSort("mejores")} />
           </div>
         )
@@ -384,11 +433,16 @@ export function AreaRanking({
             reference={reference}
             format={(percent) => `${Math.round(percent)} %`}
             dimInactive={anyActive}
-            onSelect={(id) => filters.toggle("areas", id)}
+            onSelect={
+              onSelectBar ??
+              (meta.filterKey === null
+                ? undefined
+                : (id) => filters.toggle(meta.filterKey as FilterKey, id))
+            }
           />
           {hidden > 0 && edge && (
             <p className="text-[11px] font-medium text-text-muted">
-              {hidden} {hidden === 1 ? "área más" : "áreas más"}{" "}
+              {hidden} {hidden === 1 ? meta.noun : meta.plural} más{" "}
               {sort === "rezagadas" ? "por encima" : "por debajo"} del {Math.round(edge.percent)} %.
             </p>
           )}
@@ -445,6 +499,7 @@ export function StatCard({
   share,
   hint,
   color = STAT_CARD_COLOR,
+  onClick,
 }: {
   icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
   label: string;
@@ -457,9 +512,21 @@ export function StatCard({
   /** Por defecto el azul de marca. Solo se pasa otro color cuando la cifra
    *  representa un estado configurado con su propio color. */
   color?: string;
+  /** Si se pasa, toda la tarjeta abre el detalle de esa cifra: "112 de 340"
+   *  siempre lleva a "¿cuáles 112?". */
+  onClick?: () => void;
 }) {
   return (
-    <article className="flex items-start gap-3.5 rounded-2xl border border-border/60 bg-surface p-5 shadow-card">
+    <article
+      className={cn(
+        "flex items-start gap-3.5 rounded-2xl border border-border/60 bg-surface p-5 shadow-card",
+        onClick &&
+          "cursor-pointer text-left transition-colors hover:border-primary/40 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+      )}
+      {...(onClick
+        ? { role: "button", tabIndex: 0, onClick, onKeyDown: onStatCardKey(onClick) }
+        : {})}
+    >
       <span
         className="flex size-9 shrink-0 items-center justify-center rounded-lg"
         style={{ backgroundColor: `color-mix(in srgb, ${color} 14%, transparent)`, color }}
@@ -488,3 +555,329 @@ export function StatCard({
     </article>
   );
 }
+
+/** Enter y espacio sobre una tarjeta que actúa como botón. Sin esto la cifra
+ *  solo se abre con el mouse, que es la mitad de la gente. */
+const onStatCardKey =
+  (onClick: () => void) =>
+  (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    onClick();
+  };
+
+
+/**
+ * Dónde está puesto el peso del ciclo.
+ *
+ * El avance dice cómo va cada área; esto dice cuánto mueve cada una el número
+ * de arriba. Son dos lecturas distintas y la segunda es la que ordena a qué
+ * prestarle atención: un área rezagada que carga el 4 % del peso no es el
+ * problema del ciclo, aunque sea la última del ranking.
+ *
+ * Todas las barras del mismo azul, como el ranking de avance: detrás de un
+ * área no hay un estado configurado, así que teñirlas sería inventarle un
+ * semáforo que nadie definió.
+ */
+export function WeightSplit({
+  title,
+  bars,
+  nouns,
+  filterKey,
+  filters,
+  onSelectBar,
+}: {
+  title: string;
+  bars: readonly WeightBar[];
+  /** Cómo se llama lo que se está repartiendo, para la línea del resto. */
+  nouns: { singular: string; plural: string };
+  /** Con qué filtro se angosta el reporte al pulsar una barra. */
+  filterKey: FilterKey;
+  filters: ResultsFiltersState;
+  onSelectBar?: (id: string) => void;
+}) {
+  const anyActive = (filters.filters[filterKey] as ReadonlySet<string>).size > 0;
+
+  const visible = bars.slice(0, AREA_ROWS);
+  const hidden = Math.max(0, bars.length - visible.length);
+  const restShare = bars.slice(AREA_ROWS).reduce((sum, bar) => sum + bar.share, 0);
+  const top = visible[0];
+
+  return (
+    <SummaryPanel
+      title={title}
+      hint={`Qué parte del resultado del ciclo se juega en cada ${nouns.singular}.`}
+      total={bars.length}
+      aside={
+        top && (
+          // Sin `shrink-0` y con tope de ancho: el nombre de un objetivo de
+          // empresa puede ser una frase entera, y empujando desde aquí partía
+          // el título de la tarjeta en tres renglones.
+          <span className="min-w-0 max-w-[45%] truncate text-[11px] font-semibold text-text-muted">
+            {Math.round(top.share)} % en {top.label}
+          </span>
+        )
+      }
+    >
+      {bars.length === 0 ? (
+        <EmptyPanel />
+      ) : (
+        <div className="flex flex-col gap-2.5">
+          <RankedBarList
+            bars={visible.map((bar) => ({
+              id: bar.id,
+              label: bar.label,
+              percent: bar.share,
+              detail: `${bar.objectives} ${bar.objectives === 1 ? "objetivo" : "objetivos"}`,
+              color: "var(--color-brand)",
+              active: filters.isOn(filterKey, bar.id),
+            }))}
+            format={(percent) => `${Math.round(percent)} %`}
+            dimInactive={anyActive}
+            onSelect={onSelectBar ?? ((id) => filters.toggle(filterKey, id))}
+          />
+          {hidden > 0 && (
+            <p className="text-[11px] font-medium text-text-muted">
+              {hidden} {hidden === 1 ? nouns.singular : nouns.plural} más se reparten el{" "}
+              {Math.round(restShare)} % restante.
+            </p>
+          )}
+        </div>
+      )}
+    </SummaryPanel>
+  );
+}
+
+/**
+ * Quién tiene que aprobar para que el ciclo arranque.
+ *
+ * La tarjeta de aprobación dice cuántos objetivos esperan visto bueno; esta
+ * dice de quién dependen. Es la única de las tarjetas de arriba que no se
+ * mira: se usa —cada fila es un recordatorio con destinatario—, y por eso
+ * vale la pena tenerla fija aunque en un ciclo sano quede vacía.
+ *
+ * Las barras van del color configurado para "Por aprobar", que es el estado
+ * que están contando; no es un semáforo inventado.
+ */
+export function PendingApprovals({
+  title,
+  hint,
+  empty,
+  bars,
+  color,
+  filters,
+  onSelectBar,
+}: {
+  title: string;
+  hint: string;
+  /** Lo que dice cuando no hay nada atascado — que es una lectura, no un
+   *  hueco: "nadie debe nada" merece decirse con palabras. */
+  empty: string;
+  bars: readonly PendingApprovalBar[];
+  color: string;
+  filters: ResultsFiltersState;
+  onSelectBar?: (id: string) => void;
+}) {
+  const anyActive = (filters.filters.leaders as ReadonlySet<string>).size > 0;
+  const total = bars.reduce((sum, bar) => sum + bar.objectives, 0);
+  const visible = bars.slice(0, AREA_ROWS);
+  const hidden = Math.max(0, bars.length - visible.length);
+
+  return (
+    <SummaryPanel title={title} hint={hint} total={total}>
+      {bars.length === 0 ? (
+        <p className="py-6 text-center text-[12px] text-text-muted">{empty}</p>
+      ) : (
+        <div className="flex flex-col gap-2.5">
+          <RankedBarList
+            bars={visible.map((bar) => ({
+              id: bar.id,
+              label: bar.label,
+              percent: bar.share,
+              detail: `${bar.people} ${bar.people === 1 ? "persona" : "personas"}`,
+              valueLabel: `${bar.objectives}`,
+              color,
+              active: filters.isOn("leaders", bar.id),
+            }))}
+            format={(percent) => `${Math.round(percent)} %`}
+            dimInactive={anyActive}
+            onSelect={onSelectBar ?? ((id) => filters.toggle("leaders", id))}
+          />
+          {hidden > 0 && (
+            <p className="text-[11px] font-medium text-text-muted">
+              {hidden} {hidden === 1 ? "líder más" : "líderes más"} con menos pendientes.
+            </p>
+          )}
+        </div>
+      )}
+    </SummaryPanel>
+  );
+}
+
+/**
+ * Dónde está puesto el peso del ciclo.
+ *
+ * El avance dice cómo va cada área; esto dice cuánto mueve cada una el número
+ * de arriba. Son dos lecturas distintas y la segunda es la que ordena a qué
+ * prestarle atención: un área rezagada que carga el 4 % del peso no es el
+ * problema del ciclo, aunque sea la última del ranking.
+ *
+ * Todas las barras del mismo azul, como el ranking de avance: detrás de un
+ * área no hay un estado configurado, así que teñirlas sería inventarle un
+ * semáforo que nadie definió.
+ */
+export function WeightDonut({
+  title,
+  hint,
+  bars,
+  colors,
+  emptyBucket,
+  filterKey,
+  filters,
+}: {
+  title: string;
+  hint: string;
+  bars: readonly WeightBar[];
+  colors: readonly string[];
+  /** El id del tramo "sin alinear": va gris y al centro del anillo. */
+  emptyBucket: { id: string; label: string; color: string };
+  filterKey: FilterKey;
+  filters: ResultsFiltersState;
+}) {
+  const anyActive = (filters.filters[filterKey] as ReadonlySet<string>).size > 0;
+  const slices = bars.map((bar, index) => ({
+    id: bar.id,
+    label: bar.label,
+    value: Math.round(bar.share),
+    color: bar.id === emptyBucket.id ? emptyBucket.color : colors[index % colors.length],
+    active: filters.isOn(filterKey, bar.id),
+  }));
+  const sum = slices.reduce((total, slice) => total + slice.value, 0);
+  const loose = bars.find((bar) => bar.id === emptyBucket.id);
+  const select = (id: string) => filters.toggle(filterKey, id);
+
+  return (
+    <SummaryPanel title={title} hint={hint} total={bars.length}>
+      {sum === 0 ? (
+        <EmptyPanel />
+      ) : (
+        <div className="flex flex-col items-center gap-4 xl:flex-row">
+          <DonutChart
+            slices={slices}
+            centerValue={`${Math.round(loose?.share ?? 0)} %`}
+            centerLabel={emptyBucket.label}
+            ariaLabel={`${title}. ${bars
+              .map((bar) => `${bar.label}: ${Math.round(bar.share)} %`)
+              .join(", ")}`}
+            dimInactive={anyActive}
+            onSelect={select}
+          />
+          <ul className="flex min-w-0 flex-1 flex-col gap-1.5">
+            {slices.map((slice, index) => (
+              <li key={slice.id}>
+                <button
+                  type="button"
+                  onClick={() => select(slice.id)}
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-surface-muted",
+                    anyActive && !slice.active && "opacity-45"
+                  )}
+                >
+                  <span
+                    aria-hidden
+                    className="size-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: slice.color }}
+                  />
+                  <span className="min-w-0 flex-1 truncate text-[12px] text-text-secondary">
+                    {slice.label}
+                  </span>
+                  <span className="shrink-0 text-[11px] text-text-muted tabular-nums">
+                    {bars[index].objectives}
+                  </span>
+                  <span className="w-9 shrink-0 text-right text-[12px] font-bold tabular-nums text-text-primary">
+                    {slice.value} %
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </SummaryPanel>
+  );
+}
+
+
+/**
+ * Qué tan enganchado a la estrategia está cada grupo.
+ *
+ * La barra no compara tamaños entre sí: cada una se mide contra su propio
+ * 100 %, así que lo que se lee es "a este grupo le falta esto para estar
+ * conectado con la estrategia". De menos a más alineado, porque la primera
+ * fila es la que hay que ir a mirar — y con la guía en el promedio del ciclo,
+ * para no confundir "va mal" con "aquí todos vamos así".
+ */
+export function AlignmentRanking({
+  bars,
+  breakdown,
+  average,
+  filters,
+  onSelectBar,
+}: {
+  bars: readonly AlignmentBar[];
+  breakdown: BreakdownKey;
+  /** El promedio del ciclo, como referencia punteada. */
+  average: number;
+  filters: ResultsFiltersState;
+  onSelectBar?: (id: string) => void;
+}) {
+  const meta = BREAKDOWN_META[breakdown];
+  const anyActive =
+    meta.filterKey !== null &&
+    (filters.filters[meta.filterKey] as ReadonlySet<string>).size > 0;
+
+  const visible = bars.slice(0, AREA_ROWS);
+  const hidden = Math.max(0, bars.length - visible.length);
+
+  return (
+    <SummaryPanel
+      title={`Alineación por ${meta.noun}`}
+      hint={`Qué parte del peso de cada ${meta.noun} cuelga de un objetivo de empresa.`}
+      total={bars.length}
+    >
+      {bars.length === 0 ? (
+        <EmptyPanel />
+      ) : (
+        <div className="flex flex-col gap-2.5">
+          <RankedBarList
+            bars={visible.map((bar) => ({
+              id: bar.id,
+              label: bar.label,
+              percent: bar.percent,
+              detail: `${bar.people} ${bar.people === 1 ? "persona" : "personas"}`,
+              color: "var(--color-brand)",
+              active:
+                meta.filterKey !== null && filters.isOn(meta.filterKey, bar.id),
+            }))}
+            reference={{ value: average, label: `${Math.round(average)} % del ciclo` }}
+            format={(percent) => `${Math.round(percent)} %`}
+            dimInactive={anyActive}
+            onSelect={
+              onSelectBar ??
+              (meta.filterKey === null
+                ? undefined
+                : (id) => filters.toggle(meta.filterKey as FilterKey, id))
+            }
+          />
+          {hidden > 0 && (
+            <p className="text-[11px] font-medium text-text-muted">
+              {hidden} {hidden === 1 ? meta.noun : meta.plural} más por encima del{" "}
+              {Math.round(visible[visible.length - 1]?.percent ?? 0)} %.
+            </p>
+          )}
+        </div>
+      )}
+    </SummaryPanel>
+  );
+}
+

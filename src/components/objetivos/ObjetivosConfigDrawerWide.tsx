@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import {
   Award,
   Layers,
@@ -17,7 +18,6 @@ import { Switch } from "@/components/ui/switch";
 import { toneChip, toneSelected, toneText } from "@/lib/tone";
 import { cn } from "@/lib/utils";
 import {
-  AddRangeButton,
   AddRangeHeaderButton,
   DistributionBar,
   LockedStateRow,
@@ -114,6 +114,16 @@ export function ObjetivosConfigDrawerWide({
     handleSaveConfig,
   } = useObjetivosConfigDraft({ open, initialTab, onSaved: () => onOpenChange(false) });
 
+  // La banda negativa solo cuenta como estado configurado mientras el
+  // permiso de "Resultados negativos" la mantiene con vida.
+  const estadosParaDistribucion = useMemo(
+    () =>
+      allowNegativeResults && estadoNegativo
+        ? [...estadosEditables, estadoNegativo]
+        : estadosEditables,
+    [estadosEditables, estadoNegativo, allowNegativeResults]
+  );
+
   return (
     <DrawerShell
       open={open}
@@ -190,9 +200,9 @@ export function ObjetivosConfigDrawerWide({
                 tone="brand"
                 title="Distribución de estados"
                 hint="Cuánto abarca cada banda de cumplimiento sobre el total del rango configurado."
-                badge={`${estadosEditables.length} estados`}
+                badge={`${estadosParaDistribucion.length} estados`}
               >
-                <DistributionBar segments={estadosEditables} />
+                <DistributionBar segments={estadosParaDistribucion} />
               </DrawerSection>
 
               <DrawerSection
@@ -352,7 +362,26 @@ export function ObjetivosConfigDrawerWide({
                 tone="brand"
                 title="Niveles de desempeño"
                 hint="Con qué calificación cierra un colaborador según el cumplimiento que alcance."
-                badge={nivelesSiguenEstados ? "Copiados de los estados" : undefined}
+                badge={
+                  nivelesSiguenEstados
+                    ? "Copiados de los estados"
+                    : `${niveles.length} de ${MAX_NIVELES}`
+                }
+                stickyHeader={!nivelesSiguenEstados}
+                action={
+                  nivelesSiguenEstados ? undefined : (
+                    <AddRangeHeaderButton
+                      icon={Plus}
+                      label="Agregar nivel"
+                      onClick={handleAddNivel}
+                      disabledReason={
+                        niveles.length >= MAX_NIVELES
+                          ? `Ya están los ${MAX_NIVELES} niveles que se pueden configurar`
+                          : null
+                      }
+                    />
+                  )
+                }
               >
                 {nivelesSiguenEstados ? (
                   <MirroredNivelesNotice
@@ -360,47 +389,36 @@ export function ObjetivosConfigDrawerWide({
                     onEditOwnScale={() => setNivelesSiguenEstados(false)}
                   />
                 ) : (
-                  <div className="flex flex-col gap-3">
-                    <div className="flex flex-col gap-2 rounded-xl border border-border/60 bg-background p-2">
-                      {niveles.map((nivel, index) => (
-                        <RangeRow
-                          key={nivel.id}
-                          layout="inline"
-                          index={index + 1}
-                          nameLabel="Nombre del nivel"
-                          namePlaceholder="Nombre del nivel..."
-                          name={nivel.nombre}
-                          onNameChange={(nombre) => handleUpdateNivel(nivel.id, { nombre })}
-                          min={nivel.minPorcentaje}
-                          max={nivel.maxPorcentaje}
-                          onMinChange={(minPorcentaje) =>
-                            handleUpdateNivel(nivel.id, { minPorcentaje })
-                          }
-                          onMaxChange={(maxPorcentaje) =>
-                            handleUpdateNivel(nivel.id, { maxPorcentaje })
-                          }
-                          colorHex={nivel.colorHex}
-                          colors={COLOR_VARIANTS}
-                          onColorChange={(hex) => handleUpdateNivel(nivel.id, { colorHex: hex })}
-                          allowNegative={allowNegativeResults}
-                          onDelete={() => handleDeleteNivel(nivel.id)}
-                          deleteDisabledReason={
-                            niveles.length <= MIN_NIVELES
-                              ? `Debe haber mínimo ${MIN_NIVELES} nivel`
-                              : null
-                          }
-                        />
-                      ))}
-                    </div>
-
-                    <AddRangeButton
-                      icon={Plus}
-                      label="Agregar nivel"
-                      onClick={handleAddNivel}
-                      disabledReason={
-                        niveles.length >= MAX_NIVELES ? `Máximo ${MAX_NIVELES} niveles` : null
-                      }
-                    />
+                  <div className="flex flex-col gap-2 rounded-xl border border-border/60 bg-background p-2">
+                    {niveles.map((nivel, index) => (
+                      <RangeRow
+                        key={nivel.id}
+                        layout="inline"
+                        index={index + 1}
+                        nameLabel="Nombre del nivel"
+                        namePlaceholder="Nombre del nivel..."
+                        name={nivel.nombre}
+                        onNameChange={(nombre) => handleUpdateNivel(nivel.id, { nombre })}
+                        min={nivel.minPorcentaje}
+                        max={nivel.maxPorcentaje}
+                        onMinChange={(minPorcentaje) =>
+                          handleUpdateNivel(nivel.id, { minPorcentaje })
+                        }
+                        onMaxChange={(maxPorcentaje) =>
+                          handleUpdateNivel(nivel.id, { maxPorcentaje })
+                        }
+                        colorHex={nivel.colorHex}
+                        colors={COLOR_VARIANTS}
+                        onColorChange={(hex) => handleUpdateNivel(nivel.id, { colorHex: hex })}
+                        allowNegative={allowNegativeResults}
+                        onDelete={() => handleDeleteNivel(nivel.id)}
+                        deleteDisabledReason={
+                          niveles.length <= MIN_NIVELES
+                            ? `Debe haber mínimo ${MIN_NIVELES} nivel`
+                            : null
+                        }
+                      />
+                    ))}
                   </div>
                 )}
               </DrawerSection>

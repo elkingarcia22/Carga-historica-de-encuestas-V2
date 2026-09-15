@@ -36,15 +36,25 @@ import {
 } from "@/components/ui/table";
 import type { Collaborator } from "@/mocks/collaborators";
 import { formatCount } from "./participants";
-import {
-  CollaboratorRow,
-  FilterMenu,
-  PagerButton,
-  SortableHeader,
-  type SortDir,
-  type SortKey,
-} from "./CollaboratorTableParts";
+import { PagerButton, type SortDir, type SortKey } from "./CollaboratorTableParts";
 import { NO_LEADER } from "./collaboratorTableShared";
+import {
+  COLLABORATOR_COLUMNS,
+  collaboratorCellRow,
+  collaboratorTableCells,
+} from "./collaboratorTableColumns";
+import {
+  ConfigurableHeaderCells,
+  ConfigurableRowCells,
+  HeaderSelectAllCheckbox,
+  LazyRowsSentinel,
+  LazyRowsSummary,
+  TableBleedBox,
+  TableConfigButton,
+  useColumnDrag,
+  useLazyRows,
+  useTableConfig,
+} from "@/components/data-display";
 
 interface CollaboratorTableProps {
   collaborators: readonly Collaborator[];
@@ -76,6 +86,11 @@ interface CollaboratorTableProps {
    * except `personId` individually picked — the group stops being tracked as
    * a unit, but nobody besides that one person loses their spot. */
   onKeepGroupRestIndividually?: (groupValue: string, personId: string) => void;
+  /**
+   * El relleno horizontal del panel que la contiene, en negativo: la tabla se
+   * sale de él para llegar al borde de la tarjeta, como la lista del home.
+   */
+  bleed?: string;
 }
 
 const PAGE_SIZES = [10, 25, 50] as const;
@@ -140,6 +155,7 @@ export function CollaboratorTable({
   groupLabelFor,
   onDeselectGroup,
   onKeepGroupRestIndividually,
+  bleed,
 }: CollaboratorTableProps) {
   const [query, setQuery] = React.useState("");
   const [isSearchExpanded, setIsSearchExpanded] = React.useState(false);
@@ -214,6 +230,16 @@ export function CollaboratorTable({
       : selectedOnPage > 0
         ? "indeterminate"
         : false;
+
+  /*
+   * La lectura de la casilla cambia con el modo: por páginas habla de la
+   * página que se está viendo, bajando de corrido habla de todo lo que pasó
+   * los filtros —no hay página que nombrar, así que "marcada" solo puede
+   * querer decir "está todo".
+   */
+  const selectedMatches = filtered.filter((person) => selected.has(person.id)).length;
+  const matchState: boolean | "indeterminate" =
+    selectedMatches === 0 ? false : selectedMatches === filtered.length ? true : "indeterminate";
 
   const callbacksRef = React.useRef({ onSelectionChange, setSelection: (ids: Iterable<string>) => onChange([...new Set(ids)]) });
   React.useEffect(() => {
@@ -314,6 +340,36 @@ export function CollaboratorTable({
   const showSelectAll = filtered.length > 0 && !allMatchesSelected;
   const showDeselectAll = allMatchesSelected;
 
+  const config = useTableConfig("constructor-colaboradores", COLLABORATOR_COLUMNS);
+  const drag = useColumnDrag({ axis: "x", onReorder: config.moveColumn });
+  const lazy = useLazyRows({
+    total: sorted.length,
+    enabled: config.isLazy,
+    step: pageSize,
+    resetKey: sorted,
+  });
+  const shown = config.isLazy ? sorted.slice(0, lazy.count) : rows;
+
+  const cells = collaboratorTableCells({
+    sortKey,
+    sortDir,
+    onToggleSort: toggleSort,
+    areas,
+    areaFilter,
+    onToggleArea: toggleAreaFilter,
+    onClearArea: () => {
+      setAreaFilter(new Set());
+      setPage(1);
+    },
+    leaders,
+    leaderFilter,
+    onToggleLeader: toggleLeaderFilter,
+    onClearLeader: () => {
+      setLeaderFilter(new Set());
+      setPage(1);
+    },
+  });
+
   return (
     <div className="flex min-w-0 flex-col gap-3">
       <div className="flex flex-wrap items-center gap-4">
@@ -377,6 +433,8 @@ export function CollaboratorTable({
             )}
           </div>
 
+          <TableConfigButton config={config} noun="colaboradores" />
+
           <div
             className={cn(
               "flex shrink-0 items-center overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
@@ -409,19 +467,30 @@ export function CollaboratorTable({
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-border/60">
+      <TableBleedBox bleed={bleed}>
         <Table>
           <TableHeader>
             <TableRow className="border-border/60 bg-muted/40 hover:bg-muted/40">
-              {/* A dropdown rather than a plain toggle: with thousands of rows
-                  behind a filter, "select the page" and "select everything
-                  that matches" are different actions, not one checkbox
-                  overloaded to mean both. */}
+              {/* A dropdown rather than a plain toggle *when the table pages*:
+                  with thousands of rows behind a filter, "select the page" and
+                  "select everything that matches" are different actions, not
+                  one checkbox overloaded to mean both. Bajando de corrido no
+                  hay página que nombrar, así que vuelve a ser una casilla. */}
               <TableHead className="w-[50px] pl-4 pr-0">
                 {/* No hover background here: the header row already carries
                     one (bg-muted/40), and a second, smaller one under just
                     part of the row. The chevron darkening on hover is
                     affordance enough. */}
+                {config.isLazy ? (
+                  <HeaderSelectAllCheckbox
+                    state={matchState}
+                    disabled={filtered.length === 0}
+                    onSelectAll={selectAllMatches}
+                    onDeselectAll={clearSelection}
+                    align="start"
+                    label={`Seleccionar todos los colaboradores (${formatCount(filtered.length)})`}
+                  />
+                ) : (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <button
@@ -461,61 +530,14 @@ export function CollaboratorTable({
                     )}
                   </DropdownMenuContent>
                 </DropdownMenu>
+                )}
               </TableHead>
-              <TableHead
-                aria-sort={sortKey === "name" ? (sortDir === "asc" ? "ascending" : "descending") : undefined}
-                className="min-w-[200px] py-3"
-              >
-                <SortableHeader
-                  label="Colaborador"
-                  active={sortKey === "name"}
-                  direction={sortDir}
-                  onToggle={() => toggleSort("name")}
-                />
-              </TableHead>
-              <TableHead className="py-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Username
-              </TableHead>
-              <TableHead
-                aria-sort={sortKey === "email" ? (sortDir === "asc" ? "ascending" : "descending") : undefined}
-                className="py-3"
-              >
-                <SortableHeader
-                  label="Correo electrónico"
-                  active={sortKey === "email"}
-                  direction={sortDir}
-                  onToggle={() => toggleSort("email")}
-                />
-              </TableHead>
-              <TableHead className="py-3">
-                <FilterMenu
-                  label="Área"
-                  options={areas}
-                  selected={areaFilter}
-                  onToggle={toggleAreaFilter}
-                  onClear={() => {
-                    setAreaFilter(new Set());
-                    setPage(1);
-                  }}
-                />
-              </TableHead>
-              <TableHead className="py-3 pr-4">
-                <FilterMenu
-                  label="Líder"
-                  options={leaders}
-                  selected={leaderFilter}
-                  onToggle={toggleLeaderFilter}
-                  onClear={() => {
-                    setLeaderFilter(new Set());
-                    setPage(1);
-                  }}
-                />
-              </TableHead>
+              <ConfigurableHeaderCells config={config} drag={drag} cells={cells} />
             </TableRow>
           </TableHeader>
 
           <TableBody>
-            {rows.map((person) => {
+            {shown.map((person) => {
               const isSelected = selected.has(person.id);
               const groupValue = groupProtectedIds?.has(person.id) ? groupLabelFor?.(person.id) ?? null : null;
               return (
@@ -599,10 +621,19 @@ export function CollaboratorTable({
                       )}
                     </Popover>
                   </TableCell>
-                  <CollaboratorRow person={person} />
+                  <ConfigurableRowCells
+                    config={config}
+                    cells={cells}
+                    row={collaboratorCellRow(person)}
+                  />
                 </TableRow>
               );
             })}
+            <LazyRowsSentinel
+              lazy={lazy}
+              colSpan={config.columns.length + 1}
+              noun="colaboradores"
+            />
           </TableBody>
         </Table>
 
@@ -635,56 +666,62 @@ export function CollaboratorTable({
             )}
           </div>
         )}
-      </div>
+      </TableBleedBox>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-[12px] text-muted-foreground">
-          {filtered.length === 0
-            ? "0 colaboradores"
-            : `${formatCount(firstIndex + 1)}–${formatCount(firstIndex + rows.length)} de ${formatCount(filtered.length)}`}
-        </p>
+        {config.isLazy ? (
+          <LazyRowsSummary lazy={lazy} total={sorted.length} noun="colaboradores" />
+        ) : (
+          <>
+            <p className="text-[12px] text-muted-foreground">
+              {filtered.length === 0
+                ? "0 colaboradores"
+                : `${formatCount(firstIndex + 1)}–${formatCount(firstIndex + rows.length)} de ${formatCount(filtered.length)}`}
+            </p>
 
-        <div className="flex items-center gap-2">
-          <Select
-            value={String(pageSize)}
-            onValueChange={(value) => {
-              setPageSize(Number(value));
-              setPage(1);
-            }}
-          >
-            <SelectTrigger
-              aria-label="Colaboradores por página"
-              className="h-8 w-[130px] rounded-lg px-2.5 text-[12px]"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent position="popper" sideOffset={6}>
-              {PAGE_SIZES.map((size) => (
-                <SelectItem key={size} value={String(size)} className="text-[13px]">
-                  {size} por página
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            <div className="flex items-center gap-2">
+              <Select
+                value={String(pageSize)}
+                onValueChange={(value) => {
+                  setPageSize(Number(value));
+                  setPage(1);
+                }}
+              >
+                <SelectTrigger
+                  aria-label="Colaboradores por página"
+                  className="h-8 w-[130px] rounded-lg px-2.5 text-[12px]"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper" sideOffset={6}>
+                  {PAGE_SIZES.map((size) => (
+                    <SelectItem key={size} value={String(size)} className="text-[13px]">
+                      {size} por página
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
 
-          <PagerButton
-            label="Página anterior"
-            disabled={currentPage <= 1}
-            onClick={() => setPage(currentPage - 1)}
-          >
-            Anterior
-          </PagerButton>
-          <span className="text-[12px] tabular-nums text-text-secondary">
-            {formatCount(currentPage)} / {formatCount(pageCount)}
-          </span>
-          <PagerButton
-            label="Página siguiente"
-            disabled={currentPage >= pageCount}
-            onClick={() => setPage(currentPage + 1)}
-          >
-            Siguiente
-          </PagerButton>
-        </div>
+              <PagerButton
+                label="Página anterior"
+                disabled={currentPage <= 1}
+                onClick={() => setPage(currentPage - 1)}
+              >
+                Anterior
+              </PagerButton>
+              <span className="text-[12px] tabular-nums text-text-secondary">
+                {formatCount(currentPage)} / {formatCount(pageCount)}
+              </span>
+              <PagerButton
+                label="Página siguiente"
+                disabled={currentPage >= pageCount}
+                onClick={() => setPage(currentPage + 1)}
+              >
+                Siguiente
+              </PagerButton>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

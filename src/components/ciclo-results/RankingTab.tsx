@@ -5,12 +5,12 @@ import { EmptyState } from "@/components/feedback";
 import { average, formatPercent, resolveEstado, resolveNivel } from "@/components/ciclo-detail";
 import { getEstadoBadgeConfig } from "@/components/objetivos/objetivosConfigStore";
 import { NivelChip } from "@/components/ciclo-detail";
-import { AvancePill, LifecycleBar, RiskChip } from "./ResultsChips";
-import { countLifecycles } from "./objectiveLifecycle";
-import { riskFor, type CicloResults, type PersonResultRow, type ResultsConfig } from "./resultsModel";
-import { SearchBox } from "./tableBridge";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { AvancePill, EstadoBar, RiskChip } from "./ResultsChips";
+import { countEstados, riskFor, type CicloResults, type PersonResultRow, type ResultsConfig } from "./resultsModel";
+import { CollapsibleSearchBox } from "./tableBridge";
+import { BREAKDOWN_META, breakdownValueOf, type BreakdownKey } from "./resultsBreakdown";
 import { ResultsDetailCard } from "./ResultsDetailCard";
+import { ResultsGlobalFilters } from "./ResultsGlobalFilters";
 import type { ResultsFiltersState } from "./useResultsFilters";
 
 /**
@@ -26,22 +26,6 @@ import type { ResultsFiltersState } from "./useResultsFilters";
  *   · **Quien no cuenta, no rankea.** Alguien en licencia o retirado no
  *     compite por un puesto que su situación explica.
  */
-
-export type RankingAxis = "area" | "grupo" | "lider" | "persona";
-
-const AXIS_LABELS: Readonly<Record<RankingAxis, string>> = {
-  area: "Áreas",
-  grupo: "Asignaciones",
-  lider: "Líderes",
-  persona: "Colaboradores",
-};
-
-const AXIS_NOUN: Readonly<Record<RankingAxis, string>> = {
-  area: "área",
-  grupo: "asignación",
-  lider: "líder",
-  persona: "colaborador",
-};
 
 /** Debajo de esto, una fila agregada es una persona con disfraz. */
 const MIN_GROUP_SIZE = 3;
@@ -61,25 +45,31 @@ interface RankingTabProps {
   rows: readonly PersonResultRow[];
   config: ResultsConfig;
   filters: ResultsFiltersState;
-  axis: RankingAxis;
-  onAxisChange: (axis: RankingAxis) => void;
+  /** El corte elegido arriba, en la barra del reporte. */
+  breakdown: BreakdownKey;
+  onBreakdownChange: (value: BreakdownKey) => void;
   onOpenPerson: (personId: string) => void;
+  /** Las fichas de lo que está filtrado, bajo la fila de controles. */
+  globalChips?: React.ReactNode;
 }
 
 export function RankingTab({
   results,
   rows,
   config,
-  axis,
-  onAxisChange,
+  filters,
+  breakdown,
+  onBreakdownChange,
   onOpenPerson,
+  globalChips,
 }: RankingTabProps) {
   const [search, setSearch] = React.useState("");
   const [desc, setDesc] = React.useState(true);
+  const meta = BREAKDOWN_META[breakdown];
 
   const ranking = React.useMemo<RankingRow[]>(() => {
     const scored = rows.filter((row) => row.counts);
-    if (axis === "persona") {
+    if (breakdown === "persona") {
       return scored.map((row) => ({
         id: row.person.id,
         label: row.collaborator.name,
@@ -91,12 +81,12 @@ export function RankingTab({
       }));
     }
 
-    const keyOf = (row: PersonResultRow) =>
-      axis === "area" ? row.area : axis === "lider" ? row.leader : row.groupLabel;
-
     const buckets = new Map<string, PersonResultRow[]>();
     scored.forEach((row) => {
-      const key = keyOf(row);
+      const key = breakdownValueOf(
+        { collaborator: row.collaborator, groupId: row.person.groupId },
+        breakdown
+      );
       const bucket = buckets.get(key);
       if (bucket) bucket.push(row);
       else buckets.set(key, [row]);
@@ -111,7 +101,7 @@ export function RankingTab({
       masked: members.length < MIN_GROUP_SIZE,
       rows: members,
     }));
-  }, [rows, axis]);
+  }, [rows, breakdown]);
 
   const visible = React.useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -123,27 +113,27 @@ export function RankingTab({
   const best = comparable.length > 0 ? [...comparable].sort((a, b) => b.percent - a.percent)[0] : null;
   const worst = comparable.length > 1 ? [...comparable].sort((a, b) => a.percent - b.percent)[0] : null;
 
+  // El buscador va a la izquierda de "Filtros" y es el mismo botón que se
+  // abre a un campo —el de la lista de ciclos del home— en vez de un campo
+  // fijo compitiendo por espacio con "Ver por" y "Segmentación".
   const controls = (
-    <>
-      <span className="text-[13px] font-medium text-muted-foreground">Ver por:</span>
-      <Tabs value={axis} onValueChange={(v) => onAxisChange(v as RankingAxis)} className="w-auto shrink-0">
-        <TabsList>
-          {(Object.keys(AXIS_LABELS) as RankingAxis[]).map((key) => (
-            <TabsTrigger key={key} value={key}>
-              {AXIS_LABELS[key]}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
-      <SearchBox value={search} onChange={setSearch} placeholder={`Buscar ${AXIS_NOUN[axis]}…`} />
-    </>
+    <ResultsGlobalFilters
+      results={results}
+      state={filters}
+      breakdown={breakdown}
+      onBreakdownChange={onBreakdownChange}
+      searchSlot={
+        <CollapsibleSearchBox value={search} onChange={setSearch} placeholder={`Buscar ${meta.noun}…`} />
+      }
+    />
   );
 
   return (
     <ResultsDetailCard
-      title={`Ranking por ${AXIS_NOUN[axis]}`}
+      title={`Ranking por ${meta.noun}`}
       count={visible.length}
       controls={controls}
+      chips={globalChips}
     >
       {ranking.length === 0 ? (
         <div className="rounded-xl border border-border/60 p-8">
@@ -183,7 +173,8 @@ export function RankingTab({
           <div className="rounded-xl border border-border/60">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 bg-muted/40 px-4 py-2.5">
               <p className="text-[12px] font-semibold text-text-secondary">
-                {AXIS_LABELS[axis]} · {visible.length} resultados
+                {meta.plural.charAt(0).toUpperCase() + meta.plural.slice(1)} · {visible.length}{" "}
+                resultados
               </p>
               <button
                 type="button"
@@ -205,7 +196,11 @@ export function RankingTab({
                   status={results.data.status}
                   elapsed={results.showsRisk ? results.elapsed : -1}
                   showsRisk={results.showsRisk}
-                  onOpen={axis === "persona" && !row.masked ? () => onOpenPerson(row.id) : undefined}
+                  onOpen={
+                    breakdown === "persona" && !row.masked
+                      ? () => onOpenPerson(row.id)
+                      : undefined
+                  }
                 />
               ))}
             </ol>
@@ -296,9 +291,7 @@ function RankingRowItem({
 }) {
   const estado = resolveEstado(config.estados, row.percent, status);
   const badge = estado ? getEstadoBadgeConfig(estado) : null;
-  const lifecycleCounts = countLifecycles(
-    row.rows.flatMap((member) => member.entries.map((entry) => entry.lifecycle))
-  );
+  const estadoCounts = countEstados(row.rows.flatMap((member) => member.entries));
   // El promedio de la fila contra el calendario ya corrido del ciclo.
   const risk = riskFor(row.percent, elapsed);
 
@@ -343,7 +336,7 @@ function RankingRowItem({
           </span>
         ) : (
           <>
-            <LifecycleBar counts={lifecycleCounts} width="w-16" />
+            <EstadoBar counts={estadoCounts} estados={config.estados} width="w-16" />
             {showsRisk && <RiskChip risk={risk} withLabel={false} />}
             <span className="relative hidden h-1.5 w-40 overflow-hidden rounded-full bg-border/40 lg:block">
               <span

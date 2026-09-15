@@ -54,6 +54,18 @@ export interface ObjectiveUpdate {
   value: string | null;
   comment: string;
   evidences: readonly EvidenceFile[];
+  /**
+   * El mensaje de este mismo objetivo al que responde, o `null` (y ausente en
+   * los ciclos que ya existen) cuando abre hilo.
+   *
+   * El historial de un objetivo no es una lista de reportes: el líder pregunta,
+   * el colaborador contesta y adjunta el soporte, y esa ida y vuelta solo se
+   * lee bien si cada respuesta cuelga de lo que responde. Una sola altura de
+   * anidamiento a propósito —una respuesta a una respuesta sigue colgando del
+   * mismo mensaje raíz—, porque un hilo de objetivo se sigue en vertical y no
+   * en profundidad.
+   */
+  replyTo?: string | null;
 }
 
 /**

@@ -56,6 +56,12 @@ import {
   TOTAL_WEIGHT,
   type Objective,
 } from "./cicloBuilderTypes";
+import {
+  DEFAULT_OBJECTIVE_MODEL_RULES,
+  objectiveModelVocab,
+  type ObjectiveModelId,
+  type ObjectiveModelRules,
+} from "./objectiveModel";
 import { resolveStartLine, trackBlockingIssue } from "./complianceRules";
 import type { ObjectiveScope } from "./objectiveBankTypes";
 
@@ -88,6 +94,23 @@ interface ObjectiveCardCompactProps {
   companyObjectives?: readonly Objective[];
   /** Offered as alignment targets from within the same cycle. */
   cycleObjectives?: readonly Objective[];
+  /**
+   * Las reglas del modelo del ciclo. Deciden qué cuelga del objetivo, cómo
+   * se llama y si tiene que colgar de un objetivo de la empresa. Sin ellas
+   * corre con las de SMART, que son el constructor de siempre.
+   */
+  rules?: ObjectiveModelRules;
+  /** El modelo del ciclo. Solo pone el nombre de las piezas —un KPI tiene
+   *  indicadores, no objetivos—; lo que se exige sale de `rules`. */
+  model?: ObjectiveModelId | null;
+  /**
+   * Esta tarjeta todavía es una propuesta de la IA sin conservar.
+   *
+   * Se dibuja con el borde degradado del Agente mientras la decisión siga
+   * abierta: es lo que separa, de un vistazo, lo que el ciclo ya tenía de lo
+   * que acaba de caer en la lista y puede desaparecer con un "Descartar".
+   */
+  isAiDraft?: boolean;
 }
 
 const MAX_TITLE_LENGTH = 150;
@@ -121,12 +144,31 @@ export function ObjectiveCardCompact({
   weightBudget = TOTAL_WEIGHT,
   companyObjectives = [],
   cycleObjectives = [],
+  rules = DEFAULT_OBJECTIVE_MODEL_RULES,
+  model = null,
+  isAiDraft = false,
 }: ObjectiveCardCompactProps) {
+  const vocab = objectiveModelVocab(model, rules);
   const requireWeight = variant === "assigned";
-  const issue = objectiveIssue(objective, { requireWeight });
+  // Los objetivos de la empresa son el norte: no cuelgan de nada, así que la
+  // regla de alineación no los alcanza aunque el modelo la exija.
+  const requireAlignment =
+    variant === "assigned" &&
+    rules.alignment === "required" &&
+    rules.companyObjectives !== "off" &&
+    companyObjectives.length > 0;
+  // El modelo de la empresa no lleva lo que cuelga (ver `showActionsStep`),
+  // así que tampoco se le exige.
+  const cardRules = variant === "company" ? { ...rules, children: "none" as const } : rules;
+  const issue = objectiveIssue(objective, {
+    requireWeight,
+    rules: cardRules,
+    requireAlignment,
+  });
   const isComplete = issue === null;
   const hasError = showValidation && !isComplete;
-  const headingLabel = variant === "company" ? "Objetivo de la empresa" : "Objetivo";
+  const headingLabel =
+    variant === "company" ? `${vocab.objective} de la empresa` : vocab.objective;
 
   const titleInputRef = React.useRef<HTMLInputElement>(null);
   const ai = useCardAi(objective, onChange, titleInputRef);
@@ -147,8 +189,12 @@ export function ObjectiveCardCompact({
   // Si es boolean, asumimos que trackIsUsable siempre será true si ponen meta
   const showTail = (showMeasureType && isBoolean) || (showValues && trackIsUsable);
   // Los objetivos de la empresa no llevan el paso de acciones clave: ese
-  // desglose es propio de objetivos asignados a personas o equipos.
-  const showActionsStep = showTail && variant !== "company";
+  // desglose es propio de objetivos asignados a personas o equipos. Y el
+  // modelo puede quitarlo del todo —KPI mide con una sola cifra y no cuelga
+  // nada debajo—, en cuyo caso el paso no existe para nadie.
+  const showActionsStep = showTail && variant !== "company" && rules.children !== "none";
+  /** Los resultados clave siempre miden el objetivo: no es opcional. */
+  const childrenDrive = rules.children === "results" || rules.childrenDriveProgress;
   const startLine =
     trackIsUsable && target !== null && direction !== null
       ? resolveStartLine(direction, target, declaredInitial)
@@ -215,7 +261,7 @@ export function ObjectiveCardCompact({
   // escrito); vive aquí y no en `RulesAndTestBlocks` para sobrevivir a que
   // la tarjeta se contraiga y se vuelva a abrir.
   const [rangeAnswered, setRangeAnswered] = React.useState(
-    () => objective.rangeEnabled || hasRangeValue
+    () => objective.rangeEnabled || hasRangeValue || objective.createdByAI
   );
   const handleRangeChoice = (rangeEnabled: boolean) => {
     setRangeAnswered(true);
@@ -250,7 +296,10 @@ export function ObjectiveCardCompact({
       className={cn(
         "rounded-2xl border bg-surface shadow-card transition-colors",
         hasError ? "border-destructive/40" : "border-border/60",
-        isExpanded && !hasError && "border-primary/25"
+        isExpanded && !hasError && "border-primary/25",
+        // El anillo degradado se dibuja encima del borde, así que no hay que
+        // apagarlo: mientras la propuesta esté sin conservar manda él.
+        isAiDraft && "ai-gradient-ring"
       )}
     >
       <header
@@ -491,21 +540,35 @@ export function ObjectiveCardCompact({
                   key="actions"
                   className="py-4"
                   number={actionsStep}
-                  question="¿Qué acciones clave llevan a la meta?"
-                  help="Opcional. El trabajo concreto que mueve la cifra; puedes hacer que el avance se calcule con ellas."
+                  question={
+                    rules.children === "results"
+                      ? `¿Qué ${vocab.children?.toLowerCase()} demuestran que llegaste?`
+                      : `¿Qué ${vocab.children?.toLowerCase()} llevan a la meta?`
+                  }
+                  help={
+                    rules.childrenRequired
+                      ? `Obligatorio en este modelo. ${
+                          rules.children === "results"
+                            ? "Cada uno lleva su propia métrica y el avance del objetivo sale de ellos."
+                            : "El trabajo concreto que mueve la cifra."
+                        }`
+                      : "Opcional. El trabajo concreto que mueve la cifra; puedes hacer que el avance se calcule con ellas."
+                  }
                   aside={
                     objective.keyActions.length > 0 ? (
                       <span
                         className={cn(
                           "rounded-full px-2.5 py-1 text-[11px] font-bold tabular-nums",
-                          objective.keyActionsDriveProgress &&
+                          childrenDrive &&
                             keyActionsTotal(objective.keyActions) !== TOTAL_WEIGHT
                             ? "bg-surface-muted text-text-secondary"
                             : "bg-primary/10 text-primary"
                         )}
                       >
                         {objective.keyActions.length}{" "}
-                        {objective.keyActions.length === 1 ? "acción" : "acciones"}
+                        {objective.keyActions.length === 1
+                          ? vocab.child?.toLowerCase()
+                          : vocab.children?.toLowerCase()}
                       </span>
                     ) : undefined
                   }
@@ -515,6 +578,8 @@ export function ObjectiveCardCompact({
                     driveProgress={objective.keyActionsDriveProgress}
                     onChange={(patch) => onChange(patch)}
                     showValidation={showValidation}
+                    vocab={vocab}
+                    lockDriveProgress={rules.children === "results"}
                   />
                 </CompactStep>
               )}
@@ -543,13 +608,19 @@ export function ObjectiveCardCompact({
                   className="py-4"
                   number={alignmentStep}
                   question="¿A qué objetivo contribuye?"
-                  help="La alineación (opcional) muestra el aporte al objetivo general."
+                  help={
+                    requireAlignment
+                      ? "Este modelo pide que todo objetivo cuelgue de uno de la empresa: sin padre, el objetivo no queda listo."
+                      : "La alineación (opcional) muestra el aporte al objetivo general."
+                  }
                 >
                   <AlignmentSelect
                     value={objective.alignedTo}
                     companyObjectives={companyObjectives}
                     cycleObjectives={cycleObjectives}
                     onChange={(alignedTo) => onChange({ alignedTo })}
+                    isRequired={requireAlignment}
+                    hasError={showValidation && requireAlignment && objective.alignedTo === null}
                   />
                 </CompactStep>
               )}
@@ -1083,11 +1154,17 @@ function AlignmentSelect({
   companyObjectives,
   cycleObjectives = [],
   onChange,
+  isRequired = false,
+  hasError = false,
 }: {
   value: string | null;
   companyObjectives: readonly Objective[];
   cycleObjectives?: readonly Objective[];
   onChange: (alignedTo: string | null) => void;
+  /** El modelo exige objetivo padre: la marca deja de decir "opcional" y
+   *  "Sin alineación" deja de ofrecerse como salida. */
+  isRequired?: boolean;
+  hasError?: boolean;
 }) {
   const showLabels = companyObjectives.length > 0 && cycleObjectives.length > 0;
 
@@ -1096,8 +1173,15 @@ function AlignmentSelect({
       <span className="flex items-center gap-1.5 text-[13px] font-semibold text-text-primary">
         <Link2 className="size-3.5 text-text-secondary" strokeWidth={2} />
         Contribuye a
-        <span className="rounded-full bg-surface-muted px-2 py-0.5 text-[10.5px] font-medium text-muted-foreground">
-          Opcional
+        <span
+          className={cn(
+            "rounded-full px-2 py-0.5 text-[10.5px] font-medium",
+            isRequired
+              ? "bg-primary/10 text-primary"
+              : "bg-surface-muted text-muted-foreground"
+          )}
+        >
+          {isRequired ? "Obligatorio" : "Opcional"}
         </span>
       </span>
       <Select
@@ -1106,14 +1190,19 @@ function AlignmentSelect({
       >
         <SelectTrigger
           aria-label="Objetivo al que contribuye"
-          className="h-10 rounded-md px-3 text-[13px]"
+          className={cn(
+            "h-10 rounded-md px-3 text-[13px]",
+            hasError && "border-destructive focus:border-destructive"
+          )}
         >
-          <SelectValue placeholder="Sin alineación" />
+          <SelectValue placeholder={isRequired ? "Elige un objetivo" : "Sin alineación"} />
         </SelectTrigger>
         <SelectContent position="popper" sideOffset={6} className="w-[var(--radix-select-trigger-width)]">
-          <SelectItem value="none" className="text-[13px]">
-            Sin alineación
-          </SelectItem>
+          {!isRequired && (
+            <SelectItem value="none" className="text-[13px]">
+              Sin alineación
+            </SelectItem>
+          )}
           {companyObjectives.length > 0 && (
             <SelectGroup>
               {showLabels && (

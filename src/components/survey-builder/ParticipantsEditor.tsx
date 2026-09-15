@@ -42,6 +42,24 @@ import {
 import { COLLABORATOR_COUNT, COLLABORATORS } from "@/mocks/collaborators";
 import { CollaboratorTable } from "./CollaboratorTable";
 import { SortableHeader, FilterMenu, PagerButton, type SortDir } from "./CollaboratorTableParts";
+import {
+  COMPANY_BREAKDOWN_COLUMNS,
+  GROUP_COLUMNS,
+  companyBreakdownCells,
+  groupsTableCells,
+} from "./groupsTableColumns";
+import {
+  ConfigurableHeaderCells,
+  ConfigurableRowCells,
+  HeaderSelectAllCheckbox,
+  LazyRowsSentinel,
+  LazyRowsSummary,
+  TableBleedBox,
+  TableConfigButton,
+  useColumnDrag,
+  useLazyRows,
+  useTableConfig,
+} from "@/components/data-display";
 import { ImportedUsersTable } from "./ImportedUsersTable";
 import {
   DEMOGRAPHIC_COLUMN_LABELS,
@@ -83,6 +101,16 @@ interface ParticipantsEditorProps {
    * for callers whose audience flow makes a different order the natural
    * one (e.g. the ciclo builder, depending on who writes the objectives). */
   modesOrder?: readonly ParticipantMode[];
+  /**
+   * Extra content rendered under "Toda la empresa"'s own auto-include
+   * switch, only while that switch is on. A survey has nothing to put here;
+   * a ciclo uses it for its "does this person's progress still count"
+   * policy — a concept this shared editor has no business knowing about.
+   */
+  companyAutoIncludeExtra?: React.ReactNode;
+  /** Same slot as `companyAutoIncludeExtra`, for the "Por grupos" panel's
+   * own switch. */
+  groupsAutoIncludeExtra?: React.ReactNode;
 }
 
 /** Reads a single cell by header, tolerating the column being absent. */
@@ -193,6 +221,12 @@ export interface ParticipantsCopy {
   /** Overrides the "Por grupos" card's description, which in a survey talks
    *  about who has to answer. */
   groupsDescription?: string;
+  /** One line under the step's title saying what this particular list is for.
+   *  A survey leaves it out —quien entra, responde— pero un ciclo sí lo
+   *  necesita: la lista significa cosas distintas según quién escribe los
+   *  objetivos (los líderes que los crean para su equipo, o los
+   *  colaboradores que crean los suyos). */
+  description?: string;
 }
 
 export function ParticipantsEditor({
@@ -202,6 +236,8 @@ export function ParticipantsEditor({
   onSelectionChange,
   copy,
   modesOrder,
+  companyAutoIncludeExtra,
+  groupsAutoIncludeExtra,
 }: ParticipantsEditorProps) {
   const launchPhrase = copy?.launchPhrase ?? "lanzar la encuesta";
   const [files, setFiles] = React.useState<File[]>([]);
@@ -466,9 +502,16 @@ export function ParticipantsEditor({
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/5 text-primary">
           <Users className="h-[18px] w-[18px]" strokeWidth={2} />
         </span>
-        <h2 className="min-w-0 flex-1 truncate text-[14px] font-bold tracking-tight text-text-primary">
-          Participantes
-        </h2>
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <h2 className="min-w-0 truncate text-[14px] font-bold tracking-tight text-text-primary">
+            Participantes
+          </h2>
+          {copy?.description && (
+            <p className="min-w-0 text-[12.5px] leading-snug text-text-secondary">
+              {copy.description}
+            </p>
+          )}
+        </div>
 
         {/* The running total is the one number that survives every mode, so it
             lives in the header rather than inside whichever panel is open. The
@@ -521,6 +564,7 @@ export function ParticipantsEditor({
             launchPhrase={launchPhrase}
             autoInclude={participants.companyAutoInclude}
             onAutoIncludeChange={(companyAutoInclude) => onChange({ companyAutoInclude })}
+            extraContent={companyAutoIncludeExtra}
           />
         )}
 
@@ -542,6 +586,7 @@ export function ParticipantsEditor({
             autoInclude={participants.groupsAutoInclude}
             onAutoIncludeChange={(groupsAutoInclude) => onChange({ groupsAutoInclude })}
             onSelectionChange={onSelectionChange}
+            autoIncludeExtra={groupsAutoIncludeExtra}
           />
         )}
 
@@ -841,11 +886,18 @@ function CompanySummary({
   autoInclude,
   onAutoIncludeChange,
   launchPhrase,
+  bleed,
+  extraContent,
 }: {
   autoInclude: boolean;
   onAutoIncludeChange: (value: boolean) => void;
   /** See `ParticipantsCopy.launchPhrase`. */
   launchPhrase: string;
+  /** El relleno del panel, en negativo: ver `TableBleedBox`. */
+  bleed?: string;
+  /** See `ParticipantsEditorProps.companyAutoIncludeExtra`. Shown only while
+   * `autoInclude` is on — it has nothing to configure once sync is off. */
+  extraContent?: React.ReactNode;
 }) {
   const [segmentBy, setSegmentBy] = React.useState<SegmentKey>("area");
   const [sortKey, setSortKey] = React.useState<"segment" | "count" | null>("count");
@@ -908,14 +960,53 @@ function CompanySummary({
     return [...set].sort((a, b) => a.localeCompare(b, "es"));
   }, [segmentBy]);
 
+  const config = useTableConfig("constructor-empresa-desglose", COMPANY_BREAKDOWN_COLUMNS);
+  const drag = useColumnDrag({ axis: "x", onReorder: config.moveColumn });
+  // Cortada por líder son cientos de filas; de corrido llegan por tramos en
+  // vez de pintarse todas de una vez para una lista que se hojea.
+  const lazy = useLazyRows({ total: segments.length, enabled: true, step: 25, resetKey: segments });
+  const shown = segments.slice(0, lazy.count);
+
+  const cells = companyBreakdownCells({
+    formatCount,
+    segmentHead: (
+      <div className="flex items-center gap-2">
+        <SortableHeader
+          label={SEGMENT_LABELS[segmentBy]}
+          active={sortKey === "segment"}
+          direction={sortDir}
+          onToggle={() => toggleSort("segment")}
+        />
+        <FilterMenu
+          label=""
+          options={allSegments}
+          selected={segmentFilter}
+          onToggle={toggleSegmentFilter}
+          onClear={() => setSegmentFilter(new Set())}
+        />
+      </div>
+    ),
+    countHead: (
+      <div className="flex justify-end">
+        <SortableHeader
+          label="Cantidad"
+          active={sortKey === "count"}
+          direction={sortDir}
+          onToggle={() => toggleSort("count")}
+        />
+      </div>
+    ),
+  });
+
   return (
     <div className="flex flex-col gap-5">
       <AutoIncludeToggle
         checked={autoInclude}
         onCheckedChange={onAutoIncludeChange}
-        title="Incluir automáticamente nuevos colaboradores"
-        description={`Si alguien se une a la empresa después de ${launchPhrase}, se agrega solo a la lista de participantes.`}
+        title="Sincronizar automáticamente con la empresa"
+        description={`Seguimos el directorio de colaboradores: quien se una a la empresa después de ${launchPhrase} entra solo a la lista, y quien sea desvinculado se quita automáticamente.`}
       />
+      {autoInclude && extraContent}
 
       <div className="flex flex-col gap-4 pt-2">
         <div className="flex items-center justify-between gap-3">
@@ -936,71 +1027,35 @@ function CompanySummary({
                 ))}
               </SelectContent>
             </Select>
+
+            <TableConfigButton config={config} noun="segmentos" showRowsMode={false} />
           </div>
         </div>
 
-        <div className="overflow-hidden rounded-xl border border-border/60 shadow-card">
+        <TableBleedBox bleed={bleed}>
           <Table>
             <TableHeader>
               <TableRow className="border-border/60 bg-muted/40 hover:bg-muted/40">
-                <TableHead
-                  aria-sort={sortKey === "segment" ? (sortDir === "asc" ? "ascending" : "descending") : undefined}
-                  className="py-3 pl-4"
-                >
-                  <div className="flex items-center gap-2">
-                    <SortableHeader
-                      label={SEGMENT_LABELS[segmentBy]}
-                      active={sortKey === "segment"}
-                      direction={sortDir}
-                      onToggle={() => toggleSort("segment")}
-                    />
-                    <FilterMenu
-                      label=""
-                      options={allSegments}
-                      selected={segmentFilter}
-                      onToggle={toggleSegmentFilter}
-                      onClear={() => setSegmentFilter(new Set())}
-                    />
-                  </div>
-                </TableHead>
-                <TableHead
-                  aria-sort={sortKey === "count" ? (sortDir === "asc" ? "ascending" : "descending") : undefined}
-                  className="w-[120px] py-3 text-right"
-                >
-                  <div className="flex justify-end">
-                    <SortableHeader
-                      label="Cantidad"
-                      active={sortKey === "count"}
-                      direction={sortDir}
-                      onToggle={() => toggleSort("count")}
-                    />
-                  </div>
-                </TableHead>
-                <TableHead className="w-[80px] py-3 pr-4 text-right text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  %
-                </TableHead>
+                <ConfigurableHeaderCells config={config} drag={drag} cells={cells} />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {segments.map(([segment, count]) => {
-                const share = Math.round((count / COLLABORATOR_COUNT) * 100);
-                return (
-                  <TableRow key={segment} className="border-border/60 bg-surface hover:bg-border/20 transition-colors">
-                    <TableCell className="py-2.5 pl-4 text-[13px] text-text-secondary">
-                      {segment}
-                    </TableCell>
-                    <TableCell className="w-[120px] py-2.5 text-right tabular-nums text-[13px] text-text-secondary">
-                      {formatCount(count)}
-                    </TableCell>
-                    <TableCell className="w-[80px] py-2.5 pr-4 text-right tabular-nums text-[13px] text-text-secondary">
-                      {share}%
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
+              {shown.map((row) => (
+                <TableRow
+                  key={row[0]}
+                  className="border-border/60 bg-surface transition-colors hover:bg-border/20"
+                >
+                  <ConfigurableRowCells config={config} cells={cells} row={row} />
+                </TableRow>
+              ))}
+              <LazyRowsSentinel
+                lazy={lazy}
+                colSpan={config.columns.length}
+                noun="segmentos"
+              />
             </TableBody>
           </Table>
-        </div>
+        </TableBleedBox>
       </div>
     </div>
   );
@@ -1041,6 +1096,8 @@ export function GroupsPanel({
   onSelectionChange,
   copy,
   disabledGroups,
+  bleed,
+  autoIncludeExtra,
 }: {
   segmentBy: SegmentKey;
   onSegmentByChange: (value: SegmentKey) => void;
@@ -1065,6 +1122,11 @@ export function GroupsPanel({
    * Used by the ciclo builder, where a group already carrying a set of
    * objectives can't be handed a second one. */
   disabledGroups?: { ids: ReadonlySet<string>; reason: string };
+  /** El relleno del panel, en negativo: ver `TableBleedBox`. */
+  bleed?: string;
+  /** See `ParticipantsEditorProps.groupsAutoIncludeExtra`. Shown only while
+   * `autoInclude` is on. */
+  autoIncludeExtra?: React.ReactNode;
 }) {
   const groups = React.useMemo(
     () => [...segmentCounts(segmentBy).entries()].sort((a, b) => b[1] - a[1]),
@@ -1137,18 +1199,48 @@ export function GroupsPanel({
   const showSelectAll = filtered.length > 0 && !allMatchesSelected;
   const showDeselectAll = allMatchesSelected;
 
+  /*
+   * La lectura de la casilla cambia con el modo: por páginas habla de la
+   * página que se está viendo, bajando de corrido habla de todo lo que pasó
+   * los filtros —no hay página que nombrar, así que "marcada" solo puede
+   * querer decir "está todo".
+   */
+  const selectedMatches = filtered.filter(([group]) => selectedSet.has(group)).length;
+  const matchState: boolean | "indeterminate" =
+    selectedMatches === 0 ? false : selectedMatches === filtered.length ? true : "indeterminate";
+
+  const config = useTableConfig("constructor-grupos", GROUP_COLUMNS);
+  const drag = useColumnDrag({ axis: "x", onReorder: config.moveColumn });
+  const lazy = useLazyRows({
+    total: filtered.length,
+    enabled: config.isLazy,
+    step: pageSize,
+    resetKey: filtered,
+  });
+  const shown = config.isLazy ? filtered.slice(0, lazy.count) : visible;
+
+  const cells = groupsTableCells({
+    formatCount,
+    disabledReasonFor: (group) =>
+      disabledGroups?.ids.has(group) === true && !selectedSet.has(group)
+        ? disabledGroups.reason
+        : null,
+  });
+
   return (
     <div className="flex flex-col gap-5">
       {autoInclude !== undefined && onAutoIncludeChange && (
         <AutoIncludeToggle
           checked={autoInclude}
           onCheckedChange={onAutoIncludeChange}
-          title="Incluir automáticamente nuevos colaboradores"
-          description={`Si alguien se une a uno de los grupos seleccionados después de ${
+          title="Sincronizar automáticamente con la agrupación"
+          description={`Los grupos siguen la configuración del sistema (área, líder u otro criterio): quien entre o salga de uno de los seleccionados después de ${
             copy?.launchPhrase ?? "lanzar la encuesta"
-          }, se agrega solo a la lista de participantes.`}
+          } se agrega o se quita solo de la lista, sin que tengas que hacerlo a mano.`}
         />
       )}
+
+      {autoInclude && autoIncludeExtra}
 
       {copy?.lead && (
         <p className="max-w-2xl text-[13px] leading-relaxed text-muted-foreground">{copy.lead}</p>
@@ -1266,14 +1358,29 @@ export function GroupsPanel({
                 {onlySelected ? "Ver todos" : `Ver seleccionados (${formatCount(selectedGroups.length)})`}
               </button>
             </div>
+
+            <TableConfigButton config={config} noun="grupos" />
           </div>
         </div>
 
-        <div className="overflow-hidden rounded-xl border border-border/60">
+        <TableBleedBox bleed={bleed}>
             <Table>
               <TableHeader>
                 <TableRow className="border-border/60 bg-muted/40 hover:bg-muted/40">
                   <TableHead className="w-[50px] pl-4 pr-0">
+                    {/* Bajando de corrido no hay página que nombrar: la
+                        casilla marca todos los grupos de una y el menú se
+                        guarda para cuando la tabla se lee por páginas. */}
+                    {config.isLazy ? (
+                      <HeaderSelectAllCheckbox
+                        state={matchState}
+                        disabled={filtered.length === 0}
+                        onSelectAll={selectAllMatches}
+                        onDeselectAll={deselectAllMatches}
+                        align="start"
+                        label={`Seleccionar todos los grupos (${formatCount(filtered.length)})`}
+                      />
+                    ) : (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <button
@@ -1305,23 +1412,16 @@ export function GroupsPanel({
                         )}
                       </DropdownMenuContent>
                     </DropdownMenu>
+                    )}
                   </TableHead>
-                  <TableHead className="min-w-[200px] py-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    Grupo
-                  </TableHead>
-                  <TableHead className="w-[120px] py-3 text-right text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    Cantidad
-                  </TableHead>
-                  <TableHead className="w-[80px] py-3 pr-4 text-right text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    %
-                  </TableHead>
+                  <ConfigurableHeaderCells config={config} drag={drag} cells={cells} />
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {visible.map(([group, count]) => {
+                {shown.map((row) => {
+                  const [group] = row;
                   const isSelected = selectedSet.has(group);
                   const isDisabled = disabledGroups?.ids.has(group) === true && !isSelected;
-                  const share = Math.round((count / COLLABORATOR_COUNT) * 100);
                   return (
                     <TableRow
                       key={group}
@@ -1344,25 +1444,15 @@ export function GroupsPanel({
                           />
                         </div>
                       </TableCell>
-                      <TableCell className="py-2.5 text-[13px] text-text-secondary">
-                        <span className="flex flex-wrap items-center gap-2">
-                          {group}
-                          {isDisabled && (
-                            <span className="inline-flex rounded-full bg-surface-muted px-2 py-0.5 text-[10.5px] font-bold text-text-muted">
-                              {disabledGroups!.reason}
-                            </span>
-                          )}
-                        </span>
-                      </TableCell>
-                      <TableCell className="w-[120px] py-2.5 text-right tabular-nums text-[13px] text-text-secondary">
-                        {formatCount(count)}
-                      </TableCell>
-                      <TableCell className="w-[80px] py-2.5 pr-4 text-right tabular-nums text-[13px] text-muted-foreground">
-                        {share}%
-                      </TableCell>
+                      <ConfigurableRowCells config={config} cells={cells} row={row} />
                     </TableRow>
                   );
                 })}
+                <LazyRowsSentinel
+                  lazy={lazy}
+                  colSpan={config.columns.length + 1}
+                  noun="grupos"
+                />
               </TableBody>
             </Table>
             
@@ -1378,9 +1468,13 @@ export function GroupsPanel({
                 </p>
               </div>
             )}
-        </div>
+        </TableBleedBox>
 
         <div className="flex flex-wrap items-center justify-between gap-3">
+          {config.isLazy ? (
+            <LazyRowsSummary lazy={lazy} total={filtered.length} noun="grupos" />
+          ) : (
+            <>
           <p className="text-[12px] text-muted-foreground">
             {filtered.length === 0
               ? "0 grupos"
@@ -1428,6 +1522,8 @@ export function GroupsPanel({
               Siguiente
             </PagerButton>
           </div>
+            </>
+          )}
         </div>
       </div>
     </div>

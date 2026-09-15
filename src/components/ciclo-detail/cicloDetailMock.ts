@@ -272,6 +272,15 @@ const COLLABORATOR_COMMENTS = [
   "Avance parcial: falta la validación de finanzas.",
 ] as const;
 
+/** Lo que el colaborador contesta cuando el líder le pregunta algo. */
+const COLLABORATOR_REPLIES = [
+  "Sí, con el equipo de datos nos alcanza. Te comparto el corte del viernes.",
+  "Listo, adjunto el consolidado que me pediste.",
+  "Tienes razón con el margen: ya ajustamos la lista de precios.",
+  "Lo vemos en el uno a uno y te confirmo la fecha.",
+  "Voy a acelerarlo: reservé dos mañanas de la otra semana para cerrarlo.",
+] as const;
+
 const LEADER_COMMENTS = [
   "Buen ritmo. ¿Necesitas apoyo para llegar a la meta del mes?",
   "Revisado. Recuerda adjuntar el consolidado antes del cierre.",
@@ -294,12 +303,78 @@ interface Window {
   end: Date;
 }
 
+/**
+ * La forma que tiene un día de oficina: dos picos —media mañana y media
+ * tarde—, un valle al almuerzo y una cola corta al cierre del día.
+ *
+ * Va pesada y no repartida por igual entre las ocho y las seis porque el
+ * ritmo de actividad del resumen lee justo esto: con una hora tan probable
+ * como cualquier otra, ese gráfico sale plano y no tiene nada que decir.
+ */
+const HOUR_WEIGHTS: readonly (readonly [hour: number, weight: number])[] = [
+  [8, 4],
+  [9, 9],
+  [10, 14],
+  [11, 13],
+  [12, 7],
+  [13, 3],
+  [14, 7],
+  [15, 11],
+  [16, 13],
+  [17, 10],
+  [18, 5],
+  [19, 2],
+];
+
+const HOUR_WEIGHT_TOTAL = HOUR_WEIGHTS.reduce((sum, [, weight]) => sum + weight, 0);
+
+function weightedHour(seed: string): number {
+  let ticket = unit(seed) * HOUR_WEIGHT_TOTAL;
+  for (const [hour, weight] of HOUR_WEIGHTS) {
+    ticket -= weight;
+    if (ticket <= 0) return hour;
+  }
+  return HOUR_WEIGHTS[HOUR_WEIGHTS.length - 1][0];
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Cuándo se reportó algo: un punto del calendario del ciclo, corrido al cierre
+ * del mes y fuera del fin de semana, con una hora de oficina.
+ *
+ * Las tres correcciones son las que hacen legible el ritmo de actividad: sin
+ * ellas los reportes caen igual de repartidos un domingo a las 3 de la tarde
+ * que un miércoles a media mañana, y el gráfico del resumen —que existe justo
+ * para decir "cuándo actualiza la gente"— saldría parejo.
+ */
 function dateBetween(seed: string, window: Window, share: number): string {
   const span = window.end.getTime() - window.start.getTime();
   const jitter = (unit(`${seed}:jitter`) - 0.5) * 0.08;
   const at = window.start.getTime() + span * Math.max(0.02, Math.min(0.98, share + jitter));
   const date = new Date(at);
-  date.setHours(8 + Math.floor(unit(`${seed}:hour`) * 10), Math.floor(unit(`${seed}:min`) * 60), 0, 0);
+
+  // El cierre de mes es cuando alguien se acuerda de actualizar lo que lleva:
+  // un tercio de los reportes cae en los últimos días. Solo si el mes que le
+  // toca cierra dentro del calendario del ciclo; si no, se queda donde estaba.
+  if (unit(`${seed}:month-end`) < 0.34) {
+    const monthEnd = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+    const nudged = new Date(monthEnd.getTime() - Math.floor(unit(`${seed}:tail`) * 3) * DAY_MS);
+    if (nudged >= window.start && nudged <= window.end) {
+      date.setTime(nudged.getTime());
+    }
+  }
+
+  // Nadie reporta un objetivo el fin de semana: el sábado retrocede al viernes
+  // y el domingo avanza al lunes, salvo que el lunes se saliera del ciclo.
+  const weekday = date.getDay();
+  if (weekday === 6) date.setTime(date.getTime() - DAY_MS);
+  if (weekday === 0) {
+    const monday = date.getTime() + DAY_MS;
+    date.setTime(monday <= window.end.getTime() ? monday : date.getTime() - 2 * DAY_MS);
+  }
+
+  date.setHours(weightedHour(`${seed}:hour`), Math.floor(unit(`${seed}:min`) * 60), 0, 0);
   return date.toISOString();
 }
 
@@ -314,9 +389,12 @@ function buildUpdates(
   const seed = `${cicloId}:${person.id}:${objective.id}`;
   const leaderName = person.leader ?? "Líder de área";
   const hasValue = currentValue !== "";
+  // Dos mensajes como piso cuando hay algo reportado: con uno solo el hilo no
+  // es un hilo, y lo que esta vista tiene que enseñar es justamente la
+  // conversación entre el colaborador y su líder alrededor del avance.
   const count = hasValue
-    ? 1 + Math.floor(unit(`${seed}:count`) * 3)
-    : unit(`${seed}:comment-only`) < 0.25
+    ? 2 + Math.floor(unit(`${seed}:count`) * 3)
+    : unit(`${seed}:comment-only`) < 0.3
       ? 1
       : 0;
   if (count === 0) return [];
@@ -326,12 +404,27 @@ function buildUpdates(
       ? 1
       : progressRatio(seed, status) ?? 0;
 
-  return Array.from({ length: count }, (_, index) => {
+  const updates: ObjectiveUpdate[] = [];
+  /** El último mensaje de primer nivel: de él cuelgan las respuestas. */
+  let lastRootId: string | null = null;
+
+  for (let index = 0; index < count; index += 1) {
     const isLast = index === count - 1;
     const stepSeed = `${seed}:${index}`;
     const share = (index + 1) / (count + 0.6);
-    const isLeader = !isLast && unit(`${stepSeed}:author`) < 0.4;
+    // El último mensaje es siempre del colaborador y abre hilo: es el que
+    // deja el objetivo en el valor que muestra la tabla, y un valor escondido
+    // dentro de una respuesta se leería como un comentario más.
+    const isLeader = !isLast && lastRootId !== null && unit(`${stepSeed}:author`) < 0.55;
     const role: UpdateAuthorRole = isLeader ? "lider" : "colaborador";
+    const previous = updates[updates.length - 1];
+    const answersLeader =
+      !isLeader &&
+      !isLast &&
+      previous !== undefined &&
+      previous.authorRole === "lider" &&
+      unit(`${stepSeed}:answer`) < 0.65;
+    const replyTo = isLeader || answersLeader ? lastRootId : null;
 
     let value: string | null = null;
     if (hasValue && !isLeader) {
@@ -342,18 +435,21 @@ function buildUpdates(
       }
     }
 
-    const evidences: EvidenceFile[] =
-      value !== null && unit(`${stepSeed}:evidence`) < 0.4
-        ? [
-            {
-              id: `evidence-${stepSeed}`,
-              ...pick(EVIDENCE_POOL, `${stepSeed}:file`),
-            },
-          ]
-        : [];
+    // El soporte viaja con quien lo tiene: casi siempre con el reporte, a
+    // veces con una respuesta —el líder que devuelve el acta del comité.
+    const evidences: EvidenceFile[] = [];
+    if (unit(`${stepSeed}:evidence`) < (value !== null ? 0.55 : 0.3)) {
+      evidences.push({ id: `evidence-${stepSeed}`, ...pick(EVIDENCE_POOL, `${stepSeed}:file`) });
+      if (unit(`${stepSeed}:evidence-2`) < 0.3) {
+        evidences.push({ id: `evidence-${stepSeed}-b`, ...pick(EVIDENCE_POOL, `${stepSeed}:file-2`) });
+      }
+    }
 
-    return {
-      id: `update-${stepSeed}`,
+    const id = `update-${stepSeed}`;
+    if (replyTo === null) lastRootId = id;
+
+    updates.push({
+      id,
       authorId: isLeader ? `leader-${leaderName}` : person.id,
       authorName: isLeader ? leaderName : person.name,
       authorRole: role,
@@ -361,10 +457,15 @@ function buildUpdates(
       value,
       comment: isLeader
         ? pick(LEADER_COMMENTS, `${stepSeed}:text`)
-        : pick(COLLABORATOR_COMMENTS, `${stepSeed}:text`),
+        : answersLeader
+          ? pick(COLLABORATOR_REPLIES, `${stepSeed}:text`)
+          : pick(COLLABORATOR_COMMENTS, `${stepSeed}:text`),
       evidences,
-    };
-  });
+      replyTo,
+    });
+  }
+
+  return updates;
 }
 
 
@@ -583,6 +684,154 @@ function alejandroDemoPerson(window: Window, cicloId: string): TrackedPerson | n
   };
 }
 
+// ── Demo fijo: Ana Cifuentes Cifuentes con los seis estados ────────────────
+
+/**
+ * Otro colaborador real del directorio, con seis objetivos fijados: los
+ * cinco tramos del flujo de aprobación —por aprobar, por ajustar, por
+ * iniciar, en progreso, completado— más uno inactivado, para poder probar
+ * también Inactivar/Activar desde su ficha sin tener que salir a buscarlo.
+ * Mismo patrón que Alejandro Castro Moreno, arriba: nace del mismo hash del
+ * directorio, con sus objetivos fijados aparte del reparto por grupo.
+ */
+const ANA_DEMO_ID = "collab-6228";
+const SET_ANA_DEMO_ID = "set-ind-ana-demo";
+
+const OBJETIVOS_ANA_DEMO: readonly Objective[] = [
+  objective("obj-ana-nps", {
+    title: "Subir el NPS interno de tecnología a 75 puntos",
+    measure: "numeric",
+    initialValue: "58",
+    targetValue: "75",
+    weight: 20,
+  }),
+  objective("obj-ana-incidentes", {
+    title: "Reducir los incidentes críticos de 12 a 4 por trimestre",
+    measure: "numeric",
+    direction: "decrease",
+    initialValue: "12",
+    targetValue: "4",
+    weight: 20,
+  }),
+  objective("obj-ana-migracion", {
+    title: "Migrar el 100 % de los servicios al nuevo clúster",
+    measure: "percentage",
+    initialValue: "0",
+    targetValue: "100",
+    weight: 20,
+  }),
+  objective("obj-ana-automatizacion", {
+    title: "Automatizar el 80 % de los despliegues manuales",
+    measure: "percentage",
+    initialValue: "15",
+    targetValue: "80",
+    weight: 20,
+  }),
+  objective("obj-ana-certificacion", {
+    title: "Certificar al equipo en buenas prácticas de seguridad",
+    measure: "boolean",
+    weight: 10,
+  }),
+  objective("obj-ana-catalogo", {
+    title: "Consolidar el catálogo de APIs internas",
+    measure: "percentage",
+    initialValue: "0",
+    targetValue: "100",
+    weight: 10,
+  }),
+];
+
+const SET_ANA_DEMO: ObjectiveSet = {
+  ...createObjectiveSet("individual", [ANA_DEMO_ID]),
+  id: SET_ANA_DEMO_ID,
+  objectives: OBJETIVOS_ANA_DEMO,
+};
+
+/** A qué estado se fija cada uno. `inactivo` solo aplica al que además debe
+ *  probar Inactivar/Activar — el resto se queda tal cual quede su revisión. */
+const ANA_DEMO_OUTCOMES: Readonly<
+  Record<string, { review: ObjectiveApproval; currentValue: string; inactivo?: boolean }>
+> = {
+  "obj-ana-nps": { review: "pendiente", currentValue: "" },
+  "obj-ana-incidentes": { review: "ajustes", currentValue: "" },
+  "obj-ana-migracion": { review: "aprobado", currentValue: "" },
+  "obj-ana-automatizacion": { review: "aprobado", currentValue: "52" },
+  "obj-ana-certificacion": { review: "aprobado", currentValue: "true" },
+  "obj-ana-catalogo": { review: "aprobado", currentValue: "40", inactivo: true },
+};
+
+function trackAnaObjective(
+  person: Collaborator,
+  objective: Objective,
+  window: Window,
+  cicloId: string
+): TrackedObjective {
+  const outcome = ANA_DEMO_OUTCOMES[objective.id];
+  const leaderName = person.leader ?? "Líder de área";
+  const seed = `${cicloId}:${person.id}:${objective.id}:demo`;
+
+  const review: ObjectiveReview =
+    outcome.review === "aprobado"
+      ? {
+          status: "aprobado",
+          reviewerName: leaderName,
+          date: dateBetween(`${seed}:ok`, window, 0.05),
+          comment: "",
+        }
+      : outcome.review === "pendiente"
+        ? { status: "pendiente", reviewerName: null, date: null, comment: "" }
+        : {
+            status: "ajustes",
+            reviewerName: leaderName,
+            date: dateBetween(`${seed}:back`, window, 0.08),
+            comment: pick(REVIEW_COMMENTS, `${seed}:text`),
+          };
+
+  const updates: readonly ObjectiveUpdate[] =
+    review.status === "aprobado" && outcome.currentValue !== ""
+      ? [
+          {
+            id: `update-${seed}`,
+            authorId: person.id,
+            authorName: person.name,
+            authorRole: "colaborador",
+            date: dateBetween(seed, window, 0.85),
+            value: outcome.currentValue,
+            comment: pick(COLLABORATOR_COMMENTS, `${seed}:text`),
+            evidences: [],
+          },
+        ]
+      : [];
+
+  return {
+    objective,
+    currentValue: outcome.currentValue,
+    updates,
+    review,
+    inactivation: outcome.inactivo
+      ? {
+          date: dateBetween(`${seed}:inactive`, window, 0.92),
+          authorName: leaderName,
+          percentAtInactivation: 40,
+        }
+      : null,
+  };
+}
+
+/** El colaborador con sus seis objetivos fijos, o null si el directorio
+ *  cambiara y el id ya no existiera. */
+function anaDemoPerson(window: Window, cicloId: string): TrackedPerson | null {
+  const person = COLLABORATORS.find((candidate) => candidate.id === ANA_DEMO_ID);
+  if (!person) return null;
+  return {
+    id: person.id,
+    collaborator: person,
+    setId: SET_ANA_DEMO_ID,
+    groupId: null,
+    objectives: OBJETIVOS_ANA_DEMO.map((item) => trackAnaObjective(person, item, window, cicloId)),
+  };
+}
+
 // ── Ensamble ───────────────────────────────────────────────────────────────
 
 const GROUP_SETS = [SET_TALENTO, SET_MENTORES] as const;
@@ -590,11 +839,14 @@ const GROUP_SETS = [SET_TALENTO, SET_MENTORES] as const;
 function peopleForGroups(status: CicloStatus, window: Window, cicloId: string): TrackedPerson[] {
   return GROUP_SETS.flatMap((set) =>
     set.targetIds.flatMap((groupId) =>
-      // Alejandro Castro Moreno sale del reparto por grupo: sus cinco
-      // objetivos están fijados aparte, más abajo, y aparecer también aquí lo
-      // duplicaría con una segunda asignación.
+      // Alejandro Castro Moreno y Ana Cifuentes Cifuentes salen del reparto
+      // por grupo: sus objetivos están fijados aparte, más arriba, y
+      // aparecer también aquí los duplicaría con una segunda asignación.
       COLLABORATORS.filter(
-        (person) => person.customGroup === groupId && person.id !== ALEJANDRO_DEMO_ID
+        (person) =>
+          person.customGroup === groupId &&
+          person.id !== ALEJANDRO_DEMO_ID &&
+          person.id !== ANA_DEMO_ID
       ).map((person) => ({
         id: person.id,
         collaborator: person,
@@ -606,16 +858,37 @@ function peopleForGroups(status: CicloStatus, window: Window, cicloId: string): 
   );
 }
 
-function individualPeople(status: CicloStatus, window: Window, cicloId: string): {
-  people: TrackedPerson[];
-  sets: ObjectiveSet[];
+/**
+ * A quiénes les tocan los sets individuales.
+ *
+ * Vive aparte del seguimiento porque el reparto es configuración del ciclo
+ * —lo que el constructor reabre para editar— y las cifras reportadas no. Los
+ * dos tienen que nombrar exactamente a las mismas personas, así que salen de
+ * esta única lista en vez de repetirse en cada sitio.
+ */
+function individualAssignments(): {
+  ops: ObjectiveSet;
+  crm: ObjectiveSet;
+  opsPeople: readonly Collaborator[];
+  crmPeople: readonly Collaborator[];
 } {
   // Personas sin grupo ad hoc, para que nadie reciba dos asignaciones.
   const pool = COLLABORATORS.filter((person) => person.customGroup === null);
   const opsPeople = [pool[7], pool[42], pool[113]];
   const crmPeople = [pool[260]];
-  const ops = { ...SET_INDIVIDUAL_OPS, targetIds: opsPeople.map((person) => person.id) };
-  const crm = { ...SET_INDIVIDUAL_CRM, targetIds: crmPeople.map((person) => person.id) };
+  return {
+    opsPeople,
+    crmPeople,
+    ops: { ...SET_INDIVIDUAL_OPS, targetIds: opsPeople.map((person) => person.id) },
+    crm: { ...SET_INDIVIDUAL_CRM, targetIds: crmPeople.map((person) => person.id) },
+  };
+}
+
+function individualPeople(status: CicloStatus, window: Window, cicloId: string): {
+  people: TrackedPerson[];
+  sets: ObjectiveSet[];
+} {
+  const { ops, crm, opsPeople, crmPeople } = individualAssignments();
 
   const track = (set: ObjectiveSet, people: readonly Collaborator[]): TrackedPerson[] =>
     people.map((person) => ({
@@ -629,11 +902,59 @@ function individualPeople(status: CicloStatus, window: Window, cicloId: string):
   return { people: [...track(ops, opsPeople), ...track(crm, crmPeople)], sets: [ops, crm] };
 }
 
+const CICLO_DESCRIPTION =
+  "Ciclo de objetivos del equipo de talento e innovación: crecimiento comercial, experiencia de cliente y consolidación cultural.";
+
+/**
+ * Cómo quedó configurado el ciclo: fechas, grupos y objetivos repartidos, sin
+ * una sola línea de seguimiento.
+ *
+ * Es la mitad del ciclo que se puede editar —la que el constructor reabre al
+ * pulsar "Editar ciclo"—, y sale de las mismas listas que la vista de
+ * seguimiento para que las dos no cuenten ciclos distintos. Se separa porque
+ * armar el avance de cada persona cuesta mucho más que leer el reparto, y
+ * quien va a editar todavía no está mirando el avance.
+ */
+export interface CicloSetup {
+  status: CicloStatus;
+  period: CicloPeriod;
+  startDate: string;
+  endDate: string;
+  description: string;
+  segmentBy: CicloDetailData["segmentBy"];
+  companyObjectives: readonly Objective[];
+  sets: readonly ObjectiveSet[];
+}
+
+export function buildCicloSetup(row: CicloListRow): CicloSetup {
+  const individual = individualAssignments();
+  const hasAlejandro = COLLABORATORS.some((person) => person.id === ALEJANDRO_DEMO_ID);
+  const hasAna = COLLABORATORS.some((person) => person.id === ANA_DEMO_ID);
+
+  return {
+    status: STATUSES[row.estado.toLowerCase()] ?? "live",
+    period: PERIODS[row.periodo.toLowerCase()] ?? "personalizado",
+    startDate: parseSpanishDate(row.fechaInicio),
+    endDate: parseSpanishDate(row.fechaCierre),
+    description: CICLO_DESCRIPTION,
+    segmentBy: "customGroup",
+    companyObjectives: COMPANY,
+    sets: [
+      ...GROUP_SETS,
+      individual.ops,
+      individual.crm,
+      ...(hasAlejandro ? [SET_ALEJANDRO_DEMO] : []),
+      ...(hasAna ? [SET_ANA_DEMO] : []),
+    ],
+  };
+}
+
 /** El ciclo completo detrás de una fila de la lista. */
 export function buildCicloDetail(row: CicloListRow, now: Date = new Date()): CicloDetailData {
-  const status = STATUSES[row.estado.toLowerCase()] ?? "live";
-  const startDate = parseSpanishDate(row.fechaInicio);
-  const endDate = parseSpanishDate(row.fechaCierre);
+  const setup = buildCicloSetup(row);
+  const status = setup.status;
+  const startDate = setup.startDate;
+  const endDate = setup.endDate;
 
   // Las actualizaciones caen dentro del calendario del ciclo, y nunca en el
   // futuro: en un ciclo abierto la última puede ser de hoy, no de mañana.
@@ -647,23 +968,24 @@ export function buildCicloDetail(row: CicloListRow, now: Date = new Date()): Cic
 
   const individual = individualPeople(status, window, row.id);
   const alejandro = alejandroDemoPerson(window, row.id);
+  const ana = anaDemoPerson(window, row.id);
 
   return {
     id: row.id,
     name: row.nombre,
     status,
-    period: PERIODS[row.periodo.toLowerCase()] ?? "personalizado",
+    period: setup.period,
     startDate,
     endDate,
-    description:
-      "Ciclo de objetivos del equipo de talento e innovación: crecimiento comercial, experiencia de cliente y consolidación cultural.",
-    segmentBy: "customGroup",
-    companyObjectives: COMPANY,
-    sets: [...GROUP_SETS, ...individual.sets, ...(alejandro ? [SET_ALEJANDRO_DEMO] : [])],
+    description: setup.description,
+    segmentBy: setup.segmentBy,
+    companyObjectives: setup.companyObjectives,
+    sets: setup.sets,
     people: [
       ...peopleForGroups(status, window, row.id),
       ...individual.people,
       ...(alejandro ? [alejandro] : []),
+      ...(ana ? [ana] : []),
     ],
   };
 }

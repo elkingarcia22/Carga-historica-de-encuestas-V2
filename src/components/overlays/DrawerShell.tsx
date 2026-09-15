@@ -39,6 +39,22 @@ export interface DrawerShellProps {
   disablePadding?: boolean
   /** Whether to disable scrollbar-gutter: stable (default: false) */
   disableScrollbarGutter?: boolean
+  /** Prevent closing on outside interaction */
+  onInteractOutside?: (e: Event) => void
+  /**
+   * Si el drawer acapara la pantalla (por defecto sí).
+   *
+   * En modo modal Radix apaga los eventos de puntero del `body` y marca como
+   * `aria-hidden` todo lo que no sea el drawer: nada de fuera se puede tocar
+   * ni leer. Un drawer que convive con un panel propio fuera de su caja —el
+   * del Agente IA, que vive en la concha de la app y no en el portal— tiene
+   * que apagarlo mientras ese panel esté abierto, o el panel queda muerto.
+   * El velo sigue estando: lo dibuja `SheetContent` por su cuenta.
+   */
+  modal?: boolean
+  /** Recorta el velo para dejar a la vista —y clicable— lo que convive con el
+   *  drawer, como el panel del Agente IA. */
+  overlayClassName?: string
 }
 
 const sideSizeClasses = {
@@ -69,30 +85,10 @@ const sideSizeClasses = {
     "full": "sm:max-w-full",
   },
   top: {
-    sm: "h-[30vh]",
-    md: "h-[50vh]",
-    lg: "h-[70vh]",
-    xl: "h-[90vh]",
-    "2xl": "h-[90vh]",
-    "3xl": "h-[90vh]",
-    "4xl": "h-[90vh]",
-    "5xl": "h-[90vh]",
-    "6xl": "h-[90vh]",
-    "7xl": "h-[90vh]",
-    "full": "h-full",
+    sm: "", md: "", lg: "", xl: "", "2xl": "", "3xl": "", "4xl": "", "5xl": "", "6xl": "", "7xl": "", full: "",
   },
   bottom: {
-    sm: "h-[30vh]",
-    md: "h-[50vh]",
-    lg: "h-[70vh]",
-    xl: "h-[90vh]",
-    "2xl": "h-[90vh]",
-    "3xl": "h-[90vh]",
-    "4xl": "h-[90vh]",
-    "5xl": "h-[90vh]",
-    "6xl": "h-[90vh]",
-    "7xl": "h-[90vh]",
-    "full": "h-full",
+    sm: "", md: "", lg: "", xl: "", "2xl": "", "3xl": "", "4xl": "", "5xl": "", "6xl": "", "7xl": "", full: "",
   },
 }
 
@@ -111,17 +107,23 @@ export function DrawerShell({
   showCloseButton = true,
   disablePadding = false,
   disableScrollbarGutter = false,
+  onInteractOutside,
+  modal = true,
+  overlayClassName,
 }: DrawerShellProps) {
   const sizeClass = sideSizeClasses[side][size]
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <Sheet open={open} onOpenChange={onOpenChange} modal={modal}>
       {trigger && <SheetTrigger asChild>{trigger}</SheetTrigger>}
       <SheetContent 
         side={side} 
         className={cn(sizeClass, className)}
         showCloseButton={showCloseButton}
+        modal={modal}
+        overlayClassName={overlayClassName}
         aria-describedby={undefined}
+        onInteractOutside={onInteractOutside}
       >
         {(title || description) && (
           <SheetHeader className="border-b bg-muted/30">

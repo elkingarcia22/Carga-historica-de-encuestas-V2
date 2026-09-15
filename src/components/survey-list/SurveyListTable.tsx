@@ -2,16 +2,9 @@ import * as React from "react";
 import { CalendarClock, Eye, EyeOff, ListChecks, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
-import { StatusBadge } from "@/components/status-badge";
 
-function mapVariantToState(variant: "info" | "positive" | "warning" | "neutral"): "success" | "pending" | "failed" {
-  if (variant === "positive") return "success";
-  if (variant === "warning" || variant === "info" || variant === "neutral") return "pending"; // Map neutral/info to pending since there's no neutral in StatusBadge yet, or wait I'll map them appropriately if I extend it.
-  return "failed";
-}
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Progress } from "@/components/ui/progress";
 import {
   Select,
   SelectContent,
@@ -29,36 +22,37 @@ import {
 } from "@/components/ui/table";
 import { EmptyState } from "@/components/feedback";
 import {
-  FilterSortHeader,
+  ConfigurableHeaderCells,
+  ConfigurableRowCells,
+  LazyRowsSentinel,
+  LazyRowsSummary,
   SelectionHeaderMenu,
-  SortOnlyHeader,
+  TableConfigButton,
+  useColumnDrag,
+  useLazyRows,
+  useTableConfig,
+  type TableColumnCells,
+  type TableConfig,
 } from "@/components/data-display";
 import { PagerButton } from "@/components/survey-builder/CollaboratorTableParts";
-import { useAnimatedValue } from "@/lib/useAnimatedValue";
 import {
-  CLOSE_BUCKETS,
-  PROGRESS_BUCKETS,
   NO_FILTERS,
   hasAnyFilter,
   matchesFilters,
   toggleFilterValue,
   type SurveyListFilters,
 } from "./surveyListFilters";
-import { dateValue, parseSurveyDate, startOfToday } from "./surveyListDates";
-import { SurveyDateCell, type DateEditMode } from "./SurveyDateCell";
+import { dateValue } from "./surveyListDates";
+import type { DateEditMode } from "./SurveyDateCell";
+import {
+  participantsValue,
+  statusOrder,
+  type SurveyListRow,
+  type SurveySortKey,
+} from "./surveyListRows";
+import { SURVEY_COLUMNS, surveyTableCells } from "./surveyTableColumns";
 
-/** One row of the list. Shaped by the mocks, so the fields stay loose. */
-export interface SurveyListRow {
-  id: string;
-  name: string;
-  type: string;
-  status: string;
-  statusVariant?: string;
-  startDate: string;
-  endDate: string;
-  participants: string | number;
-  progress: number;
-}
+export type { SurveyListRow };
 
 interface SurveyListTableProps {
   surveys: readonly SurveyListRow[];
@@ -85,8 +79,6 @@ interface SurveyListTableProps {
 /** Matches the pager everywhere else in the app. */
 const PAGE_SIZES = [10, 25, 50] as const;
 
-type SortKey = "name" | "type" | "status" | "startDate" | "endDate" | "participants" | "progress";
-
 function formatCount(n: number) {
   return new Intl.NumberFormat("es-CO").format(n);
 }
@@ -97,37 +89,6 @@ function fold(value: string): string {
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
     .toLowerCase();
-}
-
-function participantsValue(raw: string | number): number {
-  const n = typeof raw === "number" ? raw : Number(String(raw).replace(/\D/g, ""));
-  return Number.isFinite(n) ? n : 0;
-}
-
-/** Default table order: drafts need attention first, then what's running, then what's done. */
-const STATUS_ORDER: Readonly<Record<string, number>> = {
-  Borrador: 0,
-  "Por iniciar": 1,
-  "En curso": 2,
-  Finalizado: 3,
-};
-
-function statusOrder(status: string): number {
-  return STATUS_ORDER[status] ?? STATUS_ORDER.Finalizado + 1;
-}
-
-/** Same tone mapping the list has always used for a survey's lifecycle. */
-function statusVariant(survey: SurveyListRow): "info" | "positive" | "warning" | "neutral" {
-  switch (survey.statusVariant) {
-    case "info":
-      return "info";
-    case "positive":
-      return "positive";
-    case "warning":
-      return "warning";
-    default:
-      return "neutral";
-  }
 }
 
 /**
@@ -189,7 +150,7 @@ export function SurveyListTable({
     return newIds;
   }, [surveys]);
 
-  const [sort, setSort] = React.useState<{ key: SortKey | null; ascending: boolean }>({
+  const [sort, setSort] = React.useState<{ key: SurveySortKey | null; ascending: boolean }>({
     key: null,
     ascending: false,
   });
@@ -285,7 +246,7 @@ export function SurveyListTable({
     ? (visibleRows.find((row) => row.id === editingId) ?? null)
     : null;
 
-  const toggleSort = (key: SortKey) => {
+  const toggleSort = (key: SurveySortKey) => {
     setPage(1);
     setSort((current) =>
       current.key === key
@@ -302,6 +263,16 @@ export function SurveyListTable({
       : selectedOnPage > 0
         ? "indeterminate"
         : false;
+
+  /*
+   * La lectura de la casilla cambia con el modo: por páginas habla de la
+   * página que se está viendo, bajando de corrido habla de todo lo que pasó
+   * los filtros —no hay página que nombrar, así que "marcada" solo puede
+   * querer decir "está todo".
+   */
+  const selectedMatches = visibleRows.filter((row) => selectedIds.has(row.id)).length;
+  const matchState: boolean | "indeterminate" =
+    selectedMatches === 0 ? false : selectedMatches === visibleRows.length ? true : "indeterminate";
 
   const setSelection = (ids: Iterable<string>) => onSelectionChange(new Set(ids));
 
@@ -328,6 +299,30 @@ export function SurveyListTable({
   const isPageFullySelected = pagedRows.length > 0 && selectedOnPage === pagedRows.length;
 
   const hasActiveFilters = query !== "" || hasAnyFilter(filters);
+
+  const config = useTableConfig("encuestas-lista", SURVEY_COLUMNS);
+  const cells = surveyTableCells({
+    sort,
+    toggleSort,
+    filters,
+    toggleColumn,
+    clearColumn,
+    availableTypes,
+    availableStatuses,
+    dateEdit,
+    onOpenSurvey,
+    onDateEditStart,
+    onDateEditSave,
+    onDateEditCancel,
+  });
+  const drag = useColumnDrag({ axis: "x", onReorder: config.moveColumn });
+  const lazy = useLazyRows({
+    total: visibleRows.length,
+    enabled: config.isLazy,
+    step: pageSize,
+    resetKey: visibleRows,
+  });
+  const shownRows = config.isLazy ? visibleRows.slice(0, lazy.count) : pagedRows;
 
   return (
     <div className="flex flex-col flex-1 min-h-0 gap-6 rounded-2xl border border-border/60 bg-surface p-6 shadow-card">
@@ -399,6 +394,8 @@ export function SurveyListTable({
               </button>
             )}
           </div>
+
+          <TableConfigButton config={config} noun="encuestas" />
 
           <div
             className={cn(
@@ -491,7 +488,8 @@ export function SurveyListTable({
                 <TableRow className="border-border/60 bg-muted/40 hover:bg-muted/40">
                   <TableHead className="pl-7 pr-5">
                     <SelectionHeaderMenu
-                      state={headerState}
+                      state={config.isLazy ? matchState : headerState}
+                      paged={!config.isLazy}
                       pageCount={pagedRows.length}
                       matchCount={visibleRows.length}
                       showSelectPage={pagedRows.length > 0 && !isPageFullySelected}
@@ -506,96 +504,31 @@ export function SurveyListTable({
                       align="start"
                     />
                   </TableHead>
-                  <TableHead className="w-[30%] px-0 py-3.5">
-                    {/* No filter menu: every name is unique, so a checklist of
-                        them would just be the table again. Search covers it. */}
-                    <SortOnlyHeader
-                      label="Nombre"
-                      sortActive={sort.key === "name"}
-                      onSort={() => toggleSort("name")}
-                    />
-                  </TableHead>
-                  <TableHead className="w-[13%] px-0 py-3.5">
-                    <FilterSortHeader
-                      label="Tipo"
-                      options={availableTypes}
-                      selected={new Set(filters.type)}
-                      onToggleFilter={(value) => toggleColumn("type", value)}
-                      onClearFilter={() => clearColumn("type")}
-                      sortActive={sort.key === "type"}
-                      onSort={() => toggleSort("type")}
-                    />
-                  </TableHead>
-                  <TableHead className="w-[14%] px-0 py-3.5">
-                    <FilterSortHeader
-                      label="Estado"
-                      options={availableStatuses}
-                      selected={new Set(filters.status)}
-                      onToggleFilter={(value) => toggleColumn("status", value)}
-                      onClearFilter={() => clearColumn("status")}
-                      sortActive={sort.key === "status"}
-                      onSort={() => toggleSort("status")}
-                    />
-                  </TableHead>
-                  <TableHead className="w-[110px] px-2 py-3.5">
-                    <SortOnlyHeader
-                      label="Inicio"
-                      sortActive={sort.key === "startDate"}
-                      onSort={() => toggleSort("startDate")}
-                    />
-                  </TableHead>
-                  <TableHead className="w-[110px] px-2 py-3.5">
-                    <FilterSortHeader
-                      label="Cierre"
-                      options={CLOSE_BUCKETS}
-                      selected={new Set(filters.close)}
-                      onToggleFilter={(value) => toggleColumn("close", value)}
-                      onClearFilter={() => clearColumn("close")}
-                      sortActive={sort.key === "endDate"}
-                      onSort={() => toggleSort("endDate")}
-                    />
-                  </TableHead>
-                  <TableHead className="w-[90px] px-2 py-3.5 text-right">
-                    <SortOnlyHeader
-                      label="Part."
-                      sortActive={sort.key === "participants"}
-                      onSort={() => toggleSort("participants")}
-                      align="right"
-                    />
-                  </TableHead>
-                  <TableHead className="w-[220px] py-3.5 pl-0 pr-7">
-                    <FilterSortHeader
-                      label="Avance"
-                      options={PROGRESS_BUCKETS}
-                      selected={new Set(filters.progress)}
-                      onToggleFilter={(value) => toggleColumn("progress", value)}
-                      onClearFilter={() => clearColumn("progress")}
-                      sortActive={sort.key === "progress"}
-                      onSort={() => toggleSort("progress")}
-                      align="right"
-                    />
-                  </TableHead>
+                  <ConfigurableHeaderCells config={config} drag={drag} cells={cells} />
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {pagedRows.map((survey) => (
+                {shownRows.map((survey) => (
                   <SurveyRow
                     key={survey.id}
                     survey={survey}
+                    config={config}
+                    cells={cells}
                     isNew={newSurveyIds.has(survey.id)}
                     isSelected={selectedIds.has(survey.id)}
                     onToggle={() => toggleOne(survey.id)}
-                    onOpen={() => onOpenSurvey(survey.id)}
-                    editMode={dateEdit?.surveyId === survey.id ? dateEdit.mode : null}
+                    isEditing={editingId === survey.id}
                     // While one row is being edited the rest step back, so
                     // the date being chosen stays legible against its own
                     // row instead of a wall of twenty others.
                     dimmed={editingId != null && editingId !== survey.id}
-                    onDateStart={(mode) => onDateEditStart?.(survey.id, mode)}
-                    onDateSave={(date) => onDateEditSave?.(survey.id, date)}
-                    onDateCancel={() => onDateEditCancel?.()}
                   />
                 ))}
+                <LazyRowsSentinel
+                  lazy={lazy}
+                  colSpan={config.columns.length + 1}
+                  noun="encuestas"
+                />
               </TableBody>
             </Table>
           </div>
@@ -603,53 +536,59 @@ export function SurveyListTable({
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3 shrink-0">
-        <p className="text-[12px] text-muted-foreground">
-          {visibleRows.length === 0
-            ? "0 encuestas"
-            : `${formatCount(firstIndex + 1)}–${formatCount(firstIndex + pagedRows.length)} de ${formatCount(visibleRows.length)}`}
-        </p>
+        {config.isLazy ? (
+          <LazyRowsSummary lazy={lazy} total={visibleRows.length} noun="encuestas" />
+        ) : (
+          <>
+            <p className="text-[12px] text-muted-foreground">
+              {visibleRows.length === 0
+                ? "0 encuestas"
+                : `${formatCount(firstIndex + 1)}–${formatCount(firstIndex + pagedRows.length)} de ${formatCount(visibleRows.length)}`}
+            </p>
 
-        <div className="flex items-center gap-2">
-          <Select
-            value={String(pageSize)}
-            onValueChange={(value) => {
-              setPageSize(Number(value));
-              setPage(1);
-            }}
-          >
-            <SelectTrigger
-              aria-label="Encuestas por página"
-              className="h-8 w-[130px] rounded-lg px-2.5 text-[12px]"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent position="popper" sideOffset={6}>
-              {PAGE_SIZES.map((size) => (
-                <SelectItem key={size} value={String(size)} className="text-[13px]">
-                  {size} por página
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            <div className="flex items-center gap-2">
+              <Select
+                value={String(pageSize)}
+                onValueChange={(value) => {
+                  setPageSize(Number(value));
+                  setPage(1);
+                }}
+              >
+                <SelectTrigger
+                  aria-label="Encuestas por página"
+                  className="h-8 w-[130px] rounded-lg px-2.5 text-[12px]"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper" sideOffset={6}>
+                  {PAGE_SIZES.map((size) => (
+                    <SelectItem key={size} value={String(size)} className="text-[13px]">
+                      {size} por página
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
 
-          <PagerButton
-            label="Página anterior"
-            disabled={currentPage <= 1}
-            onClick={() => setPage(currentPage - 1)}
-          >
-            Anterior
-          </PagerButton>
-          <span className="text-[12px] tabular-nums text-text-secondary">
-            {formatCount(currentPage)} / {formatCount(pageCount)}
-          </span>
-          <PagerButton
-            label="Página siguiente"
-            disabled={currentPage >= pageCount}
-            onClick={() => setPage(currentPage + 1)}
-          >
-            Siguiente
-          </PagerButton>
-        </div>
+              <PagerButton
+                label="Página anterior"
+                disabled={currentPage <= 1}
+                onClick={() => setPage(currentPage - 1)}
+              >
+                Anterior
+              </PagerButton>
+              <span className="text-[12px] tabular-nums text-text-secondary">
+                {formatCount(currentPage)} / {formatCount(pageCount)}
+              </span>
+              <PagerButton
+                label="Página siguiente"
+                disabled={currentPage >= pageCount}
+                onClick={() => setPage(currentPage + 1)}
+              >
+                Siguiente
+              </PagerButton>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -657,46 +596,25 @@ export function SurveyListTable({
 
 function SurveyRow({
   survey,
+  config,
+  cells,
   isNew,
   isSelected,
   onToggle,
-  onOpen,
-  editMode,
+  isEditing,
   dimmed,
-  onDateStart,
-  onDateSave,
-  onDateCancel,
 }: {
   survey: SurveyListRow;
+  config: TableConfig;
+  cells: TableColumnCells<SurveyListRow>;
   isNew?: boolean;
   isSelected: boolean;
   onToggle: () => void;
-  onOpen: () => void;
-  /** Set while this row's closing date is being changed. */
-  editMode: DateEditMode | null;
+  /** Cierto mientras esta fila es la que tiene una fecha abierta. */
+  isEditing: boolean;
   /** Another row is being edited, so this one steps out of the way. */
   dimmed: boolean;
-  onDateStart: (mode: DateEditMode) => void;
-  onDateSave: (date: Date) => void;
-  onDateCancel: () => void;
 }) {
-  const animatedProgress = useAnimatedValue(survey.progress, 1000);
-  const isEditing = editMode !== null;
-
-  // A survey cannot close before it opened, nor in the past while it is still
-  // collecting. Reopening goes further: a closing date of today would reopen
-  // and shut it in the same breath, so the earliest useful day is tomorrow.
-  const closeDateFloor = React.useMemo(() => {
-    const today = startOfToday();
-    if (editMode === "reopen") {
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      return tomorrow;
-    }
-    const start = parseSurveyDate(survey.startDate);
-    return start && start > today ? start : today;
-  }, [editMode, survey.startDate]);
-
   return (
     <TableRow
       data-state={isSelected ? "selected" : undefined}
@@ -723,83 +641,7 @@ function SurveyRow({
           />
         </div>
       </TableCell>
-      <TableCell className="py-3">
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onOpen();
-          }}
-          // Navigating away mid-edit would silently drop the date being picked.
-          disabled={isEditing}
-          className="truncate text-left text-[13px] font-semibold text-text-primary transition-colors hover:text-primary hover:underline disabled:cursor-default disabled:no-underline disabled:hover:text-text-primary"
-        >
-          {survey.name}
-        </button>
-      </TableCell>
-      <TableCell className="py-3 text-[13px] text-muted-foreground">
-        <span className="block truncate">{survey.type}</span>
-      </TableCell>
-      <TableCell className="py-3">
-        <StatusBadge 
-          state={mapVariantToState(statusVariant(survey))} 
-          labels={{ [mapVariantToState(statusVariant(survey))]: survey.status }} 
-        />
-      </TableCell>
-      <TableCell className="px-2 py-3 text-[13px] tabular-nums text-muted-foreground">
-        {isEditing && editMode === "editStartDate" ? (
-          <SurveyDateCell
-            value={survey.startDate}
-            mode={editMode}
-            minDate={new Date(0)}
-            onSave={onDateSave}
-            onCancel={onDateCancel}
-          />
-        ) : (
-          <button
-            type="button"
-            className="w-full text-left outline-none hover:text-primary transition-colors focus-visible:ring-1 focus-visible:ring-primary rounded disabled:pointer-events-none"
-            onClick={(e) => { e.stopPropagation(); onDateStart("editStartDate"); }}
-            disabled={isEditing}
-          >
-            {survey.startDate}
-          </button>
-        )}
-      </TableCell>
-      <TableCell className="px-2 py-3 text-[13px] tabular-nums text-muted-foreground">
-        {isEditing && (editMode === "editEndDate" || editMode === "reopen" || editMode === "editDates") ? (
-          <SurveyDateCell
-            value={survey.endDate}
-            mode={editMode}
-            minDate={closeDateFloor}
-            onSave={onDateSave}
-            onCancel={onDateCancel}
-          />
-        ) : (
-          <button
-            type="button"
-            className="w-full text-left outline-none hover:text-primary transition-colors focus-visible:ring-1 focus-visible:ring-primary rounded disabled:pointer-events-none"
-            onClick={(e) => { e.stopPropagation(); onDateStart("editEndDate"); }}
-            disabled={isEditing}
-          >
-            {survey.endDate}
-          </button>
-        )}
-      </TableCell>
-      <TableCell className="px-2 py-3 text-right text-[13px] font-semibold tabular-nums text-text-primary">
-        {survey.participants}
-      </TableCell>
-      <TableCell className="w-[220px] py-3 pr-7">
-        <div className="flex items-center justify-end gap-3">
-          <Progress
-            value={animatedProgress}
-            className="h-1.5 w-32 shrink-0 [&>div]:transition-none"
-          />
-          <span className="min-w-[44px] text-right text-[12px] tabular-nums text-text-secondary">
-            {Math.round(animatedProgress)}%
-          </span>
-        </div>
-      </TableCell>
+      <ConfigurableRowCells config={config} cells={cells} row={survey} />
     </TableRow>
   );
 }

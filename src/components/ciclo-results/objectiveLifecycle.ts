@@ -212,6 +212,26 @@ export function approvalStateOf(lifecycle: ObjectiveLifecycle): ApprovalState {
   return "aprobado";
 }
 
+/**
+ * Qué significa "editar" para un objetivo puntual, si es que significa algo.
+ *
+ * Un objetivo inactivo no se corrige: no está en juego, así que primero hay
+ * que activarlo. Uno devuelto por su líder sí se corrige, pero corregirlo es
+ * justo lo que lo destraba, así que guardar también lo reenvía. El resto se
+ * edita y ya.
+ *
+ * Vive aquí —y no en la barra o en la tabla— porque las dos tienen que abrir
+ * la misma edición: si cada una decidiera por su cuenta, el lápiz de la fila y
+ * el de la barra acabarían haciendo cosas distintas sobre el mismo objetivo.
+ */
+export function editIntentOf(entry: {
+  lifecycle: ObjectiveLifecycle;
+  inactivation: unknown;
+}): "editar" | "ajustar" | null {
+  if (entry.inactivation) return null;
+  return entry.lifecycle === "por-ajustar" ? "ajustar" : "editar";
+}
+
 /** Cuenta por estado, siempre con las cinco llaves aunque alguna vaya en cero. */
 export function countLifecycles(
   values: readonly ObjectiveLifecycle[]

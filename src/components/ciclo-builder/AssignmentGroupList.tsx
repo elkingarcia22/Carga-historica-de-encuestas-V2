@@ -1,53 +1,25 @@
 import * as React from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import {
-  ChevronDown,
-  ListChecks,
-  Pencil,
-  Scale,
-  SplitSquareHorizontal,
-  Target,
-  Trash2,
-  UserRound,
-  Users2,
-  UsersRound,
-} from "lucide-react";
+import { ChevronDown, ListChecks, Target, UserRound, Users2, UsersRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { HeaderSelectionMark } from "@/components/data-display";
 import { formatCount, type SegmentKey } from "@/components/survey-builder";
-import {
-  TOTAL_WEIGHT,
-  objectiveSetIssue,
-  setWeightBudget,
-  totalWeight,
-  type ObjectiveSet,
-  type ObjectiveSetKind,
-} from "./cicloBuilderTypes";
-import {
-  objectiveSetMemberIds,
-  targetHint,
-  targetLabel,
-} from "./objectiveSets";
+import { TOTAL_WEIGHT, type ObjectiveSetKind } from "./cicloBuilderTypes";
+import { targetHint, targetLabel } from "./objectiveSets";
+import { assignmentRowId, type AssignmentSetSummary } from "./assignmentRows";
+import { AssignmentStatusPill, AssignmentWeightMeter } from "./assignmentPieces";
 
 export interface AssignmentGroupListProps {
   kind: ObjectiveSetKind;
-  sets: readonly ObjectiveSet[];
+  /** Las agrupaciones, ya con sus cuentas hechas. */
+  summaries: readonly AssignmentSetSummary[];
   segmentBy: SegmentKey;
   showValidation: boolean;
   /** Filas marcadas, con el id `${setId}::${targetId}` que usa la barra. */
   selectedRowIds: ReadonlySet<string>;
   onToggleRow: (rowId: string) => void;
   onToggleSet: (setId: string) => void;
-  /** Abre el drawer en los objetivos de toda la agrupación. */
-  onEditObjectives: (setId: string) => void;
-  /** Abre el drawer en sus destinatarios. */
-  onEditTargets: (setId: string) => void;
-  /** Saca a un destinatario a su propia agrupación y la abre para editarla. */
-  onEditOne: (setId: string, targetId: string) => void;
-  onRemoveTarget: (setId: string, targetId: string) => void;
-  /** Abre el modal de pesos sobre esta agrupación. */
-  onAdjustWeights: (setId: string) => void;
 }
 
 /**
@@ -58,38 +30,40 @@ export interface AssignmentGroupListProps {
  * dejaba "editar" como una sola acción ambigua: ¿le cambio el objetivo a
  * Marketing, o a los tres grupos que lo comparten con él? El acordeón lo dice
  * antes de preguntar: arriba la agrupación con sus objetivos y su peso, dentro
- * los grupos que la forman, y en cada uno la salida explícita —"editar solo
- * este"— que lo separa a una agrupación propia en vez de tocar a los demás
- * por accidente.
+ * los grupos que la forman.
+ *
+ * Aquí no hay un solo botón. Las tarjetas dicen qué hay; marcar una fila —o la
+ * agrupación entera desde su casilla— es lo que elige sobre qué se actúa, y
+ * las acciones aparecen todas juntas en la barra flotante, como en la tabla de
+ * colaboradores. Eso vale el clic de más: antes cada fila repetía tres botones
+ * y la agrupación otros dos, y ninguno decía si estaba tocando a uno o a los
+ * cuatro que comparten esos objetivos.
  */
 export function AssignmentGroupList({
   kind,
-  sets,
+  summaries,
   segmentBy,
   showValidation,
   selectedRowIds,
   onToggleRow,
   onToggleSet,
-  onEditObjectives,
-  onEditTargets,
-  onEditOne,
-  onRemoveTarget,
-  onAdjustWeights,
 }: AssignmentGroupListProps) {
   // La agrupación recién creada entra abierta: es lo que se acaba de hacer, y
   // cerrarla obligaría a buscarla para comprobar que quedó como se quería.
   const [expandedIds, setExpandedIds] = React.useState<ReadonlySet<string>>(
-    () => new Set(sets.length > 0 ? [sets[sets.length - 1].id] : [])
+    () => new Set(summaries.length > 0 ? [summaries[summaries.length - 1].set.id] : [])
   );
-  const knownIds = React.useRef<ReadonlySet<string>>(new Set(sets.map((set) => set.id)));
+  const knownIds = React.useRef<ReadonlySet<string>>(
+    new Set(summaries.map((summary) => summary.set.id))
+  );
 
   React.useEffect(() => {
-    const currentIds = sets.map((set) => set.id);
+    const currentIds = summaries.map((summary) => summary.set.id);
     const fresh = currentIds.filter((id) => !knownIds.current.has(id));
     knownIds.current = new Set(currentIds);
     if (fresh.length === 0) return;
     setExpandedIds((current) => new Set([...current, ...fresh]));
-  }, [sets]);
+  }, [summaries]);
 
   const toggleExpanded = (setId: string) =>
     setExpandedIds((current) => {
@@ -101,24 +75,18 @@ export function AssignmentGroupList({
 
   return (
     <div className="flex flex-col gap-3">
-      {sets.map((set, index) => (
+      {summaries.map((summary) => (
         <AssignmentGroupCard
-          key={set.id}
-          set={set}
-          position={index + 1}
+          key={summary.set.id}
+          summary={summary}
           kind={kind}
           segmentBy={segmentBy}
           showValidation={showValidation}
-          isExpanded={expandedIds.has(set.id)}
-          onToggleExpanded={() => toggleExpanded(set.id)}
+          isExpanded={expandedIds.has(summary.set.id)}
+          onToggleExpanded={() => toggleExpanded(summary.set.id)}
           selectedRowIds={selectedRowIds}
           onToggleRow={onToggleRow}
           onToggleSet={onToggleSet}
-          onEditObjectives={onEditObjectives}
-          onEditTargets={onEditTargets}
-          onEditOne={onEditOne}
-          onRemoveTarget={onRemoveTarget}
-          onAdjustWeights={onAdjustWeights}
         />
       ))}
     </div>
@@ -126,8 +94,7 @@ export function AssignmentGroupList({
 }
 
 function AssignmentGroupCard({
-  set,
-  position,
+  summary,
   kind,
   segmentBy,
   showValidation,
@@ -136,66 +103,44 @@ function AssignmentGroupCard({
   selectedRowIds,
   onToggleRow,
   onToggleSet,
-  onEditObjectives,
-  onEditTargets,
-  onEditOne,
-  onRemoveTarget,
-  onAdjustWeights,
 }: {
-  set: ObjectiveSet;
-  position: number;
+  summary: AssignmentSetSummary;
   kind: ObjectiveSetKind;
   segmentBy: SegmentKey;
   showValidation: boolean;
   isExpanded: boolean;
   onToggleExpanded: () => void;
-} & Pick<
-  AssignmentGroupListProps,
-  | "selectedRowIds"
-  | "onToggleRow"
-  | "onToggleSet"
-  | "onEditObjectives"
-  | "onEditTargets"
-  | "onEditOne"
-  | "onRemoveTarget"
-  | "onAdjustWeights"
->) {
+} & Pick<AssignmentGroupListProps, "selectedRowIds" | "onToggleRow" | "onToggleSet">) {
+  const { set, position, title, isShared, reach, excludedCount, weight, budget, issue } = summary;
   const isGroup = kind === "grupal";
   const Icon = isGroup ? UsersRound : UserRound;
-  const budget = setWeightBudget(set);
-  const total = totalWeight(set.objectives);
-  const isExact = total === budget;
-  const isOver = total > budget;
-  const issue = objectiveSetIssue(set);
-  const shared = set.targetIds.length > 1;
 
-  // Cuenta a quién alcanza de verdad, no cuánta gente hay en los grupos: la
-  // persona separada a mano sigue estando en el grupo y ya no recibe esto.
-  const reach = objectiveSetMemberIds(set, segmentBy).size;
-  const excludedCount = set.excludedIds?.length ?? 0;
-
-  const rowIds = set.targetIds.map((targetId) => `${set.id}::${targetId}`);
+  const rowIds = set.targetIds.map((targetId) => assignmentRowId(set.id, targetId));
   const selectedCount = rowIds.filter((id) => selectedRowIds.has(id)).length;
   const allSelected = selectedCount === rowIds.length && rowIds.length > 0;
-
-  const title = shared
-    ? `${set.targetIds.length} ${isGroup ? "grupos" : "personas"} con los mismos objetivos`
-    : targetLabel(set, set.targetIds[0] ?? "");
+  const hasSelection = selectedCount > 0;
 
   return (
     <article
       className={cn(
-        "overflow-hidden rounded-2xl border bg-surface transition-colors",
-        showValidation && issue !== null ? "border-destructive/40" : "border-border/60"
+        "overflow-hidden rounded-2xl border bg-surface transition-[border-color,box-shadow] duration-200",
+        hasSelection
+          ? "border-primary/50 shadow-[0_0_0_3px_hsl(var(--primary)/0.08)]"
+          : showValidation && issue !== null
+            ? "border-destructive/40"
+            : "border-border/60"
       )}
     >
       <header
         onClick={onToggleExpanded}
-        className="flex cursor-pointer items-center gap-3 px-4 py-3.5 transition-colors hover:bg-muted/25"
+        className={cn(
+          "flex cursor-pointer items-center gap-3 px-4 py-3.5 transition-colors",
+          hasSelection ? "bg-primary/[0.04] hover:bg-primary/[0.07]" : "hover:bg-muted/25"
+        )}
       >
         <span onClick={(event) => event.stopPropagation()} className="flex shrink-0 items-center">
           <Checkbox
-            checked={allSelected ? true : selectedCount > 0 ? "indeterminate" : false}
+            checked={allSelected ? true : hasSelection ? "indeterminate" : false}
             onCheckedChange={() => onToggleSet(set.id)}
             aria-label={`Seleccionar la agrupación ${title}`}
           />
@@ -211,7 +156,7 @@ function AssignmentGroupCard({
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex items-center gap-2">
             <span className="truncate text-[13.5px] font-bold text-text-primary">{title}</span>
-            {shared && (
+            {isShared && (
               <span className="shrink-0 rounded-full bg-surface-muted px-2 py-0.5 text-[10.5px] font-bold uppercase tracking-wide text-text-secondary">
                 Compartida
               </span>
@@ -226,61 +171,23 @@ function AssignmentGroupCard({
             )}
           </span>
           <span className="truncate text-[11.5px] font-medium text-text-muted">
-            Agrupación {position} · {formatCount(reach)}{" "}
-            {reach === 1 ? "persona" : "personas"} · {set.objectives.length}{" "}
-            {set.objectives.length === 1 ? "objetivo" : "objetivos"}
+            Agrupación {position} · {formatCount(reach)} {reach === 1 ? "persona" : "personas"} ·{" "}
+            {set.objectives.length} {set.objectives.length === 1 ? "objetivo" : "objetivos"}
           </span>
         </div>
 
-        <div className="hidden shrink-0 items-center gap-2.5 sm:flex">
-          <span className="relative h-1.5 w-[72px] overflow-hidden rounded-full bg-border/60">
-            <span
-              className={cn(
-                "absolute inset-y-0 left-0 rounded-full transition-all duration-500",
-                isExact ? "bg-status-positive" : isOver ? "bg-destructive" : "bg-primary"
-              )}
-              style={{ width: `${Math.min(100, (total / Math.max(1, budget)) * 100)}%` }}
-            />
-          </span>
-          <span
-            className={cn(
-              "w-[68px] shrink-0 text-right text-[12px] font-bold tabular-nums",
-              isExact ? "text-status-positive" : isOver ? "text-destructive" : "text-text-secondary"
-            )}
-          >
-            {total} / {budget} %
-          </span>
-        </div>
+        <AssignmentWeightMeter
+          weight={weight}
+          budget={budget}
+          showValidation={showValidation}
+          className="hidden shrink-0 sm:flex"
+        />
 
-        <span
-          className={cn(
-            "hidden max-w-[180px] shrink-0 items-center truncate rounded-full px-2.5 py-1 text-[11.5px] font-bold lg:inline-flex",
-            issue === null
-              ? "bg-status-positive/10 text-status-positive"
-              : showValidation
-                ? "bg-destructive/10 text-destructive"
-                : "bg-surface-muted text-text-secondary"
-          )}
-          title={issue ?? undefined}
-        >
-          {issue ?? "Lista"}
-        </span>
-
-        <span
-          onClick={(event) => event.stopPropagation()}
-          className="flex shrink-0 items-center gap-1"
-        >
-          <IconAction
-            icon={Scale}
-            label="Ajustar pesos"
-            onClick={() => onAdjustWeights(set.id)}
-          />
-          <IconAction
-            icon={Pencil}
-            label={shared ? "Editar los objetivos de toda la agrupación" : "Editar objetivos"}
-            onClick={() => onEditObjectives(set.id)}
-          />
-        </span>
+        <AssignmentStatusPill
+          issue={issue}
+          showValidation={showValidation}
+          className="hidden shrink-0 lg:inline-flex"
+        />
 
         <ChevronDown
           aria-hidden
@@ -343,18 +250,6 @@ function AssignmentGroupCard({
                     ))}
                   </ul>
                 )}
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <TextAction icon={Pencil} onClick={() => onEditObjectives(set.id)}>
-                    {shared ? "Editar para toda la agrupación" : "Editar objetivos"}
-                  </TextAction>
-                  <TextAction icon={Scale} onClick={() => onAdjustWeights(set.id)}>
-                    Ajustar pesos
-                  </TextAction>
-                  <TextAction icon={isGroup ? Users2 : UserRound} onClick={() => onEditTargets(set.id)}>
-                    {isGroup ? "Cambiar grupos" : "Cambiar personas"}
-                  </TextAction>
-                </div>
               </section>
 
               <section className="flex flex-col gap-2">
@@ -364,69 +259,35 @@ function AssignmentGroupCard({
 
                 <ul className="flex flex-col divide-y divide-border/50 overflow-hidden rounded-lg border border-border/60 bg-surface">
                   {set.targetIds.map((targetId) => {
-                    const rowId = `${set.id}::${targetId}`;
+                    const rowId = assignmentRowId(set.id, targetId);
+                    const selected = selectedRowIds.has(rowId);
                     return (
-                      <li
-                        key={rowId}
-                        className={cn(
-                          "flex items-center gap-3 px-3 py-2.5 transition-colors",
-                          selectedRowIds.has(rowId) ? "bg-primary/5" : "hover:bg-muted/25"
-                        )}
-                      >
-                        <Checkbox
-                          checked={selectedRowIds.has(rowId)}
-                          onCheckedChange={() => onToggleRow(rowId)}
-                          aria-label={`Seleccionar ${targetLabel(set, targetId)}`}
-                        />
-                        <div className="flex min-w-0 flex-1 flex-col">
-                          <span className="truncate text-[12.5px] font-semibold text-text-primary">
-                            {targetLabel(set, targetId)}
+                      <li key={rowId}>
+                        {/* La fila entera marca: la casilla dice cómo se hace,
+                            pero el objetivo de clic no tiene por qué ser un
+                            cuadrado de 16 píxeles. */}
+                        <button
+                          type="button"
+                          onClick={() => onToggleRow(rowId)}
+                          aria-pressed={selected}
+                          className={cn(
+                            "flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/30",
+                            selected ? "bg-primary/5" : "hover:bg-muted/25"
+                          )}
+                        >
+                          {/* La marca, no el control: el `Checkbox` real es
+                              un `<button>`, y meterlo dentro del botón de la
+                              fila es HTML inválido. Quien pulsa es la fila. */}
+                          <HeaderSelectionMark state={selected} />
+                          <span className="flex min-w-0 flex-1 flex-col">
+                            <span className="truncate text-[12.5px] font-semibold text-text-primary">
+                              {targetLabel(set, targetId)}
+                            </span>
+                            <span className="truncate text-[11px] font-medium text-text-muted">
+                              {targetHint(set, targetId, segmentBy)}
+                            </span>
                           </span>
-                          <span className="truncate text-[11px] font-medium text-text-muted">
-                            {targetHint(set, targetId, segmentBy)}
-                          </span>
-                        </div>
-
-                        {shared && (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <button
-                                type="button"
-                                onClick={() => onEditOne(set.id, targetId)}
-                                className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 text-[11.5px] font-semibold text-text-secondary transition-all hover:border-primary/40 hover:bg-primary/5 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-                              >
-                                <SplitSquareHorizontal className="size-3.5" strokeWidth={2.2} />
-                                Editar solo {isGroup ? "este grupo" : "a esta persona"}
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent side="left" className="max-w-[260px]">
-                              Se separa a una agrupación propia con una copia de estos objetivos, para
-                              que editarlo no le cambie nada a{" "}
-                              {set.targetIds.length - 1 === 1
-                                ? "el otro"
-                                : `los otros ${set.targetIds.length - 1}`}
-                              .
-                            </TooltipContent>
-                          </Tooltip>
-                        )}
-
-                        {!shared && (
-                          <button
-                            type="button"
-                            onClick={() => onEditObjectives(set.id)}
-                            className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 text-[11.5px] font-semibold text-text-secondary transition-all hover:border-primary/40 hover:bg-primary/5 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-                          >
-                            <Pencil className="size-3.5" strokeWidth={2.2} />
-                            Ver y editar
-                          </button>
-                        )}
-
-                        <IconAction
-                          icon={Trash2}
-                          label={`Quitar ${targetLabel(set, targetId)}`}
-                          tone="destructive"
-                          onClick={() => onRemoveTarget(set.id, targetId)}
-                        />
+                        </button>
                       </li>
                     );
                   })}
@@ -452,59 +313,5 @@ function SectionTitle({
       <Icon className="size-3.5" strokeWidth={2.2} />
       {children}
     </h4>
-  );
-}
-
-function IconAction({
-  icon: Icon,
-  label,
-  onClick,
-  tone = "neutral",
-}: {
-  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
-  label: string;
-  onClick: () => void;
-  tone?: "neutral" | "destructive";
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          onClick={onClick}
-          aria-label={label}
-          className={cn(
-            "flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2",
-            tone === "destructive"
-              ? "text-text-muted hover:bg-destructive/10 hover:text-destructive focus-visible:ring-destructive/30"
-              : "text-text-secondary hover:bg-surface-muted hover:text-text-primary focus-visible:ring-primary/30"
-          )}
-        >
-          <Icon className="size-4" strokeWidth={2} />
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="top">{label}</TooltipContent>
-    </Tooltip>
-  );
-}
-
-function TextAction({
-  icon: Icon,
-  onClick,
-  children,
-}: {
-  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 text-[11.5px] font-semibold text-text-secondary transition-all hover:border-primary/40 hover:bg-primary/5 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-    >
-      <Icon className="size-3.5" strokeWidth={2.2} />
-      {children}
-    </button>
   );
 }

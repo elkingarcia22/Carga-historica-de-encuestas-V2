@@ -38,10 +38,15 @@ export interface RailOverflowItem {
 export function RailOverflowMenu({
   items,
   label = "Más acciones",
+  icon,
   onOpenChange,
 }: {
   items: readonly RailOverflowItem[];
   label?: string;
+  /** El ícono del disparador. Por defecto el "⋯" de "Más acciones"; un menú
+   *  que agrupa un solo tema —los participantes del ciclo, por ejemplo— dice
+   *  más con el ícono de ese tema que con los tres puntos. */
+  icon?: React.ReactNode;
   onOpenChange?: (open: boolean) => void;
 }) {
   const [open, setOpen] = React.useState(false);
@@ -68,7 +73,7 @@ export function RailOverflowMenu({
                 open && "bg-white/10 text-white"
               )}
             >
-              <MoreHorizontal className="h-[20px] w-[20px]" strokeWidth={2} />
+              {icon ?? <MoreHorizontal className="h-[20px] w-[20px]" strokeWidth={2} />}
             </button>
           </PopoverTrigger>
         </TooltipTrigger>

@@ -12,6 +12,15 @@ interface ObjectivesStepProps {
   onChange: (patch: Partial<CicloDraft>) => void;
   activeTab: "groups" | "individual";
   onActiveTabChange: (tab: "groups" | "individual") => void;
+  /**
+   * El nivel —por grupos, por persona o los dos— ya se decidió en la
+   * parametrización. El paso no vuelve a preguntarlo: no hay arranque de
+   * "¿cómo quieres crear los objetivos?", las tarjetas de arriba son solo
+   * pestañas (o no están, si hay un único nivel), y nada aquí apaga un nivel.
+   */
+  levelsDecidedUpstream?: boolean;
+  /** Vuelve al primer paso, donde sí se cambia el nivel. */
+  onGoToSetup?: () => void;
   // Pasamos todos los callbacks necesarios para los ObjectiveSetsEditor
   editorProps: {
     groupSets: ObjectiveSetsEditorProps["sets"];
@@ -21,7 +30,6 @@ interface ObjectivesStepProps {
     onSaveSet: ObjectiveSetsEditorProps["onSaveSet"];
     onRemoveTargets: ObjectiveSetsEditorProps["onRemoveTargets"];
     onSelectionChange: ObjectiveSetsEditorProps["onSelectionChange"];
-    onRequestEdit: ObjectiveSetsEditorProps["onRequestEdit"];
     onAiWorkingChange: ObjectiveSetsEditorProps["onAiWorkingChange"];
     showValidation: boolean;
     groupCoverage: ObjectiveSetsEditorProps["coveredElsewhere"];
@@ -74,10 +82,13 @@ function ModeCard({
   hasContent,
   onSelect,
   onToggle,
+  showToggle = true,
 }: {
   mode: ObjectiveMode;
   isActive: boolean;
   hasSelection: boolean;
+  /** Sin la casilla la tarjeta es solo una pestaña: el nivel se decidió antes. */
+  showToggle?: boolean;
   /** El chip de abajo: qué lleva repartido esta vía. */
   summary: string;
   /** Si ya reparte algo — es lo que pinta el chip de verde, no el encendido. */
@@ -113,6 +124,7 @@ function ModeCard({
             cambia cuál panel se ve. Va como `span` con rol y foco propios, no
             como `<button>`: la tarjeta entera ya es un botón, y anidar uno
             dentro es HTML inválido (y dos cosas pulsables para una decisión). */}
+        {showToggle ? (
         <span
           role="checkbox"
           tabIndex={0}
@@ -136,6 +148,21 @@ function ModeCard({
         >
           {hasSelection && <CheckIcon className="size-3.5" strokeWidth={2.5} />}
         </span>
+        ) : (
+          // Con el nivel decidido arriba la tarjeta ya no apaga nada, pero si
+          // esta vía ya tiene grupos o personas con objetivos, esa marca se
+          // sigue viendo aquí —el mismo lugar donde vivía el interruptor— en
+          // vez de desaparecer del todo.
+          hasContent && (
+            <span
+              aria-hidden
+              className="flex size-5 shrink-0 items-center justify-center rounded-sm border border-transparent"
+              style={toneSolid(tone)}
+            >
+              <CheckIcon className="size-3.5" strokeWidth={2.5} />
+            </span>
+          )
+        )}
       </div>
 
       <div className="w-full">
@@ -180,10 +207,13 @@ export function ObjectivesStep({
   onChange,
   activeTab,
   onActiveTabChange,
+  levelsDecidedUpstream = false,
+  onGoToSetup,
   editorProps,
 }: ObjectivesStepProps) {
   const { groupSets, individualSets } = editorProps;
   const hasAnyAssignment = groupSets.length > 0 || individualSets.length > 0;
+  const bothLevels = draft.useGroupObjectives && draft.useIndividualObjectives;
 
   /**
    * Si el paso ya se contestó.
@@ -194,12 +224,36 @@ export function ObjectivesStep({
    * repartido (o alguien dijo que por ahora nada), el paso se convierte en el
    * registro de lo hecho y esta pregunta ya no vuelve a aparecer.
    */
-  const [hasAnswered, setHasAnswered] = React.useState(hasAnyAssignment);
+  const [hasAnswered, setHasAnswered] = React.useState(
+    hasAnyAssignment || levelsDecidedUpstream
+  );
   React.useEffect(() => {
-    if (hasAnyAssignment) setHasAnswered(true);
-  }, [hasAnyAssignment]);
+    if (hasAnyAssignment || levelsDecidedUpstream) setHasAnswered(true);
+  }, [hasAnyAssignment, levelsDecidedUpstream]);
+
+  // Con el nivel decidido arriba, la pestaña abierta tiene que ser uno de los
+  // niveles que existen: llegar a "por grupos" en un ciclo solo individual
+  // sería mirar un panel que la parametrización apagó.
+  React.useEffect(() => {
+    if (!levelsDecidedUpstream) return;
+    if (activeTab === "groups" && !draft.useGroupObjectives && draft.useIndividualObjectives) {
+      onActiveTabChange("individual");
+    }
+    if (activeTab === "individual" && !draft.useIndividualObjectives && draft.useGroupObjectives) {
+      onActiveTabChange("groups");
+    }
+  }, [
+    levelsDecidedUpstream,
+    activeTab,
+    draft.useGroupObjectives,
+    draft.useIndividualObjectives,
+    onActiveTabChange,
+  ]);
 
   React.useEffect(() => {
+    // La parametrización ya fijó los niveles: dejar una pestaña vacía no los
+    // apaga, los deja pendientes (y el stepper lo dice).
+    if (levelsDecidedUpstream) return;
     if (activeTab !== "groups" && draft.useGroupObjectives && groupSets.length === 0) {
       onChange({ useGroupObjectives: false });
     }
@@ -207,6 +261,7 @@ export function ObjectivesStep({
       onChange({ useIndividualObjectives: false });
     }
   }, [
+    levelsDecidedUpstream,
     activeTab,
     draft.useGroupObjectives,
     draft.useIndividualObjectives,
@@ -235,26 +290,65 @@ export function ObjectivesStep({
     onAutoIncludeChange: (groupsAutoInclude: boolean) =>
       onChange({ assignment: { ...draft.assignment, groupsAutoInclude } }),
     companyObjectives: draft.companyObjectives,
+    rules: draft.modelRules,
+    model: draft.objectiveModel,
     drawerRequest: editorProps.drawerRequest,
     onDrawerRequestChange: editorProps.onDrawerRequestChange,
     onSaveSet: editorProps.onSaveSet,
     onRemoveTargets: editorProps.onRemoveTargets,
     onSelectionChange: editorProps.onSelectionChange,
-    onRequestEdit: editorProps.onRequestEdit,
     onAiWorkingChange: editorProps.onAiWorkingChange,
     showValidation: editorProps.showValidation,
   };
 
   return (
     <section className="flex min-w-0 flex-1 flex-col self-start rounded-2xl border border-border/60 bg-surface shadow-card">
-      {/* Header */}
-      <div className="sticky top-0 z-10 flex items-center gap-3 rounded-t-2xl border-b border-border/60 bg-surface px-6 py-4">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/5 text-primary">
-          <Users className="h-[18px] w-[18px]" strokeWidth={2} />
-        </span>
-        <h2 className="min-w-0 flex-1 truncate text-[14px] font-bold tracking-tight text-text-primary">
-          Objetivos asignados
-        </h2>
+      {/* Header. Con un solo nivel decidido en la parametrización, el header
+          es todo lo que hay: título y descripción a la izquierda, el nivel y
+          "Cambiar" como un chip aparte a la derecha — nada de un segundo
+          título ni una caja repitiendo lo mismo más abajo. */}
+      <div className="sticky top-0 z-10 flex items-center justify-between gap-3 rounded-t-2xl border-b border-border/60 bg-surface px-6 py-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/5 text-primary">
+            <Users className="h-[18px] w-[18px]" strokeWidth={2} />
+          </span>
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <h2 className="min-w-0 truncate text-[14px] font-bold tracking-tight text-text-primary">
+              {levelsDecidedUpstream && !bothLevels
+                ? activeTab === "groups"
+                  ? "Objetivos por grupos"
+                  : "Objetivos por colaborador"
+                : "Objetivos asignados"}
+            </h2>
+            {hasAnswered && levelsDecidedUpstream && bothLevels && (
+              <p className="min-w-0 text-[12.5px] leading-snug text-text-secondary">
+                Reparte los objetivos en los dos niveles que definiste en la parametrización.
+              </p>
+            )}
+            {hasAnswered && levelsDecidedUpstream && !bothLevels && (
+              <p className="min-w-0 truncate text-[12.5px] leading-snug text-text-secondary">
+                {activeTab === "groups"
+                  ? "Un mismo set de objetivos para cada grupo; quien pertenezca al grupo lo hereda."
+                  : "Cada persona recibe sus propios objetivos."}
+              </p>
+            )}
+          </div>
+        </div>
+
+        {hasAnswered && levelsDecidedUpstream && onGoToSetup && (
+          <div className="flex shrink-0 items-center gap-2 rounded-full border border-border/60 bg-surface-muted/60 py-1 pl-3 pr-1">
+            <span className="text-[11.5px] font-semibold text-text-secondary">
+              {bothLevels ? "Mixto" : activeTab === "groups" ? "Por grupos" : "Individual"}
+            </span>
+            <button
+              type="button"
+              onClick={onGoToSetup}
+              className="rounded-full bg-primary/10 px-2.5 py-1 text-[11.5px] font-semibold text-primary transition-colors hover:bg-primary/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+            >
+              Cambiar
+            </button>
+          </div>
+        )}
       </div>
 
       {!hasAnswered ? (
@@ -267,16 +361,22 @@ export function ObjectivesStep({
         />
       ) : (
         <div className="flex flex-col gap-6 px-6 py-6 cascade-enter">
-          <div className="flex flex-col gap-1.5">
-            <h3 className="text-[14px] font-bold tracking-tight text-text-primary">
-              ¿Cómo quieres asignar los objetivos?
-            </h3>
-            <p className="text-[13px] leading-relaxed text-text-secondary">
-              Reparte los objetivos entre los participantes del ciclo. Puedes hacerlo por grupos o
-              de forma individual.
-            </p>
-          </div>
+          {/* Con el nivel decidido en la parametrización el header ya lo dice
+              todo (título, descripción y "Cambiar"); este bloque solo hace
+              falta en el flujo guiado, donde el paso mismo hace la pregunta. */}
+          {!levelsDecidedUpstream && (
+            <div className="flex flex-col gap-1.5">
+              <h3 className="text-[14px] font-bold tracking-tight text-text-primary">
+                ¿Cómo quieres asignar los objetivos?
+              </h3>
+              <p className="text-[13px] leading-relaxed text-text-secondary">
+                Reparte los objetivos entre los participantes del ciclo. Puedes hacerlo por grupos
+                o de forma individual.
+              </p>
+            </div>
+          )}
 
+          {(!levelsDecidedUpstream || bothLevels) && (
           <div
             role="radiogroup"
             aria-label="Tipos de objetivos"
@@ -285,11 +385,13 @@ export function ObjectivesStep({
             <ModeCard
               mode="groups"
               isActive={activeTab === "groups"}
-              hasSelection={draft.useGroupObjectives}
+              hasSelection={levelsDecidedUpstream ? false : draft.useGroupObjectives}
+              showToggle={!levelsDecidedUpstream}
               summary={modeSummary("groups", groupSets)}
               hasContent={groupSets.length > 0}
               onSelect={() => {
                 onActiveTabChange("groups");
+                if (levelsDecidedUpstream) return;
                 if (!draft.useGroupObjectives) {
                   onChange({ useGroupObjectives: true });
                 }
@@ -302,11 +404,13 @@ export function ObjectivesStep({
             <ModeCard
               mode="individual"
               isActive={activeTab === "individual"}
-              hasSelection={draft.useIndividualObjectives}
+              hasSelection={levelsDecidedUpstream ? false : draft.useIndividualObjectives}
+              showToggle={!levelsDecidedUpstream}
               summary={modeSummary("individual", individualSets)}
               hasContent={individualSets.length > 0}
               onSelect={() => {
                 onActiveTabChange("individual");
+                if (levelsDecidedUpstream) return;
                 if (!draft.useIndividualObjectives) {
                   onChange({ useIndividualObjectives: true });
                 }
@@ -319,6 +423,7 @@ export function ObjectivesStep({
               }
             />
           </div>
+          )}
 
           {activeTab === "groups" && (
             <ObjectiveSetsEditor
@@ -330,6 +435,7 @@ export function ObjectivesStep({
               onResumeTemplateSeed={editorProps.onResumeTemplateSeedGroup}
               enabled={draft.useGroupObjectives}
               onEnabledChange={(enabled) => onChange({ useGroupObjectives: enabled })}
+              hideSwitch={levelsDecidedUpstream}
             />
           )}
 
@@ -343,6 +449,7 @@ export function ObjectivesStep({
               onResumeTemplateSeed={editorProps.onResumeTemplateSeedIndividual}
               enabled={draft.useIndividualObjectives}
               onEnabledChange={(enabled) => onChange({ useIndividualObjectives: enabled })}
+              hideSwitch={levelsDecidedUpstream}
             />
           )}
         </div>

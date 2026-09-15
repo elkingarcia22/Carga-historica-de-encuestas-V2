@@ -401,6 +401,8 @@ export const ObjectivesReviewTable: React.FC<ObjectivesReviewTableProps> = ({
             <div className="w-8 shrink-0">
               <SelectionHeaderMenu
                 state={selectionState}
+                /* La revisión no pagina: la casilla marca todo el archivo. */
+                paged={false}
                 pageCount={selectableIds.length}
                 matchCount={selectableIds.length}
                 showSelectPage={false}

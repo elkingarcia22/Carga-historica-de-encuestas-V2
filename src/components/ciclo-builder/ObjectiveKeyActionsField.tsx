@@ -12,6 +12,11 @@ import {
   type KeyAction,
   type KeyActionKind,
 } from "./cicloBuilderTypes";
+import {
+  DEFAULT_OBJECTIVE_MODEL_RULES,
+  objectiveModelVocab,
+  type ObjectiveModelVocab,
+} from "./objectiveModel";
 
 interface ObjectiveKeyActionsFieldProps {
   actions: readonly KeyAction[];
@@ -22,6 +27,16 @@ interface ObjectiveKeyActionsFieldProps {
     keyActionsDriveProgress?: boolean;
   }) => void;
   showValidation: boolean;
+  /** Cómo llama el modelo del ciclo a lo que cuelga del objetivo: acciones
+   *  clave, resultados clave, tareas… Sin él habla en acciones, que es como
+   *  hablaba el constructor antes de que existieran los modelos. */
+  vocab?: ObjectiveModelVocab;
+  /**
+   * El modelo ya decidió que lo que cuelga mueve el avance —los resultados
+   * clave de OKR siempre lo hacen— así que el interruptor desaparece: no es
+   * una decisión del autor, es una regla del ciclo.
+   */
+  lockDriveProgress?: boolean;
 }
 
 /**
@@ -42,9 +57,18 @@ export function ObjectiveKeyActionsField({
   driveProgress,
   onChange,
   showValidation,
+  vocab = objectiveModelVocab(null, DEFAULT_OBJECTIVE_MODEL_RULES),
+  lockDriveProgress = false,
 }: ObjectiveKeyActionsFieldProps) {
   const total = keyActionsTotal(actions);
   const isExact = total === TOTAL_WEIGHT;
+
+  // "Añade otro resultado clave" frente a "añade otra acción clave": el
+  // modelo pone las palabras, y su género concuerda los artículos.
+  const child = (vocab.child ?? "Acción clave").toLowerCase();
+  const children = (vocab.children ?? "Acciones clave").toLowerCase();
+  const isMasculine = vocab.childrenGender === "m";
+  const drives = lockDriveProgress || driveProgress;
 
   const patchAction = (id: string, patch: Partial<KeyAction>) =>
     onChange({
@@ -70,6 +94,7 @@ export function ObjectiveKeyActionsField({
 
   return (
     <div className="flex flex-col gap-3">
+      {!lockDriveProgress && (
       <label className="flex w-fit cursor-pointer items-center gap-2 text-[12px] font-medium text-text-primary">
         <Switch
           checked={driveProgress}
@@ -92,13 +117,14 @@ export function ObjectiveKeyActionsField({
           }}
           className="data-[state=checked]:bg-status-positive"
         />
-        <span>El avance se calcula con estas acciones</span>
+        <span>El avance se calcula con {isMasculine ? "estos" : "estas"} {children}</span>
       </label>
+      )}
 
       <p className="max-w-[78ch] text-[12px] leading-relaxed text-text-secondary">
-        {driveProgress
-          ? `Cada acción cumplida suma su aporte al avance del objetivo. Entre todas deben cubrir el ${TOTAL_WEIGHT} %.`
-          : "Las acciones son el plan de trabajo: se ven en el seguimiento, pero el avance lo sigue marcando la cifra del objetivo."}
+        {drives
+          ? `${isMasculine ? "Cada uno" : "Cada una"} suma su aporte al avance del objetivo. Entre ${isMasculine ? "todos" : "todas"} deben cubrir el ${TOTAL_WEIGHT} %.`
+          : `${isMasculine ? "Los" : "Las"} ${children} son el plan de trabajo: se ven en el seguimiento, pero el avance lo sigue marcando la cifra del objetivo.`}
       </p>
 
       {actions.length > 0 && (
@@ -135,10 +161,12 @@ export function ObjectiveKeyActionsField({
           className="group flex h-9 items-center gap-1.5 rounded-lg border border-dashed border-border bg-surface px-3 text-[12.5px] font-semibold text-text-secondary transition-all hover:border-primary/40 hover:bg-primary/5 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 active:scale-[0.98]"
         >
           <Plus className="size-3.5 transition-transform group-hover:rotate-90" strokeWidth={2.4} />
-          {actions.length === 0 ? "Añadir una acción clave" : "Añadir otra acción"}
+          {actions.length === 0
+            ? `Añadir ${isMasculine ? "un" : "una"} ${child}`
+            : `Añadir ${isMasculine ? "otro" : "otra"} ${child}`}
         </button>
 
-        {driveProgress && actions.length > 0 && (
+        {drives && actions.length > 0 && (
           <div className="flex items-center gap-2">
             {!isExact && (
               <button

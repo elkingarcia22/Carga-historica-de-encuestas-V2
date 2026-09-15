@@ -21,9 +21,20 @@ import {
 } from "@/components/ui/table";
 import { EmptyState } from "@/components/feedback";
 import {
+  ConfigurableHeaderCells,
+  ConfigurableRowCells,
   FilterSortHeader,
+  LazyRowsSentinel,
+  LazyRowsSummary,
   SelectionHeaderMenu,
   SortOnlyHeader,
+  TableConfigButton,
+  useColumnDrag,
+  useLazyRows,
+  useTableConfig,
+  type TableColumnCells,
+  type TableColumnSpec,
+  type TableConfig,
 } from "@/components/data-display";
 import { PagerButton } from "@/components/survey-builder/CollaboratorTableParts";
 import {
@@ -45,6 +56,16 @@ interface DemographicsTableProps {
 const PAGE_SIZES = [10, 25, 50] as const;
 
 type SortKey = "name" | "type" | "origin" | "createdAt" | "createdBy" | "optionCount";
+
+const COLUMNS: readonly TableColumnSpec[] = [
+  { id: "seleccion", label: "Selección", fixed: true },
+  { id: "name", label: "Nombre" },
+  { id: "type", label: "Tipo" },
+  { id: "origin", label: "Origen" },
+  { id: "createdAt", label: "Creación" },
+  { id: "createdBy", label: "Creado por" },
+  { id: "optionCount", label: "Opciones" },
+];
 
 const formatCount = (n: number) => new Intl.NumberFormat("es-CO").format(n);
 
@@ -134,6 +155,16 @@ export function DemographicsTable({
   const headerState: boolean | "indeterminate" =
     selectedOnPage === 0 ? false : selectedOnPage === pagedRows.length ? true : "indeterminate";
 
+  /*
+   * La lectura de la casilla cambia con el modo: por páginas habla de la
+   * página que se está viendo, bajando de corrido habla de todo lo que pasó
+   * los filtros —no hay página que nombrar, así que "marcada" solo puede
+   * querer decir "está todo".
+   */
+  const selectedMatches = visibleRows.filter((row) => selectedIds.has(row.id)).length;
+  const matchState: boolean | "indeterminate" =
+    selectedMatches === 0 ? false : selectedMatches === visibleRows.length ? true : "indeterminate";
+
   const selectPage = () => setSelection([...selectedIds, ...pagedRows.map((row) => row.id)]);
   const deselectPage = () => {
     const pageIds = new Set(pagedRows.map((row) => row.id));
@@ -146,6 +177,119 @@ export function DemographicsTable({
     visibleRows.length > 0 && visibleRows.every((row) => selectedIds.has(row.id));
   const isPageFullySelected = pagedRows.length > 0 && selectedOnPage === pagedRows.length;
   const hasActiveFilters = query !== "" || originFilter.size > 0;
+
+  const config = useTableConfig("datos-demograficos", COLUMNS);
+  const drag = useColumnDrag({ axis: "x", onReorder: config.moveColumn });
+  const lazy = useLazyRows({
+    total: visibleRows.length,
+    enabled: config.isLazy,
+    step: pageSize,
+    resetKey: visibleRows,
+  });
+  const shownRows = config.isLazy ? visibleRows.slice(0, lazy.count) : pagedRows;
+
+  /** Cada columna dicha una sola vez: su encabezado y su celda. */
+  const cells: TableColumnCells<DemographicRow> = {
+    name: {
+      headClassName: "w-[30%] px-0 py-3.5",
+      head: (
+        <SortOnlyHeader
+          label="Nombre"
+          sortActive={sort.key === "name"}
+          onSort={() => toggleSort("name")}
+        />
+      ),
+      cellClassName: "py-3",
+      cell: (row) => (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onViewRow(row.id);
+          }}
+          className="block max-w-full truncate text-left text-[13px] font-semibold text-text-primary transition-colors hover:text-primary hover:underline"
+          title={row.name}
+        >
+          {row.name}
+        </button>
+      ),
+    },
+    type: {
+      headClassName: "w-[17%] px-0 py-3.5",
+      head: (
+        <SortOnlyHeader
+          label="Tipo"
+          sortActive={sort.key === "type"}
+          onSort={() => toggleSort("type")}
+        />
+      ),
+      cellClassName: "py-3 text-[13px] text-text-secondary",
+      cell: (row) => row.typeLabel,
+    },
+    origin: {
+      headClassName: "w-[17%] px-0 py-3.5",
+      head: (
+        <FilterSortHeader
+          label="Origen"
+          options={ORIGIN_OPTIONS}
+          selected={originFilter}
+          onToggleFilter={(value) => {
+            setPage(1);
+            setOriginFilter((prev) => {
+              const next = new Set(prev);
+              if (next.has(value)) next.delete(value);
+              else next.add(value);
+              return next;
+            });
+          }}
+          onClearFilter={() => setOriginFilter(new Set())}
+          sortActive={sort.key === "origin"}
+          onSort={() => toggleSort("origin")}
+        />
+      ),
+      cellClassName: "py-3",
+      cell: (row) => (
+        <Badge variant={row.origin === "system" ? "info" : "neutral"}>{row.originLabel}</Badge>
+      ),
+    },
+    createdAt: {
+      headClassName: "w-[130px] px-2 py-3.5",
+      head: (
+        <SortOnlyHeader
+          label="Creación"
+          sortActive={sort.key === "createdAt"}
+          onSort={() => toggleSort("createdAt")}
+        />
+      ),
+      cellClassName: "px-2 py-3 text-[13px] tabular-nums text-muted-foreground",
+      cell: (row) => formatIsoDay(row.createdAt),
+    },
+    createdBy: {
+      headClassName: "w-[160px] px-0 py-3.5",
+      head: (
+        <SortOnlyHeader
+          label="Creado por"
+          sortActive={sort.key === "createdBy"}
+          onSort={() => toggleSort("createdBy")}
+        />
+      ),
+      cellClassName: "py-3 text-[13px] text-text-secondary",
+      cell: (row) => row.createdBy ?? "—",
+    },
+    optionCount: {
+      headClassName: "w-[110px] py-3.5 pl-0 pr-7 text-right",
+      head: (
+        <SortOnlyHeader
+          label="Opciones"
+          sortActive={sort.key === "optionCount"}
+          onSort={() => toggleSort("optionCount")}
+          align="right"
+        />
+      ),
+      cellClassName: "py-3 pl-0 pr-7 text-right text-[13px] font-semibold tabular-nums text-text-primary",
+      cell: (row) => row.optionCount,
+    },
+  };
 
   return (
     <div className="flex flex-col flex-1 min-h-0 gap-6 rounded-2xl border border-border/60 bg-surface p-6 shadow-card">
@@ -211,6 +355,8 @@ export function DemographicsTable({
               </button>
             )}
           </div>
+
+          <TableConfigButton config={config} noun="demográficos" />
         </div>
       </div>
 
@@ -246,7 +392,8 @@ export function DemographicsTable({
                 <TableRow className="border-border/60 bg-muted/40 hover:bg-muted/40">
                   <TableHead className="pl-7 pr-5">
                     <SelectionHeaderMenu
-                      state={headerState}
+                      state={config.isLazy ? matchState : headerState}
+                      paged={!config.isLazy}
                       pageCount={pagedRows.length}
                       matchCount={visibleRows.length}
                       showSelectPage={pagedRows.length > 0 && !isPageFullySelected}
@@ -261,73 +408,25 @@ export function DemographicsTable({
                       align="start"
                     />
                   </TableHead>
-                  <TableHead className="w-[30%] px-0 py-3.5">
-                    <SortOnlyHeader
-                      label="Nombre"
-                      sortActive={sort.key === "name"}
-                      onSort={() => toggleSort("name")}
-                    />
-                  </TableHead>
-                  <TableHead className="w-[17%] px-0 py-3.5">
-                    <SortOnlyHeader
-                      label="Tipo"
-                      sortActive={sort.key === "type"}
-                      onSort={() => toggleSort("type")}
-                    />
-                  </TableHead>
-                  <TableHead className="w-[17%] px-0 py-3.5">
-                    <FilterSortHeader
-                      label="Origen"
-                      options={ORIGIN_OPTIONS}
-                      selected={originFilter}
-                      onToggleFilter={(value) => {
-                        setPage(1);
-                        setOriginFilter((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(value)) next.delete(value);
-                          else next.add(value);
-                          return next;
-                        });
-                      }}
-                      onClearFilter={() => setOriginFilter(new Set())}
-                      sortActive={sort.key === "origin"}
-                      onSort={() => toggleSort("origin")}
-                    />
-                  </TableHead>
-                  <TableHead className="w-[130px] px-2 py-3.5">
-                    <SortOnlyHeader
-                      label="Creación"
-                      sortActive={sort.key === "createdAt"}
-                      onSort={() => toggleSort("createdAt")}
-                    />
-                  </TableHead>
-                  <TableHead className="w-[160px] px-0 py-3.5">
-                    <SortOnlyHeader
-                      label="Creado por"
-                      sortActive={sort.key === "createdBy"}
-                      onSort={() => toggleSort("createdBy")}
-                    />
-                  </TableHead>
-                  <TableHead className="w-[110px] py-3.5 pl-0 pr-7 text-right">
-                    <SortOnlyHeader
-                      label="Opciones"
-                      sortActive={sort.key === "optionCount"}
-                      onSort={() => toggleSort("optionCount")}
-                      align="right"
-                    />
-                  </TableHead>
+                  <ConfigurableHeaderCells config={config} drag={drag} cells={cells} />
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {pagedRows.map((row) => (
+                {shownRows.map((row) => (
                   <DemographicTableRow
                     key={row.id}
                     row={row}
+                    config={config}
+                    cells={cells}
                     isSelected={selectedIds.has(row.id)}
                     onToggle={() => toggleOne(row.id)}
-                    onView={() => onViewRow(row.id)}
                   />
                 ))}
+                <LazyRowsSentinel
+                  lazy={lazy}
+                  colSpan={config.columns.length + 1}
+                  noun="demográficos"
+                />
               </TableBody>
             </Table>
           </div>
@@ -335,53 +434,59 @@ export function DemographicsTable({
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3 shrink-0">
-        <p className="text-[12px] text-muted-foreground">
-          {visibleRows.length === 0
-            ? "0 demográficos"
-            : `${formatCount(firstIndex + 1)}–${formatCount(firstIndex + pagedRows.length)} de ${formatCount(visibleRows.length)}`}
-        </p>
+        {config.isLazy ? (
+          <LazyRowsSummary lazy={lazy} total={visibleRows.length} noun="demográficos" />
+        ) : (
+          <>
+            <p className="text-[12px] text-muted-foreground">
+              {visibleRows.length === 0
+                ? "0 demográficos"
+                : `${formatCount(firstIndex + 1)}–${formatCount(firstIndex + pagedRows.length)} de ${formatCount(visibleRows.length)}`}
+            </p>
 
-        <div className="flex items-center gap-2">
-          <Select
-            value={String(pageSize)}
-            onValueChange={(value) => {
-              setPageSize(Number(value));
-              setPage(1);
-            }}
-          >
-            <SelectTrigger
-              aria-label="Demográficos por página"
-              className="h-8 w-[130px] rounded-lg px-2.5 text-[12px]"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent position="popper" sideOffset={6}>
-              {PAGE_SIZES.map((size) => (
-                <SelectItem key={size} value={String(size)} className="text-[13px]">
-                  {size} por página
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            <div className="flex items-center gap-2">
+              <Select
+                value={String(pageSize)}
+                onValueChange={(value) => {
+                  setPageSize(Number(value));
+                  setPage(1);
+                }}
+              >
+                <SelectTrigger
+                  aria-label="Demográficos por página"
+                  className="h-8 w-[130px] rounded-lg px-2.5 text-[12px]"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper" sideOffset={6}>
+                  {PAGE_SIZES.map((size) => (
+                    <SelectItem key={size} value={String(size)} className="text-[13px]">
+                      {size} por página
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
 
-          <PagerButton
-            label="Página anterior"
-            disabled={currentPage <= 1}
-            onClick={() => setPage(currentPage - 1)}
-          >
-            Anterior
-          </PagerButton>
-          <span className="text-[12px] tabular-nums text-text-secondary">
-            {formatCount(currentPage)} / {formatCount(pageCount)}
-          </span>
-          <PagerButton
-            label="Página siguiente"
-            disabled={currentPage >= pageCount}
-            onClick={() => setPage(currentPage + 1)}
-          >
-            Siguiente
-          </PagerButton>
-        </div>
+              <PagerButton
+                label="Página anterior"
+                disabled={currentPage <= 1}
+                onClick={() => setPage(currentPage - 1)}
+              >
+                Anterior
+              </PagerButton>
+              <span className="text-[12px] tabular-nums text-text-secondary">
+                {formatCount(currentPage)} / {formatCount(pageCount)}
+              </span>
+              <PagerButton
+                label="Página siguiente"
+                disabled={currentPage >= pageCount}
+                onClick={() => setPage(currentPage + 1)}
+              >
+                Siguiente
+              </PagerButton>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -389,14 +494,16 @@ export function DemographicsTable({
 
 function DemographicTableRow({
   row,
+  config,
+  cells,
   isSelected,
   onToggle,
-  onView,
 }: {
   row: DemographicRow;
+  config: TableConfig;
+  cells: TableColumnCells<DemographicRow>;
   isSelected: boolean;
   onToggle: () => void;
-  onView: () => void;
 }) {
   return (
     <TableRow
@@ -414,32 +521,7 @@ function DemographicTableRow({
           />
         </div>
       </TableCell>
-      <TableCell className="py-3">
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onView();
-          }}
-          className="block max-w-full truncate text-left text-[13px] font-semibold text-text-primary transition-colors hover:text-primary hover:underline"
-          title={row.name}
-        >
-          {row.name}
-        </button>
-      </TableCell>
-      <TableCell className="py-3 text-[13px] text-text-secondary">{row.typeLabel}</TableCell>
-      <TableCell className="py-3">
-        <Badge variant={row.origin === "system" ? "info" : "neutral"}>{row.originLabel}</Badge>
-      </TableCell>
-      <TableCell className="px-2 py-3 text-[13px] tabular-nums text-muted-foreground">
-        {formatIsoDay(row.createdAt)}
-      </TableCell>
-      <TableCell className="py-3 text-[13px] text-text-secondary">
-        {row.createdBy ?? "—"}
-      </TableCell>
-      <TableCell className="py-3 pl-0 pr-7 text-right text-[13px] font-semibold tabular-nums text-text-primary">
-        {row.optionCount}
-      </TableCell>
+      <ConfigurableRowCells config={config} cells={cells} row={row} />
     </TableRow>
   );
 }

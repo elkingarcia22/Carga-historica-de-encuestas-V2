@@ -5,19 +5,25 @@ import {
   Copy,
   Pencil,
   Share2,
+  SlidersHorizontal,
   Trash2,
   Users,
+  Target,
+  UserPlus,
   type LucideIcon,
 } from "lucide-react";
 
 /** Every action a single selected ciclo can offer, across all estados. */
 export type CicloActionId =
   | "results"
+  | "configure"
   | "edit"
   | "duplicate"
   | "finish"
   | "editDates"
   | "editParticipants"
+  | "addObjectivesGroup"
+  | "addObjectivesIndividual"
   | "share"
   | "delete";
 
@@ -29,11 +35,14 @@ export interface CicloActionSpec {
 
 export const CICLO_ACTIONS: Readonly<Record<CicloActionId, CicloActionSpec>> = {
   results: { label: "Ver resultados", icon: BarChart3 },
+  configure: { label: "Configurar ciclo", icon: SlidersHorizontal },
   edit: { label: "Editar ciclo", icon: Pencil },
   duplicate: { label: "Duplicar ciclo", icon: Copy },
   finish: { label: "Finalizar ciclo", icon: CircleCheckBig },
   editDates: { label: "Editar fechas", icon: CalendarClock },
   editParticipants: { label: "Editar participantes", icon: Users },
+  addObjectivesGroup: { label: "Añadir objetivos a grupos", icon: Target },
+  addObjectivesIndividual: { label: "Añadir objetivos a colaborador", icon: UserPlus },
   share: { label: "Compartir", icon: Share2 },
   delete: { label: "Eliminar ciclo", icon: Trash2, tone: "danger" },
 };
@@ -45,19 +54,22 @@ export const CICLO_ACTIONS: Readonly<Record<CicloActionId, CicloActionSpec>> = {
  * edit or finish.
  */
 export const CICLO_ACTIONS_BY_ESTADO: Readonly<Record<string, readonly CicloActionId[]>> = {
-  Borrador: ["edit", "duplicate", "delete"],
-  "Por iniciar": ["edit", "duplicate", "editDates", "editParticipants", "share", "delete"],
+  Borrador: ["edit", "duplicate", "addObjectivesGroup", "addObjectivesIndividual", "delete"],
+  "Por iniciar": ["edit", "duplicate", "editDates", "editParticipants", "addObjectivesGroup", "addObjectivesIndividual", "share", "delete"],
   "En curso": [
     "results",
+    "configure",
     "edit",
     "duplicate",
     "finish",
     "editDates",
     "editParticipants",
+    "addObjectivesGroup",
+    "addObjectivesIndividual",
     "share",
     "delete",
   ],
-  Finalizado: ["results", "duplicate", "delete"],
+  Finalizado: ["results", "configure", "duplicate", "delete"],
 };
 
 /**

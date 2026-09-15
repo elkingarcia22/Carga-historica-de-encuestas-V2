@@ -212,11 +212,16 @@ export interface ParticipantsSelection {
    * colaborador" can carve a group member out of it only by dropping the
    * whole group, never by excepting just that person. */
   selectedGroups: readonly string[];
-  /** "Por grupos" mode: whether a collaborator who later joins one of the
-   * selected groups is added to the survey automatically. */
+  /** "Por grupos" mode: whether membership follows the org chart live —
+   * someone who joins one of the selected groups afterwards (a transfer,
+   * a new hire assigned to that area/leader) is added automatically, and
+   * someone who leaves one (changes area, changes leader, is offboarded)
+   * is dropped automatically. Off freezes the list to who qualified when
+   * it was selected. */
   groupsAutoInclude: boolean;
-  /** "Toda la empresa" mode: whether a collaborator who joins the company
-   * after the survey launches is added automatically. */
+  /** "Toda la empresa" mode: whether the list follows the company directory
+   * live — someone hired after the survey launches is added automatically,
+   * and someone offboarded is dropped automatically. */
   companyAutoInclude: boolean;
 }
 

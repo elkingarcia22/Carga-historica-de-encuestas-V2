@@ -1,7 +1,6 @@
 import * as React from "react";
 import {
   Bell,
-  ChevronRight,
   HelpCircle,
   LogOut,
   Moon,
@@ -16,18 +15,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Switch } from "@/components/ui/switch";
 import { SHELL_MENU_PANEL } from "./shellPanel";
 import { AI_GRADIENT, CURRENT_USER, NEWS_ITEMS, NOTIFICATIONS } from "./appShellData";
-import type { ShellBreadcrumb, ShellBreadcrumbBadge } from "./shellTypes";
-
-/**
- * Status pill palettes. Sized against the breadcrumb next to it: the label is a
- * step below the crumb's own text so the pill reads as an attribute of the
- * title rather than competing with it.
- */
-const BADGE_TONES: Record<ShellBreadcrumbBadge["tone"], string> = {
-  positive: "bg-status-positive/10 text-status-positive",
-  neutral: "bg-surface-muted text-text-secondary",
-  warning: "bg-status-warning/10 text-status-warning",
-};
 
 /**
  * Radix's own `--radix-popover-content-transform-origin` only approximates a
@@ -84,18 +71,16 @@ function useLiquidOrigin() {
 }
 
 interface AppHeaderProps {
-  breadcrumb: ShellBreadcrumb;
   onToggleSidebar: () => void;
   isDark: boolean;
   onToggleDark: () => void;
   /** @deprecated – Novedades is now self-contained in the header. Kept for backward compat. */
   onOpenNews: () => void;
-  /** Receives the crumb-area host that screens portal their identity into. */
+  /** Receives the host element that screens portal their own identity into. */
   onSlotRef: (element: HTMLDivElement | null) => void;
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
-  breadcrumb,
   onToggleSidebar,
   isDark,
   onToggleDark,
@@ -114,49 +99,21 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 
   return (
     <header className="flex h-14 shrink-0 items-center gap-3 px-1">
-      {/* ---------- Sidebar toggle ---------- */}
+      {/* ---------- Sidebar toggle ----------
+          Only below lg: there the sidebar is an off-canvas drawer, so its own
+          edge handle is out of reach. On desktop that handle takes over. */}
       <button
         onClick={onToggleSidebar}
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border/70 bg-surface text-text-muted transition-colors hover:bg-surface-muted hover:text-text-primary"
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border/70 bg-surface text-text-muted transition-colors hover:bg-surface-muted hover:text-text-primary lg:hidden"
         title="Menú"
         aria-label="Menú"
       >
         <PanelLeft className="h-4 w-4" strokeWidth={2} />
       </button>
 
-      {/* ---------- Breadcrumb ---------- */}
-      <div className="flex min-w-0 items-center gap-1.5 text-sm">
-        {breadcrumb.parent && (
-          <>
-            {breadcrumb.onParentClick ? (
-              <button
-                onClick={breadcrumb.onParentClick}
-                className="truncate rounded font-medium text-text-muted transition-colors hover:text-text-primary hover:underline"
-              >
-                {breadcrumb.parent}
-              </button>
-            ) : (
-              <span className="truncate font-medium text-text-muted">{breadcrumb.parent}</span>
-            )}
-            <ChevronRight className="h-3 w-3 shrink-0 text-text-muted" strokeWidth={2.5} />
-          </>
-        )}
-        {breadcrumb.label && (
-          <span className="truncate font-semibold text-text-primary">{breadcrumb.label}</span>
-        )}
-        {/* Where the mounted screen renders its own live identity. */}
-        <div ref={onSlotRef} className="flex min-w-0 items-center gap-2" />
-        {breadcrumb.badge && (
-          <span
-            className={cn(
-              "ml-0.5 inline-flex h-[22px] shrink-0 items-center rounded-full px-2.5 text-[11px] font-bold leading-none",
-              BADGE_TONES[breadcrumb.badge.tone]
-            )}
-          >
-            {breadcrumb.badge.label}
-          </span>
-        )}
-      </div>
+      {/* Where the mounted screen renders its own live identity (e.g. the
+          ciclo builder's name + estado) — no breadcrumb trail here anymore. */}
+      <div ref={onSlotRef} className="flex min-w-0 items-center gap-2" />
 
       {/* ---------- Right actions ---------- */}
       <div className="ml-auto flex shrink-0 items-center gap-3">

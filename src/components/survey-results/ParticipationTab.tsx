@@ -1,8 +1,7 @@
 import * as React from "react";
-import { ArrowUpDown, CheckCircle2, Clock3, Info, Search, UserX, Users, X, CheckIcon, ChevronDown, Eye, EyeOff, MinusIcon, Bell, ListFilter } from "lucide-react";
+import { ArrowUpDown, CheckCircle2, Clock3, Info, Search, UserX, Users, X, CheckIcon, ChevronDown, Eye, EyeOff, MinusIcon, ListFilter } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Progress } from "@/components/ui/progress";
 import {
  DropdownMenu,
  DropdownMenuContent,
@@ -22,9 +21,7 @@ import {
 import { EmptyState } from "@/components/feedback";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { StatusBadge } from "@/components/status-badge";
 import { MiniMetricCard, AnimatedNumber } from "./MiniMetricCard";
-import { useAnimatedValue } from "@/lib/useAnimatedValue";
 import { COLLABORATORS } from "@/mocks/collaborators";
 import {
  participationBySegment,
@@ -35,10 +32,17 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PagerButton } from "@/components/survey-builder/CollaboratorTableParts";
 import {
- FilterSortHeader,
+ ConfigurableHeaderCells,
+ ConfigurableRowCells,
+ LazyRowsSentinel,
+ LazyRowsSummary,
  SelectionHeaderMenu,
- SortOnlyHeader,
+ TableConfigButton,
+ useColumnDrag,
+ useLazyRows,
+ useTableConfig,
 } from "@/components/data-display";
+import { participationColumns, participationTableCells } from "./participationTableColumns";
 import { 
  formatPercent,
  POSITIVE_BG, POSITIVE_TEXT, POSITIVE_BORDER,
@@ -265,6 +269,16 @@ export function ParticipationTab({ results, segment, onSegmentChange, selectedId
  ? "indeterminate"
  : false;
 
+  /*
+   * La lectura de la casilla cambia con el modo: por páginas habla de la
+   * página que se está viendo, bajando de corrido habla de todo lo que pasó
+   * los filtros —no hay página que nombrar, así que "marcada" solo puede
+   * querer decir "está todo".
+   */
+ const selectedMatches = visibleRows.filter((row) => selectedIds.has(row.id)).length;
+ const matchState: boolean | "indeterminate" =
+ selectedMatches === 0 ? false : selectedMatches === visibleRows.length ? true : "indeterminate";
+
  const setSelection = (ids: Iterable<string>) => onSelectionChange(new Set(ids));
 
  const toggleOne = (id: string) => {
@@ -292,6 +306,46 @@ export function ParticipationTab({ results, segment, onSegmentChange, selectedId
  const showDeselectPage = isPageFullySelected;
  const showSelectAll = visibleRows.length > 0 && !allMatchesSelected;
  const showDeselectAll = allMatchesSelected;
+
+  /*
+   * Las dos lecturas —por persona y por grupo— comparten configuración: es la
+   * misma tabla, y las columnas que no aplican a una se apagan solas. Lo que
+   * el lector haya ordenado o escondido sobrevive al cambio de "Ver por".
+   */
+  const config = useTableConfig(
+    "encuestas-participacion",
+    participationColumns(segment.perPerson === true)
+  );
+  const drag = useColumnDrag({ axis: "x", onReorder: config.moveColumn });
+  const lazy = useLazyRows({
+    total: visibleRows.length,
+    enabled: config.isLazy,
+    step: pageSize,
+    resetKey: visibleRows,
+  });
+  const shownRows = config.isLazy ? visibleRows.slice(0, lazy.count) : pagedRows;
+
+  const cells = participationTableCells({
+    segment,
+    sort,
+    toggleSort: (key) => toggleSort(key as SortKey),
+    groupLabels: availableGroupLabels,
+    groupFilter,
+    onToggleGroup: (value) => toggleGroupFilter(value, availableGroupLabels),
+    onClearGroup: () => setGroupFilter(new Set()),
+    leaders: availableLeaders,
+    leaderFilter,
+    onToggleLeader: toggleLeaderFilter,
+    onClearLeader: () => setLeaderFilter(new Set()),
+    areas: availableAreas,
+    areaFilter,
+    onToggleArea: toggleAreaFilter,
+    onClearArea: () => setAreaFilter(new Set()),
+    estados: availableEstados,
+    estadoFilter,
+    onToggleEstado: toggleEstadoFilter,
+    onClearEstado: () => setEstadoFilter(new Set()),
+  });
 
  const { completed, inProgress, invited } = results.participation;
  const missing = Math.max(0, invited - completed - inProgress);
@@ -459,6 +513,8 @@ export function ParticipationTab({ results, segment, onSegmentChange, selectedId
  </button>
  </div>
 
+ <TableConfigButton config={config} noun="filas" />
+
  <div className="flex shrink-0 items-center gap-2">
  <span className="text-[13px] font-medium text-muted-foreground">Ver por:</span>
  <Select value={segment.key} onValueChange={handleSegmentChange}>
@@ -510,7 +566,8 @@ export function ParticipationTab({ results, segment, onSegmentChange, selectedId
  <TableRow className="border-border/60 bg-muted/40 hover:bg-muted/40">
  <TableHead className="w-16 px-0">
  <SelectionHeaderMenu
- state={headerState}
+ state={config.isLazy ? matchState : headerState}
+ paged={!config.isLazy}
  pageCount={pagedRows.length}
  matchCount={visibleRows.length}
  showSelectPage={showSelectPage}
@@ -524,117 +581,35 @@ export function ParticipationTab({ results, segment, onSegmentChange, selectedId
  formatCount={formatCount}
  />
  </TableHead>
- <TableHead className={cn("py-3.5 px-0", segment.perPerson ? "w-[34%]" : "w-[25%]")}>
- <FilterSortHeader
- label={segment.label}
- options={availableGroupLabels}
- selected={groupFilter}
- onToggleFilter={(value) => toggleGroupFilter(value, availableGroupLabels)}
- onClearFilter={() => setGroupFilter(new Set())}
- sortActive={sort.key === "label"}
- onSort={() => toggleSort("label")}
- defaultAllSelected
- />
- </TableHead>
- {segment.perPerson && (
- <>
- <TableHead className="w-[23%] py-3.5 px-0">
- <FilterSortHeader
- label="Líder"
- options={availableLeaders}
- selected={leaderFilter}
- onToggleFilter={toggleLeaderFilter}
- onClearFilter={() => setLeaderFilter(new Set())}
- sortActive={sort.key === "leader"}
- onSort={() => toggleSort("leader")}
- />
- </TableHead>
- <TableHead className="w-[23%] py-3.5 px-0">
- <FilterSortHeader
- label="Área"
- options={availableAreas}
- selected={areaFilter}
- onToggleFilter={toggleAreaFilter}
- onClearFilter={() => setAreaFilter(new Set())}
- sortActive={sort.key === "area"}
- onSort={() => toggleSort("area")}
- />
- </TableHead>
- </>
- )}
- <TableHead
- className={cn(
- "py-3.5",
- segment.perPerson ? "pl-0 pr-6" : "w-[140px] px-0"
- )}
- >
- <FilterSortHeader
- label="Estado"
- options={availableEstados}
- selected={estadoFilter}
- onToggleFilter={toggleEstadoFilter}
- onClearFilter={() => setEstadoFilter(new Set())}
- sortActive={sort.key === "estado"}
- onSort={() => toggleSort("estado")}
- align={segment.perPerson ? "right" : "left"}
- />
- </TableHead>
- {!segment.perPerson && (
- <>
- <TableHead className="w-[120px] py-3.5 px-2 text-right">
- <SortOnlyHeader
- label="Respondieron"
- sortActive={sort.key === "invited"}
- onSort={() => toggleSort("invited")}
- align="right"
- />
- </TableHead>
- <TableHead className="w-[100px] py-3.5 px-2 text-right">
- <SortOnlyHeader
- label="En progreso"
- sortActive={sort.key === "inProgress"}
- onSort={() => toggleSort("inProgress")}
- align="right"
- />
- </TableHead>
- <TableHead className="w-[90px] py-3.5 px-2 text-right">
- <SortOnlyHeader
- label="Faltan"
- sortActive={sort.key === "missing"}
- onSort={() => toggleSort("missing")}
- align="right"
- />
- </TableHead>
- <TableHead className="w-[220px] py-3.5 pl-0 pr-6">
- <SortOnlyHeader
- label="Participación"
- sortActive={sort.key === "rate"}
- onSort={() => toggleSort("rate")}
- align="right"
- />
- </TableHead>
- </>
- )}
+ <ConfigurableHeaderCells config={config} drag={drag} cells={cells} />
  </TableRow>
  </TableHeader>
  <TableBody>
- {pagedRows.map((row) =>
- segment.perPerson ? (
- <PersonRow
+ {shownRows.map((row) => (
+ <TableRow
  key={row.id}
- row={row}
- isSelected={selectedIds.has(row.id)}
- onToggle={() => toggleOne(row.id)}
+ data-state={selectedIds.has(row.id) ? "selected" : undefined}
+ onClick={() => toggleOne(row.id)}
+ className="group cursor-pointer border-border/60 transition-colors hover:bg-muted/30"
+ >
+ <TableCell className="px-0">
+ <div className="flex items-center justify-center">
+ <Checkbox
+ checked={selectedIds.has(row.id)}
+ onCheckedChange={() => toggleOne(row.id)}
+ onClick={(event) => event.stopPropagation()}
+ aria-label={`Seleccionar ${segment.perPerson ? "participante" : "grupo"} ${row.label}`}
  />
- ) : (
- <GroupRow
- key={row.id}
- row={row}
- isSelected={selectedIds.has(row.id)}
- onToggle={() => toggleOne(row.id)}
+ </div>
+ </TableCell>
+ <ConfigurableRowCells config={config} cells={cells} row={row} />
+ </TableRow>
+ ))}
+ <LazyRowsSentinel
+ lazy={lazy}
+ colSpan={config.columns.length + 1}
+ noun={segment.perPerson ? "personas" : "grupos"}
  />
- )
- )}
  </TableBody>
  </Table>
  </div>
@@ -642,6 +617,14 @@ export function ParticipationTab({ results, segment, onSegmentChange, selectedId
  </div>
 
  <div className="flex flex-wrap items-center justify-between gap-3">
+ {config.isLazy ? (
+ <LazyRowsSummary
+ lazy={lazy}
+ total={visibleRows.length}
+ noun={segment.perPerson ? "personas" : "grupos"}
+ />
+ ) : (
+ <>
  <p className="text-[12px] text-muted-foreground">
  {visibleRows.length === 0
  ? "0 grupos"
@@ -689,6 +672,8 @@ export function ParticipationTab({ results, segment, onSegmentChange, selectedId
  Siguiente
  </PagerButton>
  </div>
+ </>
+ )}
  </div>
  </div>
  </div>
@@ -698,136 +683,9 @@ export function ParticipationTab({ results, segment, onSegmentChange, selectedId
 
 
 
-function GroupRow({ row, isSelected, onToggle }: { row: ParticipationRow; isSelected: boolean; onToggle: () => void }) {
- const missing = row.invited - row.completed - row.inProgress;
- const animatedRate = useAnimatedValue(row.rate, 1000);
-
- return (
- <TableRow
- data-state={isSelected ? "selected" : undefined}
- onClick={onToggle}
- className="cursor-pointer border-border/60 hover:bg-muted/30 transition-colors group"
- >
- <TableCell className="px-0">
- <div className="flex items-center justify-center">
- <Checkbox
- checked={isSelected}
- onCheckedChange={onToggle}
- onClick={(event) => event.stopPropagation()}
- aria-label={`Seleccionar grupo ${row.label}`}
- />
- </div>
- </TableCell>
- <TableCell className="py-3">
- <div className="flex items-center gap-2">
- <span className="text-[13px] text-text-secondary">{row.label}</span>
- {missing > 0 && (
- <button
- type="button"
- onClick={(e) => {
- e.stopPropagation();
- // Acción de enviar recordatorio
- }}
- aria-label={`Enviar recordatorio a ${row.label}`}
- className="ml-2 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-all hover:bg-border/60 hover:text-text-primary group-hover:opacity-100"
- >
- <Bell className="h-3.5 w-3.5" />
- </button>
- )}
- </div>
- </TableCell>
- <TableCell>
- {row.completed === row.invited ? (
- <StatusBadge state="success" labels={{ success: "Completado" }} />
- ) : row.completed === 0 && row.inProgress === 0 ? (
- <StatusBadge state="failed" labels={{ failed: "Falta" }} />
- ) : (
- <StatusBadge state="pending" labels={{ pending: "En progreso" }} />
- )}
- </TableCell>
- <TableCell className="w-[120px] py-3 text-right tabular-nums text-[13px] text-text-secondary">
- <span className="font-semibold text-text-primary">{row.completed}</span>
- <span> / {row.invited}</span>
- </TableCell>
- <TableCell className="w-[110px] py-3 text-right tabular-nums text-[13px] text-muted-foreground">
- {row.inProgress === 0 ? "—" : row.inProgress}
- </TableCell>
- <TableCell className="w-[100px] py-3 text-right tabular-nums text-[13px] text-muted-foreground">
- {missing === 0 ? "—" : missing}
- </TableCell>
- <TableCell className="w-[220px] py-3 pr-6">
- <div className="flex items-center justify-end gap-3">
- <Progress value={animatedRate} color="primary" className="h-1.5 w-32 shrink-0 [&>div]:transition-none" />
- <span className="min-w-[44px] text-right text-[12px] tabular-nums text-text-secondary">
- {formatPercent(animatedRate)}
- </span>
- </div>
- </TableCell>
- </TableRow>
- );
-}
 
 /** Column header that toggles the sort, in the table's own header type scale. */
 function formatCount(n: number) {
  return new Intl.NumberFormat("es-CO").format(n);
 }
 
-function PersonRow({ row, isSelected, onToggle }: { row: ParticipationRow; isSelected: boolean; onToggle: () => void }) {
- const isCompleted = row.completed > 0;
- const isInProgress = row.inProgress > 0;
- const person = COLLABORATORS.find((p) => p.name === row.label);
- 
- return (
- <TableRow
- data-state={isSelected ? "selected" : undefined}
- onClick={onToggle}
- className="cursor-pointer border-border/60 hover:bg-muted/30 transition-colors group"
- >
- <TableCell className="px-0">
- <div className="flex items-center justify-center">
- <Checkbox
- checked={isSelected}
- onCheckedChange={onToggle}
- onClick={(event) => event.stopPropagation()}
- aria-label={`Seleccionar participante ${row.label}`}
- />
- </div>
- </TableCell>
- <TableCell className="py-3">
- <div className="flex items-center gap-2">
- <span className="truncate text-[13px] text-text-secondary">{row.label}</span>
- {!isCompleted && (
- <button
- type="button"
- onClick={(e) => {
- e.stopPropagation();
- // Acción de enviar recordatorio
- }}
- aria-label={`Enviar recordatorio a ${row.label}`}
- className="ml-2 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-all hover:bg-border/60 hover:text-text-primary group-hover:opacity-100"
- >
- <Bell className="h-3.5 w-3.5" />
- </button>
- )}
- </div>
- </TableCell>
- <TableCell className="py-3 text-[13px] text-muted-foreground">
- <span className="block truncate">{person?.leader ?? "—"}</span>
- </TableCell>
- <TableCell className="py-3 text-[13px] text-muted-foreground">
- <span className="block truncate">{person?.area ?? "—"}</span>
- </TableCell>
- <TableCell className="py-3 pl-0 pr-6">
- <div className="flex justify-end">
- {isCompleted ? (
- <StatusBadge state="success" labels={{ success: "Completado" }} />
- ) : isInProgress ? (
- <StatusBadge state="pending" labels={{ pending: "En progreso" }} />
- ) : (
- <StatusBadge state="failed" labels={{ failed: "Falta" }} />
- )}
- </div>
- </TableCell>
- </TableRow>
- );
-}

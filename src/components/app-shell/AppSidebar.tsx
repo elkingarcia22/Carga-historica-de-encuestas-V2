@@ -7,6 +7,8 @@ import {
   Check,
   MessageSquare,
   MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   Sparkles,
   X,
@@ -84,6 +86,7 @@ interface AppSidebarProps {
   onNavigateHome?: () => void;
   /** Closes the mobile drawer after any selection. */
   onCloseMobile?: () => void;
+  onToggleCollapse: () => void;
   onOpenFeedback: () => void;
 }
 
@@ -96,6 +99,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   onModeChange,
   onNavigateHome,
   onCloseMobile,
+  onToggleCollapse,
   onOpenFeedback,
 }) => {
   const [openSections, setOpenSections] = React.useState<Record<string, boolean>>({ desempeno: true });
@@ -267,13 +271,45 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   return (
     <aside
       className={cn(
-        "flex h-full shrink-0 flex-col rounded-2xl border border-border/60 bg-surface p-3 pt-4 shadow-card transition-[width,transform] duration-200",
+        "relative flex h-full shrink-0 flex-col rounded-2xl border border-border/60 bg-surface p-3 pt-4 shadow-card transition-[width,transform] duration-200",
         collapsed ? "w-16" : "w-60",
         // Mobile: the sidebar floats as a drawer above the content.
         "max-lg:fixed max-lg:bottom-2 max-lg:left-2 max-lg:top-2 max-lg:z-50 max-lg:w-60 max-lg:shadow-drawer",
         mobileOpen ? "max-lg:translate-x-0" : "max-lg:-translate-x-[calc(100%+16px)]"
       )}
     >
+      {/* ---------- Collapse toggle ----------
+          Sits above the company logo, inside the panel, instead of riding
+          the sidebar's outer edge — same row shape whether collapsed
+          (centered, on top of the icon rail) or expanded (top-right, over
+          the identity row). Below lg the sidebar is an off-canvas drawer —
+          it would slide out of reach — so the header's button keeps that
+          job there. */}
+      <div className={cn("mb-2 flex", collapsed ? "justify-center" : "justify-end", "max-lg:hidden")}>
+        <Tooltip delayDuration={300}>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onToggleCollapse}
+              aria-label={collapsed ? "Expandir menú" : "Contraer menú"}
+              aria-expanded={!collapsed}
+              className={cn(
+                "flex h-7 w-7 items-center justify-center rounded-lg text-text-muted transition-colors",
+                "hover:bg-background hover:text-text-primary",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              )}
+            >
+              {collapsed ? (
+                <PanelLeftOpen className="h-4 w-4" strokeWidth={2} />
+              ) : (
+                <PanelLeftClose className="h-4 w-4" strokeWidth={2} />
+              )}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right">{collapsed ? "Expandir menú" : "Contraer menú"}</TooltipContent>
+        </Tooltip>
+      </div>
+
       {/* ---------- Company identity ---------- */}
       <Popover open={companyMenuOpen} onOpenChange={setCompanyMenuOpen}>
         {/* The whole identity row is the anchor — not the trigger — so the menu

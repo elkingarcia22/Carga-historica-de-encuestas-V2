@@ -35,8 +35,8 @@ const CUSTOM_GROUPS = [
 ] as const;
 
 const FIRST_NAMES = [
-  "Ana", "Carlos", "Sofía", "Daniel", "Valentina", "Andrés", "Camila", "Julián",
-  "Laura", "Santiago", "Mariana", "Felipe", "Isabella", "Sebastián", "Paula",
+  "Ana", "Carlos", "Daniel", "Valentina", "Andrés", "Camila", "Julián",
+  "Santiago", "Mariana", "Felipe", "Isabella", "Sebastián", "Paula",
   "Nicolás", "Daniela", "Mateo", "Catalina", "Alejandro", "Juliana", "Esteban",
   "Natalia", "Ricardo", "Gabriela", "Tomás", "Verónica", "Óscar", "Manuela", "Iván",
 ] as const;
@@ -77,7 +77,7 @@ function slug(value: string): string {
  *
  * Plain strides like `index * 7` don't work here: the stride and the pool size
  * share factors with the other pools' sizes, which locks the fields together —
- * every "Sofía" ends up in the same area, and filtering by area then appears
+ * every "Ana" ends up in the same area, and filtering by area then appears
  * broken because it really does return one name over and over. Salting the
  * same index per field decorrelates them while staying reproducible.
  */

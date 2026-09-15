@@ -170,10 +170,14 @@ export function ActionRailShell({
                 </>
               )}
 
+              {/* La divisoria solo cuando de verdad separa dos grupos: con
+                  algo marcado, las barras del módulo se quedan sin acciones
+                  permanentes, y la línea quedaba colgando al final de la tira
+                  sin nada que separar. */}
               {contextual && (
                 <>
                   {contextual}
-                  <RailDivider />
+                  {persistent && <RailDivider />}
                 </>
               )}
 

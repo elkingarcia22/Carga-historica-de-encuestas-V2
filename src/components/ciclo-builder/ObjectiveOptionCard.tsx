@@ -13,6 +13,7 @@ interface ObjectiveOptionCardProps extends UntonedOptionVisual {
   tagline: string;
   isSelected: boolean;
   onClick: () => void;
+  onPointerUp?: (e: React.PointerEvent) => void;
   /** Paints the outline red while the step is flagging a missing choice. */
   hasError?: boolean;
   /** `center` stacks icon and label centred, for a dense row of short
@@ -49,6 +50,7 @@ export function ObjectiveOptionCard({
   tagline,
   isSelected,
   onClick,
+  onPointerUp,
   hasError,
   align = "start",
   size = "cozy",
@@ -64,6 +66,7 @@ export function ObjectiveOptionCard({
       isSelected={isSelected}
       tone={tone}
       onClick={onClick}
+      onPointerUp={onPointerUp}
       className={cn(isCompact && "p-2.5", hasError && !isSelected && "border-destructive/50", className)}
       contentClassName={cn(
         "relative h-full w-full",

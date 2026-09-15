@@ -1,7 +1,6 @@
 import * as React from "react";
 import { toast } from "sonner";
 import {
-  ChevronDown,
   Eye,
   EyeOff,
   ListChecks,
@@ -12,13 +11,6 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
@@ -32,71 +24,44 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { FilterSortHeader, SortOnlyHeader, SelectionHeaderMenu } from "@/components/data-display";
+import { SelectionHeaderMenu } from "@/components/data-display";
+import {
+  ConfigurableHeaderCells,
+  ConfigurableRowCells,
+  LazyRowsSentinel,
+  LazyRowsSummary,
+  TableConfigButton,
+  useColumnDrag,
+  useLazyRows,
+  useTableConfig,
+} from "@/components/data-display/table-config";
 import { ShellRailSlot } from "@/components/app-shell";
 import { motion } from "framer-motion";
 import { cascadeContainer, cascadeItem } from "@/lib/cascadeAnimation";
 import { ObjetivosListActionRail } from "@/components/objetivos/ObjetivosListActionRail";
+import { ObjetivosConfigDrawerWide } from "@/components/objetivos/ObjetivosConfigDrawerWide";
 import {
-  CICLO_ACTIONS_BY_ESTADO,
-  CicloDateCell,
+  CICLOS_COLUMNS,
+  ciclosTableCells,
   formatCicloDate,
-  parseCicloDate,
-  startOfToday,
   type CicloActionId,
 } from "@/components/ciclo-list";
+import { USUARIOS_COLUMNS, usuariosTableCells } from "@/components/objetivos";
 import { Checkbox } from "@/components/ui/checkbox";
 import { EmptyState } from "@/components/feedback";
 import { ConfirmDialog } from "@/components/overlays";
-import { StatusBadge, type StatusState } from "@/components/status-badge";
 import { CicloResults } from "@/screens/CicloResults";
-import type { CicloListRow } from "@/components/ciclo-detail";
 import { CargaObjetivosDrawer } from "@/components/carga-objetivos";
-import { Progress } from "@/components/ui/progress";
-import { useAnimatedValue } from "@/lib/useAnimatedValue";
+import { USUARIOS_SIN_OBJETIVOS, type CicloRow } from "@/mocks/ciclos";
 import {
-  CICLO_ESTADOS,
-  CICLO_PERIODOS,
-  USUARIOS_SIN_OBJETIVOS,
-  type CicloRow,
-} from "@/mocks/ciclos";
-import {
-  CLOSE_BUCKETS,
   NO_FILTERS,
-  PROGRESS_BUCKETS,
   hasAnyFilter,
   matchesFilters,
   toggleFilterValue,
   type CicloListFilters,
 } from "@/components/ciclo-list/cicloListFilters";
 
-function mapEstadoToStatusState(estado: string): StatusState {
-  if (estado === "Finalizado" || estado === "Completado") return "success";
-  if (estado === "En curso") return "pending";
-  if (estado === "Por iniciar" || estado === "Borrador") return "neutral";
-  return "neutral";
-}
-
 const PAGE_SIZES = [10, 25, 50] as const;
-
-/**
- * A ciclo's avance: the bar fills to it, the figure states it.
- *
- * The bar is capped at 100 % while the figure is not — a ciclo can overshoot
- * ("125 %"), and a bar that grew past its track would just break the column,
- * so the overshoot is told in words instead.
- */
-function CicloAvanceCell({ progreso, avance }: { progreso: number; avance: string }) {
-  const animated = useAnimatedValue(progreso, 1000);
-  return (
-    <div className="flex items-center justify-end gap-3">
-      <Progress value={Math.min(animated, 100)} className="h-1.5 w-28 shrink-0 [&>div]:transition-none" />
-      <span className="min-w-[52px] text-right text-[12px] font-medium tabular-nums text-text-secondary">
-        {avance}
-      </span>
-    </div>
-  );
-}
 
 function formatCount(n: number) {
   return new Intl.NumberFormat("es-CO").format(n);
@@ -139,14 +104,17 @@ interface ObjetivosDashboardProps {
   filters: CicloListFilters;
   onFiltersChange: (filters: CicloListFilters) => void;
   /** El ciclo cuya vista de resultados está abierta — la única que tiene. */
-  resultsCiclo?: CicloListRow | null;
-  onViewResults?: (ciclo: CicloListRow) => void;
+  resultsCiclo?: CicloRow | null;
+  onViewResults?: (ciclo: CicloRow) => void;
   /** Opens the ciclo creation wizard from the list's action rail. */
   onCreateCiclo?: () => void;
   /** Reopens the wizard on the single selected ciclo, at Participantes. */
-  onAddUsersToCiclo?: (ciclo: CicloListRow) => void;
+  onAddUsersToCiclo?: (ciclo: CicloRow) => void;
   /** Reopens the wizard on the single selected ciclo, at Datos generales. */
-  onEditCiclo?: (ciclo: CicloListRow) => void;
+  onEditCiclo?: (ciclo: CicloRow) => void;
+  /** Reopens the wizard on the ciclo shown in results, at Objetivos — the
+   *  drawer's global "Editar" button, without a selection. */
+  onEditCicloObjectives?: (ciclo: CicloRow, tab?: "groups" | "individual") => void;
 }
 
 export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
@@ -160,22 +128,24 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
   onCreateCiclo,
   onAddUsersToCiclo,
   onEditCiclo,
+  onEditCicloObjectives,
 }) => {
   const nextCicloIdRef = React.useRef(ciclos.length + 1);
 
   // "Cargar objetivos" abre el asistente sin un ciclo fijo: el propio drawer
   // pide elegir uno (o crear uno nuevo) como su primer paso.
   const [isUploadOpen, setIsUploadOpen] = React.useState(false);
+  const [isConfigDrawerOpen, setIsConfigDrawerOpen] = React.useState(false);
 
   const [searchTerm, setSearchTerm] = React.useState("");
   const [isSearchExpanded, setIsSearchExpanded] = React.useState(false);
   const searchInputRef = React.useRef<HTMLInputElement>(null);
+
   
   const [sortKey, setSortKey] = React.useState<string>("nombre");
   const [sortAscending, setSortAscending] = React.useState<boolean>(true);
 
   const [areaFilter, setAreaFilter] = React.useState<Set<string>>(new Set());
-  const [isPermisosOpen, setIsPermisosOpen] = React.useState(false);
   
   const [selectedCiclos, setSelectedCiclos] = React.useState<Set<string>>(new Set());
   const [selectedUsuarios, setSelectedUsuarios] = React.useState<Set<string>>(new Set());
@@ -240,11 +210,20 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
       case "results":
         onViewResults?.(singleSelectedCiclo);
         break;
+      case "configure":
+        setIsConfigDrawerOpen(true);
+        break;
       case "edit":
         onEditCiclo?.(singleSelectedCiclo);
         break;
       case "editParticipants":
         onAddUsersToCiclo?.(singleSelectedCiclo);
+        break;
+      case "addObjectivesGroup":
+        onEditCicloObjectives?.(singleSelectedCiclo, "groups");
+        break;
+      case "addObjectivesIndividual":
+        onEditCicloObjectives?.(singleSelectedCiclo, "individual");
         break;
       case "duplicate":
         handleDuplicateCiclos([singleSelectedCiclo.id]);
@@ -400,8 +379,87 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
   const usuariosFirstIndex = (currentUsuariosPage - 1) * pageSize;
   const pagedUsuarios = filteredUsuarios.slice(usuariosFirstIndex, usuariosFirstIndex + pageSize);
 
+  /*
+   * Cada pestaña recuerda su propia configuración —columnas, orden y cómo
+   * llegan las filas—, porque son dos listas distintas: quien esconde el
+   * líder en los usuarios no está diciendo nada sobre los ciclos.
+   */
+  const ciclosConfig = useTableConfig("objetivos-home-ciclos", CICLOS_COLUMNS);
+  const ciclosDrag = useColumnDrag({ axis: "x", onReorder: ciclosConfig.moveColumn });
+  const ciclosLazy = useLazyRows({
+    total: filteredCiclos.length,
+    enabled: ciclosConfig.isLazy,
+    step: pageSize,
+    resetKey: filteredCiclos,
+  });
+  const shownCiclos = ciclosConfig.isLazy
+    ? filteredCiclos.slice(0, ciclosLazy.count)
+    : pagedCiclos;
+
+  const usuariosConfig = useTableConfig("objetivos-home-usuarios", USUARIOS_COLUMNS);
+  const usuariosDrag = useColumnDrag({ axis: "x", onReorder: usuariosConfig.moveColumn });
+  const usuariosLazy = useLazyRows({
+    total: filteredUsuarios.length,
+    enabled: usuariosConfig.isLazy,
+    step: pageSize,
+    resetKey: filteredUsuarios,
+  });
+  const shownUsuarios = usuariosConfig.isLazy
+    ? filteredUsuarios.slice(0, usuariosLazy.count)
+    : pagedUsuarios;
+
+  const ciclosCells = ciclosTableCells({
+    sortKey,
+    onSort: handleToggleSort,
+    filters,
+    onToggleFilter: toggleColumn,
+    onClearFilter: clearColumn,
+    dateEditCicloId,
+    onCancelCloseDate: () => setDateEditCicloId(null),
+    onSaveCloseDate: (ciclo, date) => {
+      const nuevaFecha = formatCicloDate(date);
+      onCiclosChange(
+        ciclos.map((c) => (c.id === ciclo.id ? { ...c, fechaCierre: nuevaFecha } : c))
+      );
+      setDateEditCicloId(null);
+      toast.success(`“${ciclo.nombre}” ahora cierra el ${nuevaFecha}`);
+    },
+    onOpenCiclo: (ciclo) => {
+      if (ciclo.estado === "Borrador") onEditCiclo?.(ciclo);
+      else onViewResults?.(ciclo);
+    },
+  });
+
+  const usuariosCells = usuariosTableCells({
+    sortKey,
+    onSort: handleToggleSort,
+    areaFilter,
+    onToggleArea: (value) => {
+      const next = new Set(areaFilter);
+      if (next.has(value)) next.delete(value);
+      else next.add(value);
+      setAreaFilter(next);
+      setUsuariosPage(1);
+    },
+    onClearArea: () => {
+      setAreaFilter(new Set());
+      setUsuariosPage(1);
+    },
+  });
+
   if (resultsCiclo) {
-    return <CicloResults key={`results-${resultsCiclo.id}`} ciclo={resultsCiclo} />;
+    return (
+      <CicloResults
+        key={`results-${resultsCiclo.id}`}
+        ciclo={resultsCiclo}
+        onEditObjectives={
+          onEditCicloObjectives ? (target) => onEditCicloObjectives(resultsCiclo, target) : undefined
+        }
+        onEditParticipants={
+          onAddUsersToCiclo ? () => onAddUsersToCiclo(resultsCiclo) : undefined
+        }
+      />
+    );
   }
 
   return (
@@ -417,8 +475,6 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
           isBlocked={isUploadOpen}
           selectedCount={currentSelectionCount}
           onClearSelection={handleClearSelection}
-          isPermisosOpen={isPermisosOpen}
-          setIsPermisosOpen={setIsPermisosOpen}
           activeTab={activeTab}
           selectedCicloEstado={singleSelectedCiclo?.estado}
           onCreateCiclo={onCreateCiclo}
@@ -435,6 +491,11 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
         uno nuevo) antes de seguir con la operación y el archivo.
       */}
       <CargaObjetivosDrawer open={isUploadOpen} onOpenChange={setIsUploadOpen} ciclos={ciclos} />
+      <ObjetivosConfigDrawerWide
+        open={isConfigDrawerOpen}
+        onOpenChange={setIsConfigDrawerOpen}
+        initialTab="estados"
+      />
 
       {/* Closing a ciclo stops reporting for good — the avances that would
           have arrived after it simply never do — so it is asked before it is
@@ -479,7 +540,7 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
 
       {/* TAB 1: CICLOS DE OBJETIVOS */}
       {activeTab === "ciclos" && (
-        <motion.div variants={cascadeContainer} initial="hidden" animate="show" className="flex flex-col flex-1 min-h-0 overflow-hidden rounded-2xl border border-border/60 bg-surface shadow-card">
+        <motion.div variants={cascadeContainer} initial="hidden" animate="show" className="flex w-fit min-w-full flex-col flex-1 min-h-0 rounded-2xl border border-border/60 bg-surface shadow-card">
           <motion.div variants={cascadeItem} className="flex flex-wrap items-center gap-4 shrink-0 p-4">
             <div className="flex items-center gap-2">
               <h3 className="text-[13px] font-bold text-text-primary">Lista de ciclos</h3>
@@ -542,6 +603,11 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
                 )}
               </div>
 
+              {/* Junto al buscador y a los embudos de las columnas: filtrar
+                  cambia qué filas se miran, configurar cambia cómo se mira la
+                  tabla, y se contestan en el mismo momento. */}
+              <TableConfigButton config={ciclosConfig} noun="ciclos" />
+
               <div
                 className={cn(
                   "flex shrink-0 items-center overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
@@ -574,7 +640,7 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
             </div>
           </motion.div>
 
-          <motion.div variants={cascadeItem} className="flex-1 min-h-0 flex flex-col overflow-hidden border-y border-border/60">
+          <motion.div variants={cascadeItem} className="flex-1 min-h-0 flex flex-col border-y border-border/60">
             {filteredCiclos.length === 0 ? (
               <div className="p-8">
                 <EmptyState
@@ -604,13 +670,22 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
                 />
               </div>
             ) : (
-              <div className="relative w-full flex-1 min-h-0 overflow-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="border-border/60 bg-muted/40 hover:bg-muted/40">
+              <div className="relative w-full flex-1 min-h-0">
+                {/* Una `<table>` a secas y no el `Table` del sistema: ese la
+                    envuelve en un `div` con `overflow-x` propio, y el
+                    `sticky` del encabezado se anclaría a ese `div` —que crece
+                    con el contenido y nunca desborda— en vez de a la región
+                    con scroll de arriba. `bg-muted-solid` es el mismo color
+                    de `bg-muted/40` resuelto contra la superficie: al 40 % las
+                    filas se verían pasar a través del encabezado que las
+                    tapa. */}
+                <table className="w-full caption-bottom border-collapse text-sm">
+                  <TableHeader className="[&_tr]:border-b-0">
+                    <TableRow className="sticky top-[var(--home-sticky-top,60px)] z-10 border-b-0 bg-muted-solid shadow-[0_1px_0_0_hsl(var(--border)/0.6)] hover:bg-muted-solid">
                       <TableHead className="pl-7 pr-5 w-[50px]">
                         <SelectionHeaderMenu
                           state={selectedCiclos.size === filteredCiclos.length && filteredCiclos.length > 0 ? true : selectedCiclos.size > 0 ? "indeterminate" : false}
+                          paged={!ciclosConfig.isLazy}
                           pageCount={pagedCiclos.length}
                           matchCount={filteredCiclos.length}
                           showSelectPage={pagedCiclos.length > 0 && selectedCiclos.size < filteredCiclos.length}
@@ -625,212 +700,113 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
                           align="start"
                         />
                       </TableHead>
-                      <TableHead className="px-4 py-3.5">
-                        <SortOnlyHeader
-                          label="Nombre"
-                          sortActive={sortKey === "nombre"}
-                          onSort={() => handleToggleSort("nombre")}
-                        />
-                      </TableHead>
-                      <TableHead className="px-4 py-3.5">
-                        <FilterSortHeader
-                          label="Periodo"
-                          options={CICLO_PERIODOS}
-                          selected={new Set(filters.periodo)}
-                          onToggleFilter={(value) => toggleColumn("periodo", value)}
-                          onClearFilter={() => clearColumn("periodo")}
-                          sortActive={sortKey === "periodo"}
-                          onSort={() => handleToggleSort("periodo")}
-                        />
-                      </TableHead>
-                      <TableHead className="px-4 py-3.5">
-                        <SortOnlyHeader
-                          label="Fecha inicio"
-                          sortActive={sortKey === "fechaInicio"}
-                          onSort={() => handleToggleSort("fechaInicio")}
-                        />
-                      </TableHead>
-                      <TableHead className="px-4 py-3.5">
-                        <FilterSortHeader
-                          label="Fecha cierre"
-                          options={CLOSE_BUCKETS}
-                          selected={new Set(filters.close)}
-                          onToggleFilter={(value) => toggleColumn("close", value)}
-                          onClearFilter={() => clearColumn("close")}
-                          sortActive={sortKey === "fechaCierre"}
-                          onSort={() => handleToggleSort("fechaCierre")}
-                        />
-                      </TableHead>
-                      <TableHead className="px-4 py-3.5">
-                        <FilterSortHeader
-                          label="Estado"
-                          options={CICLO_ESTADOS}
-                          selected={new Set(filters.estado)}
-                          onToggleFilter={(value) => toggleColumn("estado", value)}
-                          onClearFilter={() => clearColumn("estado")}
-                          sortActive={sortKey === "estado"}
-                          onSort={() => handleToggleSort("estado")}
-                        />
-                      </TableHead>
-                      <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground whitespace-nowrap">
-                        # objetivos
-                      </TableHead>
-                      <TableHead className="w-[200px] px-4 py-3.5">
-                        <FilterSortHeader
-                          label="Avance"
-                          options={PROGRESS_BUCKETS}
-                          selected={new Set(filters.progress)}
-                          onToggleFilter={(value) => toggleColumn("progress", value)}
-                          onClearFilter={() => clearColumn("progress")}
-                          sortActive={sortKey === "progreso"}
-                          onSort={() => handleToggleSort("progreso")}
-                          align="right"
-                        />
-                      </TableHead>
+                      <ConfigurableHeaderCells
+                        config={ciclosConfig}
+                        drag={ciclosDrag}
+                        cells={ciclosCells}
+                        className="px-4 py-3.5"
+                      />
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {pagedCiclos.map((ciclo) => {
-                      const isEditingDate = dateEditCicloId === ciclo.id;
-                      // A ciclo cannot close before it starts, nor in the past.
-                      const closeDateFloor = (() => {
-                        const today = startOfToday();
-                        const start = parseCicloDate(ciclo.fechaInicio);
-                        return start && start > today ? start : today;
-                      })();
-
-                      return (
-                        <TableRow
-                          key={ciclo.id}
-                          className="hover:bg-muted/30 transition-colors border-border/60 cursor-pointer"
-                          data-state={selectedCiclos.has(ciclo.id) ? "selected" : undefined}
-                          onClick={isEditingDate ? undefined : () => handleToggleCiclo(ciclo.id)}
-                        >
-                          <TableCell className="pl-7 pr-5" onClick={(e) => e.stopPropagation()}>
-                            <Checkbox
-                              checked={selectedCiclos.has(ciclo.id)}
-                              onCheckedChange={() => handleToggleCiclo(ciclo.id)}
-                              // Deselecting mid-edit would take the rail — and with
-                              // it the edit's only owner — out from under an
-                              // unsaved date.
-                              disabled={isEditingDate}
-                            />
-                          </TableCell>
-                          <TableCell className="py-3 px-4 font-bold text-[13px]">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onViewResults?.(ciclo);
-                              }}
-                              // Un ciclo sin resultados que leer —borrador o por
-                              // iniciar— no lleva a ninguna parte: su nombre se
-                              // queda como texto en vez de fingir un enlace. Antes
-                              // esos abrían el seguimiento, que ya no existe.
-                              disabled={
-                                isEditingDate ||
-                                !CICLO_ACTIONS_BY_ESTADO[ciclo.estado]?.includes("results")
-                              }
-                              className="text-left text-text-primary hover:text-primary hover:underline transition-colors disabled:cursor-default disabled:no-underline disabled:hover:text-text-primary"
-                            >
-                              {ciclo.nombre}
-                            </button>
-                          </TableCell>
-                          <TableCell className="py-3 px-4 text-text-secondary text-[13px]">{ciclo.periodo}</TableCell>
-                          <TableCell className="py-3 px-4 text-text-secondary text-[13px]">{ciclo.fechaInicio}</TableCell>
-                          <TableCell className="px-4 py-3 text-text-secondary text-[13px]">
-                            {isEditingDate ? (
-                              <CicloDateCell
-                                value={ciclo.fechaCierre}
-                                minDate={closeDateFloor}
-                                onCancel={() => setDateEditCicloId(null)}
-                                onSave={(date) => {
-                                  const nuevaFecha = formatCicloDate(date);
-                                  onCiclosChange(
-                                    ciclos.map((c) => (c.id === ciclo.id ? { ...c, fechaCierre: nuevaFecha } : c))
-                                  );
-                                  setDateEditCicloId(null);
-                                  toast.success(`“${ciclo.nombre}” ahora cierra el ${nuevaFecha}`);
-                                }}
-                              />
-                            ) : (
-                              ciclo.fechaCierre
-                            )}
-                          </TableCell>
-                          <TableCell className="py-3 px-4">
-                            <StatusBadge
-                              state={mapEstadoToStatusState(ciclo.estado)}
-                              labels={{ [mapEstadoToStatusState(ciclo.estado)]: ciclo.estado }}
-                            />
-                          </TableCell>
-                          <TableCell className="py-3 px-4 text-text-secondary text-[13px]">{ciclo.numObjetivos}</TableCell>
-                          <TableCell className="py-3 px-4">
-                            <CicloAvanceCell progreso={ciclo.progreso} avance={ciclo.avance} />
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
+                    {shownCiclos.map((ciclo) => (
+                      <TableRow
+                        key={ciclo.id}
+                        className="cursor-pointer border-border/60 transition-colors hover:bg-muted/30"
+                        data-state={selectedCiclos.has(ciclo.id) ? "selected" : undefined}
+                        onClick={
+                          dateEditCicloId === ciclo.id ? undefined : () => handleToggleCiclo(ciclo.id)
+                        }
+                      >
+                        <TableCell className="pl-7 pr-5" onClick={(e) => e.stopPropagation()}>
+                          <Checkbox
+                            checked={selectedCiclos.has(ciclo.id)}
+                            onCheckedChange={() => handleToggleCiclo(ciclo.id)}
+                            // Deselecting mid-edit would take the rail — and with
+                            // it the edit's only owner — out from under an
+                            // unsaved date.
+                            disabled={dateEditCicloId === ciclo.id}
+                          />
+                        </TableCell>
+                        <ConfigurableRowCells config={ciclosConfig} cells={ciclosCells} row={ciclo} />
+                      </TableRow>
+                    ))}
+                    <LazyRowsSentinel
+                      lazy={ciclosLazy}
+                      colSpan={ciclosConfig.columns.length + 1}
+                      noun="ciclos"
+                    />
                   </TableBody>
-                </Table>
+                </table>
               </div>
             )}
           </motion.div>
           
           <motion.div variants={cascadeItem} className="flex flex-wrap items-center justify-between gap-3 shrink-0 p-4">
-            <p className="text-[12px] text-muted-foreground">
-              {filteredCiclos.length === 0
-                ? "0 ciclos"
-                : `${formatCount(ciclosFirstIndex + 1)}–${formatCount(ciclosFirstIndex + pagedCiclos.length)} de ${formatCount(filteredCiclos.length)}`}
-            </p>
+            {/* De corrido el paginador no dice nada útil: lo que hace falta
+                saber es por dónde va la carga. El otro modo está a un clic en
+                "Configurar". */}
+            {ciclosConfig.isLazy ? (
+              <LazyRowsSummary lazy={ciclosLazy} total={filteredCiclos.length} noun="ciclos" />
+            ) : (
+              <>
+                <p className="text-[12px] text-muted-foreground">
+                  {filteredCiclos.length === 0
+                    ? "0 ciclos"
+                    : `${formatCount(ciclosFirstIndex + 1)}–${formatCount(ciclosFirstIndex + pagedCiclos.length)} de ${formatCount(filteredCiclos.length)}`}
+                </p>
 
-            <div className="flex items-center gap-2">
-              <Select
-                value={String(pageSize)}
-                onValueChange={(value) => {
-                  setPageSize(Number(value));
-                  setCiclosPage(1);
-                  setUsuariosPage(1);
-                }}
-              >
-                <SelectTrigger
-                  aria-label="Ciclos por página"
-                  className="h-8 w-[130px] rounded-lg px-2.5 text-[12px]"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent position="popper" sideOffset={6}>
-                  {PAGE_SIZES.map((size) => (
-                    <SelectItem key={size} value={String(size)} className="text-[13px]">
-                      {size} por página
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={String(pageSize)}
+                    onValueChange={(value) => {
+                      setPageSize(Number(value));
+                      setCiclosPage(1);
+                      setUsuariosPage(1);
+                    }}
+                  >
+                    <SelectTrigger
+                      aria-label="Ciclos por página"
+                      className="h-8 w-[130px] rounded-lg px-2.5 text-[12px]"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent position="popper" sideOffset={6}>
+                      {PAGE_SIZES.map((size) => (
+                        <SelectItem key={size} value={String(size)} className="text-[13px]">
+                          {size} por página
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
 
-              <PagerButton
-                label="Página anterior"
-                disabled={currentCiclosPage <= 1}
-                onClick={() => setCiclosPage(currentCiclosPage - 1)}
-              >
-                Anterior
-              </PagerButton>
-              <span className="text-[12px] tabular-nums text-text-secondary">
-                {formatCount(currentCiclosPage)} / {formatCount(ciclosPageCount)}
-              </span>
-              <PagerButton
-                label="Página siguiente"
-                disabled={currentCiclosPage >= ciclosPageCount}
-                onClick={() => setCiclosPage(currentCiclosPage + 1)}
-              >
-                Siguiente
-              </PagerButton>
-            </div>
+                  <PagerButton
+                    label="Página anterior"
+                    disabled={currentCiclosPage <= 1}
+                    onClick={() => setCiclosPage(currentCiclosPage - 1)}
+                  >
+                    Anterior
+                  </PagerButton>
+                  <span className="text-[12px] tabular-nums text-text-secondary">
+                    {formatCount(currentCiclosPage)} / {formatCount(ciclosPageCount)}
+                  </span>
+                  <PagerButton
+                    label="Página siguiente"
+                    disabled={currentCiclosPage >= ciclosPageCount}
+                    onClick={() => setCiclosPage(currentCiclosPage + 1)}
+                  >
+                    Siguiente
+                  </PagerButton>
+                </div>
+              </>
+            )}
           </motion.div>
         </motion.div>
       )}
 
       {/* TAB 2: USUARIOS SIN OBJETIVOS */}
       {activeTab === "usuarios" && (
-        <motion.div variants={cascadeContainer} initial="hidden" animate="show" className="flex flex-col flex-1 min-h-0 overflow-hidden rounded-2xl border border-border/60 bg-surface shadow-card">
+        <motion.div variants={cascadeContainer} initial="hidden" animate="show" className="flex w-fit min-w-full flex-col flex-1 min-h-0 rounded-2xl border border-border/60 bg-surface shadow-card">
           <motion.div variants={cascadeItem} className="flex flex-wrap items-center gap-4 shrink-0 p-4">
             <div className="flex items-center gap-2">
               <h3 className="text-[13px] font-bold text-text-primary">Lista de usuarios sin objetivos</h3>
@@ -893,6 +869,8 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
                 )}
               </div>
 
+              <TableConfigButton config={usuariosConfig} noun="usuarios" />
+
               <div
                 className={cn(
                   "flex shrink-0 items-center overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
@@ -925,7 +903,7 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
             </div>
           </motion.div>
 
-          <motion.div variants={cascadeItem} className="flex-1 min-h-0 flex flex-col overflow-hidden border-y border-border/60">
+          <motion.div variants={cascadeItem} className="flex-1 min-h-0 flex flex-col border-y border-border/60">
             {filteredUsuarios.length === 0 ? (
               <div className="p-8">
                 <EmptyState
@@ -955,13 +933,22 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
                 />
               </div>
             ) : (
-              <div className="relative w-full flex-1 min-h-0 overflow-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="border-border/60 bg-muted/40 hover:bg-muted/40">
+              <div className="relative w-full flex-1 min-h-0">
+                {/* Una `<table>` a secas y no el `Table` del sistema: ese la
+                    envuelve en un `div` con `overflow-x` propio, y el
+                    `sticky` del encabezado se anclaría a ese `div` —que crece
+                    con el contenido y nunca desborda— en vez de a la región
+                    con scroll de arriba. `bg-muted-solid` es el mismo color
+                    de `bg-muted/40` resuelto contra la superficie: al 40 % las
+                    filas se verían pasar a través del encabezado que las
+                    tapa. */}
+                <table className="w-full caption-bottom border-collapse text-sm">
+                  <TableHeader className="[&_tr]:border-b-0">
+                    <TableRow className="sticky top-[var(--home-sticky-top,60px)] z-10 border-b-0 bg-muted-solid shadow-[0_1px_0_0_hsl(var(--border)/0.6)] hover:bg-muted-solid">
                       <TableHead className="pl-7 pr-5 w-[50px]">
                         <SelectionHeaderMenu
                           state={selectedUsuarios.size === filteredUsuarios.length && filteredUsuarios.length > 0 ? true : selectedUsuarios.size > 0 ? "indeterminate" : false}
+                          paged={!usuariosConfig.isLazy}
                           pageCount={pagedUsuarios.length}
                           matchCount={filteredUsuarios.length}
                           showSelectPage={pagedUsuarios.length > 0 && selectedUsuarios.size < filteredUsuarios.length}
@@ -976,64 +963,19 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
                           align="start"
                         />
                       </TableHead>
-                      <TableHead className="px-4 py-3.5">
-                        <SortOnlyHeader
-                          label="Username"
-                          sortActive={sortKey === "username"}
-                          onSort={() => handleToggleSort("username")}
-                        />
-                      </TableHead>
-                      <TableHead className="px-4 py-3.5">
-                        <SortOnlyHeader
-                          label="Nombre"
-                          sortActive={sortKey === "nombre"}
-                          onSort={() => handleToggleSort("nombre")}
-                        />
-                      </TableHead>
-                      <TableHead className="px-4 py-3.5">
-                        <SortOnlyHeader
-                          label="Correo"
-                          sortActive={sortKey === "correo"}
-                          onSort={() => handleToggleSort("correo")}
-                        />
-                      </TableHead>
-                      <TableHead className="px-4 py-3.5">
-                        <FilterSortHeader
-                          label="Área"
-                          options={["Ventas", "Servicio", "Almacen", "Pruebas"]}
-                          selected={areaFilter}
-                          onToggleFilter={(val) => {
-                            const next = new Set(areaFilter);
-                            if (next.has(val)) next.delete(val);
-                            else next.add(val);
-                            setAreaFilter(next);
-                            setUsuariosPage(1);
-                          }}
-                          onClearFilter={() => {
-                            setAreaFilter(new Set());
-                            setUsuariosPage(1);
-                          }}
-                          sortActive={sortKey === "area"}
-                          onSort={() => handleToggleSort("area")}
-                        />
-                      </TableHead>
-                      <TableHead className="px-4 py-3.5">
-                        <SortOnlyHeader
-                          label="Líder"
-                          sortActive={sortKey === "lider"}
-                          onSort={() => handleToggleSort("lider")}
-                        />
-                      </TableHead>
-                      <TableHead className="px-5 py-3.5 text-right text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                        Acciones
-                      </TableHead>
+                      <ConfigurableHeaderCells
+                        config={usuariosConfig}
+                        drag={usuariosDrag}
+                        cells={usuariosCells}
+                        className="px-4 py-3.5"
+                      />
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {pagedUsuarios.map((user) => (
-                      <TableRow 
-                        key={user.id} 
-                        className="hover:bg-muted/30 transition-colors border-border/60 cursor-pointer" 
+                    {shownUsuarios.map((user) => (
+                      <TableRow
+                        key={user.id}
+                        className="cursor-pointer border-border/60 transition-colors hover:bg-muted/30"
                         data-state={selectedUsuarios.has(user.id) ? "selected" : undefined}
                         onClick={() => handleToggleUsuario(user.id)}
                       >
@@ -1043,87 +985,83 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
                             onCheckedChange={() => handleToggleUsuario(user.id)}
                           />
                         </TableCell>
-                        <TableCell className="py-3 px-4 text-text-secondary text-[13px]">{user.username}</TableCell>
-                        <TableCell className="py-3 px-4 font-bold text-text-primary text-[13px]">{user.nombre}</TableCell>
-                        <TableCell className="py-3 px-4 text-text-secondary text-[13px]">{user.correo}</TableCell>
-                        <TableCell className="py-3 px-4">
-                          <Badge variant="neutral" className="text-[11px] h-6 px-2.5">{user.area}</Badge>
-                        </TableCell>
-                        <TableCell className="py-3 px-4 text-text-secondary text-[13px]">{user.lider}</TableCell>
-                        <TableCell className="py-3 px-5 text-right" onClick={(e) => e.stopPropagation()}>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="sm" className="h-8 text-[12px] font-semibold text-text-secondary hover:text-text-primary px-3 rounded-lg gap-2">
-                                Acciones <ChevronDown className="w-3.5 h-3.5" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end" className="w-48 p-1 rounded-xl shadow-lg border-border/50">
-                              <DropdownMenuItem className="text-[13px] gap-2 p-2 rounded-lg cursor-pointer text-text-secondary hover:text-text-primary hover:bg-surface-muted">
-                                Ver detalle
-                              </DropdownMenuItem>
-                              <DropdownMenuItem className="text-[13px] gap-2 p-2 rounded-lg cursor-pointer text-text-secondary hover:text-text-primary hover:bg-surface-muted">
-                                Asignar líder
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </TableCell>
+                        <ConfigurableRowCells
+                          config={usuariosConfig}
+                          cells={usuariosCells}
+                          row={user}
+                        />
                       </TableRow>
                     ))}
+                    <LazyRowsSentinel
+                      lazy={usuariosLazy}
+                      colSpan={usuariosConfig.columns.length + 1}
+                      noun="usuarios"
+                    />
                   </TableBody>
-                </Table>
+                </table>
               </div>
             )}
           </motion.div>
 
           <motion.div variants={cascadeItem} className="flex flex-wrap items-center justify-between gap-3 shrink-0 p-4">
-            <p className="text-[12px] text-muted-foreground">
-              {filteredUsuarios.length === 0
-                ? "0 usuarios"
-                : `${formatCount(usuariosFirstIndex + 1)}–${formatCount(usuariosFirstIndex + pagedUsuarios.length)} de ${formatCount(filteredUsuarios.length)}`}
-            </p>
+            {usuariosConfig.isLazy ? (
+              <LazyRowsSummary
+                lazy={usuariosLazy}
+                total={filteredUsuarios.length}
+                noun="usuarios"
+              />
+            ) : (
+              <>
+                <p className="text-[12px] text-muted-foreground">
+                  {filteredUsuarios.length === 0
+                    ? "0 usuarios"
+                    : `${formatCount(usuariosFirstIndex + 1)}–${formatCount(usuariosFirstIndex + pagedUsuarios.length)} de ${formatCount(filteredUsuarios.length)}`}
+                </p>
 
-            <div className="flex items-center gap-2">
-              <Select
-                value={String(pageSize)}
-                onValueChange={(value) => {
-                  setPageSize(Number(value));
-                  setCiclosPage(1);
-                  setUsuariosPage(1);
-                }}
-              >
-                <SelectTrigger
-                  aria-label="Usuarios por página"
-                  className="h-8 w-[130px] rounded-lg px-2.5 text-[12px]"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent position="popper" sideOffset={6}>
-                  {PAGE_SIZES.map((size) => (
-                    <SelectItem key={size} value={String(size)} className="text-[13px]">
-                      {size} por página
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={String(pageSize)}
+                    onValueChange={(value) => {
+                      setPageSize(Number(value));
+                      setCiclosPage(1);
+                      setUsuariosPage(1);
+                    }}
+                  >
+                    <SelectTrigger
+                      aria-label="Usuarios por página"
+                      className="h-8 w-[130px] rounded-lg px-2.5 text-[12px]"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent position="popper" sideOffset={6}>
+                      {PAGE_SIZES.map((size) => (
+                        <SelectItem key={size} value={String(size)} className="text-[13px]">
+                          {size} por página
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
 
-              <PagerButton
-                label="Página anterior"
-                disabled={currentUsuariosPage <= 1}
-                onClick={() => setUsuariosPage(currentUsuariosPage - 1)}
-              >
-                Anterior
-              </PagerButton>
-              <span className="text-[12px] tabular-nums text-text-secondary">
-                {formatCount(currentUsuariosPage)} / {formatCount(usuariosPageCount)}
-              </span>
-              <PagerButton
-                label="Página siguiente"
-                disabled={currentUsuariosPage >= usuariosPageCount}
-                onClick={() => setUsuariosPage(currentUsuariosPage + 1)}
-              >
-                Siguiente
-              </PagerButton>
-            </div>
+                  <PagerButton
+                    label="Página anterior"
+                    disabled={currentUsuariosPage <= 1}
+                    onClick={() => setUsuariosPage(currentUsuariosPage - 1)}
+                  >
+                    Anterior
+                  </PagerButton>
+                  <span className="text-[12px] tabular-nums text-text-secondary">
+                    {formatCount(currentUsuariosPage)} / {formatCount(usuariosPageCount)}
+                  </span>
+                  <PagerButton
+                    label="Página siguiente"
+                    disabled={currentUsuariosPage >= usuariosPageCount}
+                    onClick={() => setUsuariosPage(currentUsuariosPage + 1)}
+                  >
+                    Siguiente
+                  </PagerButton>
+                </div>
+              </>
+            )}
           </motion.div>
         </motion.div>
       )}

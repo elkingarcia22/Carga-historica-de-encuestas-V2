@@ -323,12 +323,18 @@
     position: absolute;
     inset: 0;
     border-radius: inherit;
-    padding: 1.5px;
+    padding: 1px;
     background: linear-gradient(135deg, hsl(var(--ai-gradient-start)), hsl(var(--ai-gradient-end)));
     -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
     -webkit-mask-composite: xor;
     mask-composite: exclude;
     pointer-events: none;
+    /* Por encima de cualquier hijo con su propio z-index —el header
+       pegajoso de la tarjeta de objetivo tiene z-10 y un fondo opaco que,
+       si no, tapa el anillo entero mientras la tarjeta está colapsada—.
+       El mask deja transparente todo salvo la banda del borde, así que
+       subirlo no cubre el contenido, solo gana el reborde. */
+    z-index: 20;
   }
 
   .shadow-ai-premium {
@@ -383,6 +389,26 @@
       radial-gradient(50% 34% at 88% 0%, rgba(244, 63, 94, 0.12), transparent 65%);
     background-size: 140% 140%;
     animation: mesh-drift 12s ease-in-out infinite alternate;
+  }
+
+  /*
+   * La misma malla de las tarjetas de IA, pero sobre la barra oscura.
+   *
+   * Los blobs entran por los costados y no por arriba: la barra es ancha y
+   * baja, y un degradado que cae desde el borde superior en 56 px de alto no
+   * se lee como atmósfera, se lee como un borde mal pintado. Las alfas son
+   * más bajas que en `.bg-ai-mesh-card` porque sobre un fondo casi negro el
+   * mismo valor canta el doble: lo justo para decir "esta barra es de la
+   * generación", no para volverla una barra de colores.
+   */
+  .bg-ai-mesh-nav {
+    background-color: var(--color-surface-nav);
+    background-image:
+      radial-gradient(60% 140% at 8% 50%, rgba(46, 198, 255, 0.13), transparent 70%),
+      radial-gradient(52% 140% at 50% 50%, rgba(124, 58, 237, 0.16), transparent 70%),
+      radial-gradient(58% 140% at 94% 50%, rgba(244, 63, 94, 0.12), transparent 70%);
+    background-size: 150% 150%;
+    animation: mesh-drift 16s ease-in-out infinite alternate;
   }
 
   /* Animated subtle mesh background for the agent page */
@@ -664,6 +690,37 @@
     background-color: color-mix(in srgb, hsl(var(--muted)) 40%, var(--color-surface));
   }
 
+  /*
+   * Una columna fijada se queda quieta mientras el resto de la tabla pasa por
+   * debajo — y pasa de verdad, así que tiene que ser opaca. Mismo problema que
+   * resuelve `bg-muted-solid` arriba, y por eso el mismo recurso: el color
+   * resuelto contra la superficie en vez de compuesto encima de ella.
+   *
+   * Aquí va solo el color: el `position: sticky` y su `z-index` los pone la
+   * celda en clases de Tailwind, porque el encabezado arrastrable ya lleva
+   * `relative` y dos reglas de posición en la misma capa se resuelven por
+   * orden de hoja, que es justo lo que no se puede predecir.
+   *
+   * El tinte de la fila se repinta aquí porque el de la fila (`hover:bg-muted/30`,
+   * `data-[state=selected]:bg-muted`) va en el `<tr>`, es decir detrás del fondo
+   * de la celda: sin esto la columna fijada sería la única que no se ilumina al
+   * pasar por encima.
+   */
+  .table-pinned-cell {
+    background-color: var(--color-surface);
+  }
+  tr:hover > .table-pinned-cell {
+    background-color: color-mix(in srgb, hsl(var(--muted)) 30%, var(--color-surface));
+  }
+  tr[data-state="selected"] > .table-pinned-cell {
+    background-color: hsl(var(--muted));
+  }
+
+  /* La misma celda, en el encabezado: ahí el fondo de la fila ya es `bg-muted/40`. */
+  .table-pinned-head {
+    background-color: color-mix(in srgb, hsl(var(--muted)) 40%, var(--color-surface));
+  }
+
   .no-scrollbar::-webkit-scrollbar {
     display: none;
   }
@@ -770,6 +827,16 @@
    un scale() por sutil que sea se percibe como un salto horizontal
    grande (la fila "crece" varios px de cada lado), mucho más
    notorio que el leve ascenso vertical que sí queremos.
+
+   El escalonado se corta en la fila 20 y de ahí en adelante no hay
+   animación. Es una entrada, y lo que entra es lo que se ve al llegar:
+   de la 21 en adelante nadie está mirando todavía. Dejarlas también
+   escalonadas tenía un precio que solo se paga con carga al bajar —y
+   se paga caro—: `both` hace que la fila tome el fotograma inicial
+   durante la espera, o sea `opacity: 0`, así que cada tanda que llega
+   al hacer scroll se quedaba en blanco algo más de un segundo antes
+   de aparecer. Filas vacías, que es justo lo contrario de lo que la
+   cascada quería conseguir.
 */
 @layer utilities {
   @keyframes table-row-in {
@@ -808,7 +875,7 @@
   [data-slot="table-body"] > tr:nth-child(18), tbody > tr:nth-child(18) { animation-delay: 935ms; }
   [data-slot="table-body"] > tr:nth-child(19), tbody > tr:nth-child(19) { animation-delay: 990ms; }
   [data-slot="table-body"] > tr:nth-child(20), tbody > tr:nth-child(20) { animation-delay: 1045ms; }
-  [data-slot="table-body"] > tr:nth-child(n+21), tbody > tr:nth-child(n+21) { animation-delay: 1100ms; }
+  [data-slot="table-body"] > tr:nth-child(n+21), tbody > tr:nth-child(n+21) { animation: none; }
 
   @media (prefers-reduced-motion: reduce) {
     [data-slot="table-body"] > tr,
@@ -918,6 +985,16 @@
     from { transform: scaleX(0); }
     to { transform: scaleX(1); }
   }
+  /* Same grow-in, but for the compact vertical bars in MetricSummaryCard's
+     rings row — they fill bottom-up, not left-to-right. */
+  .pulse-bar-grow-y {
+    animation: pulse-bar-grow-y 720ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: 180ms;
+  }
+  @keyframes pulse-bar-grow-y {
+    from { transform: scaleY(0); }
+    to { transform: scaleY(1); }
+  }
   /* The ring eases open via a transition on its dash offset (a keyframe
      cannot know where each ring stops); the sparkline draws itself along
      its normalized path length; the area and end dot simply fade in. */
@@ -943,6 +1020,7 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .pulse-bar-grow,
+    .pulse-bar-grow-y,
     .pulse-line-draw,
     .pulse-fade-in { animation: none; }
     .pulse-ring-draw { transition: none; }

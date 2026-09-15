@@ -1,32 +1,29 @@
 /**
- * El árbol de resultados: secciones y subsecciones.
+ * El árbol de resultados, siempre de objetivos para abajo:
+ *
+ *   objetivo de empresa → {el corte del "Ver por"} → objetivo → persona
  *
  * Un ciclo de objetivos tiene jerarquía de verdad —un objetivo de empresa se
- * reparte en objetivos de área, que se reparten en objetivos de persona— y
- * leerla como una tabla plana pierde la única pregunta que importa: *qué está
- * frenando qué*.
+ * reparte entre grupos y personas— y leerla como una tabla plana pierde la
+ * única pregunta que importa: *qué está frenando qué*.
  *
- * El mismo árbol se puede recorrer por tres ejes distintos, y son tres
- * lecturas del mismo dato, no tres pantallas:
- *
- *   objetivos     empresa → grupo → objetivo → persona
- *   organización  área → líder → persona → objetivo
- *   medida        tipo de medida → objetivo → persona
- *
- * El primero responde "¿qué objetivo de empresa está en riesgo y por culpa de
- * quién?". El segundo, "¿qué área va mal?". El tercero es el que descubre que
- * todos los objetivos de tipo "Se cumple / No se cumple" están sin reportar.
+ * El segundo nivel no está quemado: es el mismo "Ver por" de la barra de
+ * arriba. Así "¿cómo va el objetivo de ingresos por área?" y "¿y por país?"
+ * son el mismo árbol leído con otro corte, en vez de tres árboles distintos
+ * con su propio selector. Antes había uno —ejes "organización" y "medida"—
+ * que competía con el "Ver por" global: dos controles con la misma etiqueta
+ * al lado, contestando cosas distintas.
  */
 
-import { MEASURE_META, MEASURE_ORDER, type MeasureType } from "@/components/ciclo-builder";
 import { average, resolveEstado, type CicloDetailData } from "@/components/ciclo-detail";
 import { countLifecycles } from "./objectiveLifecycle";
+import { BREAKDOWN_META, breakdownValueOf, type BreakdownKey } from "./resultsBreakdown";
 import {
+  countEstados,
   riskFor,
   type PersonResultRow,
   type ResultEntry,
   type ResultNode,
-  type ResultsAxis,
   type ResultsConfig,
 } from "./resultsModel";
 
@@ -68,6 +65,7 @@ function makeNode(seed: NodeSeed, data: CicloDetailData, config: ResultsConfig, 
     objectiveCount: seed.entries.length,
     reportedCount: seed.entries.filter((entry) => entry.hasProgress).length,
     lifecycleCounts: countLifecycles(seed.entries.map((entry) => entry.lifecycle)),
+    estadoCounts: countEstados(seed.entries),
     risk: riskFor(percent, elapsed),
     personIds,
     children: seed.children,
@@ -92,6 +90,8 @@ interface BuildArgs {
   entries: readonly ResultEntry[];
   config: ResultsConfig;
   elapsed: number;
+  /** El corte del "Ver por" con el que se abre cada objetivo de empresa. */
+  breakdown: BreakdownKey;
 }
 
 /** El nodo hoja de una persona dentro de un objetivo. */
@@ -142,10 +142,8 @@ function objectiveNode(
   );
 }
 
-// ── Eje: objetivos de empresa ──────────────────────────────────────────────
-
 function buildByObjectives(args: BuildArgs): ResultNode[] {
-  const { data, entries } = args;
+  const { data, entries, breakdown } = args;
   const companyById = new Map(data.companyObjectives.map((objective) => [objective.id, objective]));
 
   const byCompany = groupBy(entries, (entry) => {
@@ -163,28 +161,39 @@ function buildByObjectives(args: BuildArgs): ResultNode[] {
       const companyEntries = byCompany.get(companyId) ?? [];
       const company = companyById.get(companyId);
 
-      const byGroup = groupBy(companyEntries, (entry) => entry.person.groupId ?? "Individual");
-      const children = [...byGroup.entries()].map(([groupLabel, groupEntries]) => {
-        const byObjective = groupBy(groupEntries, (entry) => entry.objective.id);
+      // El corte del "Ver por": por asignación son los grupos de siempre, por
+      // área son las áreas, y así. La rama "Individual" de la asignación se
+      // nombra por lo que es —objetivos que nadie recibió por grupo—.
+      const byCut = groupBy(companyEntries, (entry) =>
+        breakdownValueOf(
+          { collaborator: entry.person.collaborator, groupId: entry.person.groupId },
+          breakdown
+        )
+      );
+      const children = [...byCut.entries()].map(([cutLabel, cutEntries]) => {
+        const byObjective = groupBy(cutEntries, (entry) => entry.objective.id);
         const memberPercents = [
-          ...new Set(groupEntries.map((entry) => entry.personId)),
+          ...new Set(cutEntries.map((entry) => entry.personId)),
         ].map(
           (personId) => args.rows.find((row) => row.person.id === personId)?.percent ?? 0
         );
         return makeNode(
           {
-            id: `${companyId}::${groupLabel}`,
+            id: `${companyId}::${cutLabel}`,
             kind: "grupo",
-            title: groupLabel === "Individual" ? "Objetivos individuales" : groupLabel,
+            title:
+              breakdown === "grupo" && cutLabel === "Individual"
+                ? "Objetivos individuales"
+                : cutLabel,
             subtitle: `${plural(
-              new Set(groupEntries.map((entry) => entry.personId)).size,
+              new Set(cutEntries.map((entry) => entry.personId)).size,
               "persona",
               "personas"
             )} · ${plural(byObjective.size, "objetivo", "objetivos")}`,
-            entries: groupEntries,
+            entries: cutEntries,
             percentOverride: average(memberPercents),
             children: [...byObjective.values()].map((objectiveEntries) =>
-              objectiveNode(`${companyId}::${groupLabel}`, objectiveEntries, args)
+              objectiveNode(`${companyId}::${cutLabel}`, objectiveEntries, args)
             ),
           },
           args.data,
@@ -214,132 +223,6 @@ function buildByObjectives(args: BuildArgs): ResultNode[] {
     });
 }
 
-// ── Eje: organización ──────────────────────────────────────────────────────
-
-function buildByOrganization(args: BuildArgs): ResultNode[] {
-  const { rows, entries } = args;
-  const rowById = new Map(rows.map((row) => [row.person.id, row]));
-
-  const byArea = groupBy(entries, (entry) => entry.person.collaborator.area);
-
-  return [...byArea.entries()]
-    .sort(([a], [b]) => a.localeCompare(b, "es"))
-    .map(([area, areaEntries]) => {
-      const byLeader = groupBy(
-        areaEntries,
-        (entry) => entry.person.collaborator.leader ?? "Sin líder"
-      );
-
-      const leaderNodes = [...byLeader.entries()].map(([leader, leaderEntries]) => {
-        const byPerson = groupBy(leaderEntries, (entry) => entry.personId);
-        const personNodes = [...byPerson.entries()].map(([personId, personEntries]) => {
-          const row = rowById.get(personId);
-          return makeNode(
-            {
-              id: `${area}::${leader}::${personId}`,
-              kind: "persona",
-              title: row?.collaborator.name ?? personId,
-              subtitle: `${plural(personEntries.length, "objetivo", "objetivos")} · ${
-                row?.estadoParticipante?.nombre ?? "Activo"
-              }`,
-              entries: personEntries,
-              percentOverride: row?.percent,
-              children: personEntries.map((entry) =>
-                makeNode(
-                  {
-                    id: `${area}::${leader}::${personId}::${entry.objective.id}`,
-                    kind: "objetivo",
-                    title: entry.objective.title || "Objetivo sin nombre",
-                    subtitle: `Peso ${entry.objective.weight} %`,
-                    entries: [entry],
-                    children: [],
-                    weight: entry.objective.weight,
-                    lifecycle: entry.lifecycle,
-                  },
-                  args.data,
-                  args.config,
-                  args.elapsed
-                )
-              ),
-            },
-            args.data,
-            args.config,
-            args.elapsed
-          );
-        });
-
-        return makeNode(
-          {
-            id: `${area}::${leader}`,
-            kind: "lider",
-            title: leader,
-            subtitle: plural(personNodes.length, "persona a cargo", "personas a cargo"),
-            entries: leaderEntries,
-            percentOverride: average(personNodes.map((node) => node.percent)),
-            children: personNodes,
-          },
-          args.data,
-          args.config,
-          args.elapsed
-        );
-      });
-
-      return makeNode(
-        {
-          id: area,
-          kind: "area",
-          title: area,
-          subtitle: `${plural(leaderNodes.length, "líder", "líderes")} · ${plural(
-            new Set(areaEntries.map((entry) => entry.personId)).size,
-            "persona",
-            "personas"
-          )}`,
-          entries: areaEntries,
-          percentOverride: average(leaderNodes.map((node) => node.percent)),
-          children: leaderNodes,
-        },
-        args.data,
-        args.config,
-        args.elapsed
-      );
-    });
-}
-
-// ── Eje: tipo de medida ────────────────────────────────────────────────────
-
-function buildByMeasure(args: BuildArgs): ResultNode[] {
-  const byMeasure = groupBy(
-    args.entries,
-    (entry) => (entry.objective.measure ?? "numeric") as MeasureType
-  );
-
-  return MEASURE_ORDER.filter((measure) => (byMeasure.get(measure)?.length ?? 0) > 0).map(
-    (measure) => {
-      const measureEntries = byMeasure.get(measure) ?? [];
-      const byObjective = groupBy(measureEntries, (entry) => entry.objective.id);
-      return makeNode(
-        {
-          id: `medida::${measure}`,
-          kind: "medida",
-          title: MEASURE_META[measure].label,
-          subtitle: `${MEASURE_META[measure].tagline} · ${plural(
-            byObjective.size,
-            "objetivo",
-            "objetivos"
-          )}`,
-          entries: measureEntries,
-          children: [...byObjective.values()].map((objectiveEntries) =>
-            objectiveNode(`medida::${measure}`, objectiveEntries, args)
-          ),
-        },
-        args.data,
-        args.config,
-        args.elapsed
-      );
-    }
-  );
-}
-
 // ── Entrada pública ────────────────────────────────────────────────────────
 
 /**
@@ -348,18 +231,19 @@ function buildByMeasure(args: BuildArgs): ResultNode[] {
  * "sin riesgo" sin que el árbol tenga que saber por qué.
  */
 export function buildResultsTree(
-  axis: ResultsAxis,
+  breakdown: BreakdownKey,
   data: CicloDetailData,
   rows: readonly PersonResultRow[],
   entries: readonly ResultEntry[],
   config: ResultsConfig,
   elapsed: number
 ): readonly ResultNode[] {
-  const args: BuildArgs = { data, rows, entries, config, elapsed };
-  if (axis === "organizacion") return buildByOrganization(args);
-  if (axis === "medida") return buildByMeasure(args);
-  return buildByObjectives(args);
+  return buildByObjectives({ data, rows, entries, config, elapsed, breakdown });
 }
+
+/** Como se titula el árbol con el corte puesto: "Objetivos de empresa por área". */
+export const resultsTreeTitle = (breakdown: BreakdownKey): string =>
+  `Objetivos de empresa por ${BREAKDOWN_META[breakdown].noun}`;
 
 /** Todos los nodos de un árbol, en orden de lectura. */
 export function flattenNodes(nodes: readonly ResultNode[]): ResultNode[] {

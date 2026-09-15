@@ -19,6 +19,8 @@ export interface DualDateRangePickerProps {
   endDate?: Date | null;
   /** Callback when dates change */
   onChange?: (range: { startDate: Date | undefined; endDate: Date | undefined }) => void;
+  /** Callback when explicitly applied */
+  onApply?: () => void;
   /** Label for start date */
   startLabel?: string;
   /** Label for end date */
@@ -43,6 +45,15 @@ export interface DualDateRangePickerProps {
   className?: string;
   /** Whether to close the popover immediately after selecting the start date */
   autoCloseOnStartSelect?: boolean;
+  /**
+   * Controlled open state — pass this together with `onOpenChange` to open
+   * or close the popover from the parent (e.g. right after picking a preset
+   * duration, so the calendar is already active for the author to confirm
+   * or change the start date). Omit both to keep the picker's own
+   * click-to-open behavior, unchanged for every existing caller.
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 /**
@@ -70,6 +81,7 @@ export const DualDateRangePicker = React.forwardRef<
   startDate,
   endDate,
   onChange,
+  onApply,
   startLabel = "Fecha de inicio",
   endLabel = "Fecha de cierre",
   startPlaceholder = "Selecciona fecha",
@@ -82,9 +94,29 @@ export const DualDateRangePicker = React.forwardRef<
   locale = "es",
   className,
   autoCloseOnStartSelect = false,
+  open: openProp,
+  onOpenChange,
 }, ref) => {
-  const [open, setOpen] = React.useState(false);
+  const [internalOpen, setInternalOpen] = React.useState(false);
+  const isOpenControlled = openProp !== undefined;
+  const open = isOpenControlled ? openProp : internalOpen;
+  const setOpen = React.useCallback(
+    (next: boolean) => {
+      if (!isOpenControlled) setInternalOpen(next);
+      onOpenChange?.(next);
+    },
+    [isOpenControlled, onOpenChange]
+  );
   const [activeStep, setActiveStep] = React.useState<"start" | "end">("start");
+
+  // Abrir desde afuera siempre empieza por el inicio: es el mismo punto de
+  // partida que tiene el picker al montarse, y es lo único que un padre
+  // externo (elegir una duración) tiene sentido que decida por el autor.
+  const wasOpenRef = React.useRef(open);
+  React.useEffect(() => {
+    if (isOpenControlled && open && !wasOpenRef.current) setActiveStep("start");
+    wasOpenRef.current = open;
+  }, [isOpenControlled, open]);
   const [tempFrom, setTempFrom] = React.useState<Date | undefined>(
     startDate && isValidDate(startDate) ? startDate : undefined
   );
@@ -181,6 +213,7 @@ export const DualDateRangePicker = React.forwardRef<
   const handleApply = (e: React.MouseEvent) => {
     e.stopPropagation();
     onChange?.({ startDate: tempFrom, endDate: tempTo });
+    onApply?.();
     setOpen(false);
   };
 
@@ -200,7 +233,7 @@ export const DualDateRangePicker = React.forwardRef<
 
   const hasStart = !!tempFrom;
   const hasEnd = !!tempTo;
-  const canApply = hasStart;
+  const canApply = hasStart && hasEnd;
 
   const [transitionEnabled, setTransitionEnabled] = React.useState(false);
   const [renderedStep, setRenderedStep] = React.useState(activeStep);
@@ -324,9 +357,14 @@ export const DualDateRangePicker = React.forwardRef<
           className="w-[var(--radix-popover-trigger-width)] p-0 bg-transparent border-none shadow-none z-50 data-open:animate-in data-open:fade-in data-open:slide-in-from-top-2 data-open:zoom-in-100 data-open:duration-200 data-open:[animation-timing-function:ease-out]"
           align="start"
           sideOffset={8}
-          onPointerDownOutside={() => {
-            // Keep selection when clicking outside
-            onChange?.({ startDate: tempFrom, endDate: tempTo });
+          onPointerDownOutside={(e) => {
+            const target = e.target as HTMLElement;
+            // Si el clic fue en los botones de duración, dejamos que pase el clic nativo
+            if (!target.closest("[data-period-picker]")) {
+              // Si es un clic afuera normal, evitamos que se cierre para cumplir con que
+              // solo se cierre con 'Aplicar' o 'Borrar'.
+              e.preventDefault();
+            }
           }}
         >
           {/* Animated sliding container */}

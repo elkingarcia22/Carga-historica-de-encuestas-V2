@@ -1,34 +1,49 @@
 import * as React from "react";
-import { AlertTriangle, ArrowRight, Scale, Sparkles, TrendingDown, MessageSquareOff } from "lucide-react";
+import { motion } from "framer-motion";
+import { RefreshCw, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
-import { average, formatPercent } from "@/components/ciclo-detail";
+import { cascadeContainer } from "@/lib/cascadeAnimation";
+import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/feedback";
+import { AiAnalyzingState } from "@/components/ai-interaction";
+import { formatPercent } from "@/components/ciclo-detail";
+import { MetricSummaryCard } from "@/components/survey-results";
+import { MeasurementScaleButton } from "@/components/survey-results/MeasurementScaleButton";
+import {
+  InsightConfidenceFilter,
+  useConfidenceFilter,
+} from "@/components/survey-results/InsightConfidenceFilter";
+import {
+  CONFIDENCE_ORDER,
+  type InsightConfidence,
+} from "@/components/survey-results/insightConfidence";
+import { CICLO_CONFIDENCE_LEGEND } from "./cicloConfidence";
+import { Sparkline } from "@/components/survey-analytics/pulseCharts";
+import { buildCicloAnalysis, type InsightAction, type InsightKind } from "./cicloInsights";
+import { CicloInsightList, type InsightGroup } from "./CicloInsightList";
+import { CicloAiFocusSection, CicloAiStrengthsSection } from "./CicloAiWeightSections";
+import { CicloAiGapsSection, CicloAiGovernanceSection } from "./CicloAiContextSections";
 import type { CicloResults, PersonResultRow, ResultEntry } from "./resultsModel";
-import type { FilterKey, ResultsFiltersState } from "./useResultsFilters";
+import type { ResultsFiltersState } from "./useResultsFilters";
 
 /**
- * El análisis.
+ * La lectura que la IA hace del ciclo, en el chasis del propio reporte.
  *
- * Mismo formato que el reporte de una encuesta: primero la afirmación, después
- * la evidencia sobre la que se apoya. Y una regla que la hace utilizable —cada
- * hallazgo termina en un gesto que lleva al lector a la vista donde puede
- * hacer algo, con los filtros ya puestos. Un insight que obliga a reconstruir
- * a mano el filtro que lo produjo es una nota al margen, no un hallazgo.
+ * Las otras cuatro pestañas están armadas igual: las cifras de cabecera como
+ * una tarjeta de métrica, y debajo una sola superficie con su barra pegajosa
+ * sobre un esquema plegable. Esta pestaña era un banner y dos tarjetas
+ * sueltas —una forma que no aparece en ningún otro sitio del reporte—, así
+ * que el análisis se leía como otro producto pegado al final en vez de como
+ * la última vista del mismo.
  *
- * Todo lo de aquí se deriva de los mismos números de las otras pestañas: no
- * hay una segunda fuente de verdad que pueda contradecir a la tabla.
+ * Lo que cambió con la forma es el contenido. Un ciclo de objetivos no se
+ * analiza como una encuesta: aquí nadie respondió nada, aquí alguien se
+ * comprometió a mover una cifra y el calendario lleva un rato corriendo. Las
+ * preguntas propias —¿va a llegar?, ¿de qué depende?, ¿dónde se abre?, ¿se
+ * está llevando bien?— viven en `cicloInsights`, que las deriva de los mismos
+ * números de las demás pestañas: no hay una segunda fuente de verdad que
+ * pueda contradecir a la tabla de al lado.
  */
-
-interface Finding {
-  id: string;
-  tone: "negative" | "warning" | "info";
-  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
-  claim: string;
-  evidence: string;
-  actionLabel: string;
-  apply: () => void;
-}
 
 interface AnalisisIaTabProps {
   results: CicloResults;
@@ -38,238 +53,353 @@ interface AnalisisIaTabProps {
   onGoTo: (tab: "cumplimiento" | "colaboradores" | "ranking") => void;
 }
 
+const formatCount = (value: number) => new Intl.NumberFormat("es-CO").format(value);
+
+/** Las tres preguntas con las que un lector llega, en el orden en que llega. */
+const KIND_META: Readonly<Record<InsightKind, { heading: string; question: string }>> = {
+  finding: { heading: "Hallazgos", question: "qué está pasando en este ciclo" },
+  risk: { heading: "Riesgos", question: "qué está en juego si nadie lo atiende" },
+  recommendation: { heading: "Qué hacer", question: "por dónde abrir el plan" },
+};
+
+const KIND_ORDER: readonly InsightKind[] = ["finding", "risk", "recommendation"];
+
+const RING_COLOR: Readonly<Record<InsightKind, string>> = {
+  finding: "var(--color-brand)",
+  risk: "#EF4444",
+  recommendation: "#22C55E",
+};
+
+/** Cuánto tarda el re-análisis simulado. */
+const REANALYSIS_STEP_MS = 400;
+
+const LOADER_STEPS = [
+  "Leyendo avances y comparándolos con el calendario…",
+  "Repartiendo el peso del ciclo entre áreas y equipos…",
+  "Buscando brechas entre cortes con muestra suficiente…",
+  "Revisando aprobaciones, comentarios y ritmo de reporte…",
+] as const;
+
 export function AnalisisIaTab({ results, rows, entries, filters, onGoTo }: AnalisisIaTabProps) {
-  const findings = React.useMemo<Finding[]>(() => {
-    const list: Finding[] = [];
-    /*
-     * Un ciclo cerrado cambia el tiempo verbal de todo lo que sigue. "Va
-     * atrasada", "está en riesgo" y "no puede pasar de" son pronósticos, y
-     * sobre algo que ya terminó son falsos aunque los números que los
-     * produjeron sean los mismos: ahí no hay atraso, hay resultado.
-     */
-    const isClosed = !results.showsRisk;
-    const focus = (key: FilterKey, value: string, tab: "cumplimiento" | "colaboradores" | "ranking") => () => {
+  const [isAnalyzing, setIsAnalyzing] = React.useState(false);
+  const [progress, setProgress] = React.useState(0);
+  const [kindFilter, setKindFilter] = React.useState<ReadonlySet<InsightKind>>(new Set());
+  const confidence = useConfidenceFilter();
+
+  const analysis = React.useMemo(
+    () => buildCicloAnalysis(results, rows, entries),
+    [results, rows, entries]
+  );
+
+  const toggleKind = (kind: InsightKind) => {
+    setKindFilter((current) => {
+      const next = new Set(current);
+      if (next.has(kind)) next.delete(kind);
+      else next.add(kind);
+      return next;
+    });
+  };
+
+  /*
+   * El análisis se deriva de forma síncrona; la espera solo existe para que el
+   * estado que la función real sí va a tener —"esto toma un momento"— se vea
+   * en la interfaz.
+   */
+  React.useEffect(() => {
+    if (!isAnalyzing) return;
+    let current = 0;
+    const interval = setInterval(() => {
+      current += Math.floor(Math.random() * 8) + 4;
+      if (current >= 100) {
+        clearInterval(interval);
+        setProgress(100);
+        window.setTimeout(() => {
+          setIsAnalyzing(false);
+          setProgress(0);
+        }, 700);
+      } else {
+        setProgress(current);
+      }
+    }, REANALYSIS_STEP_MS);
+    return () => clearInterval(interval);
+  }, [isAnalyzing]);
+
+  /** Lleva al lector a la vista que responde lo que acaba de pulsar. */
+  const runAction = React.useCallback(
+    (action: InsightAction) => {
       filters.clearAll();
-      filters.toggle(key, value);
-      onGoTo(tab);
+      if (action.filter) filters.toggle(action.filter.key, action.filter.value);
+      onGoTo(action.tab);
+    },
+    [filters, onGoTo]
+  );
+
+  const counts = React.useMemo(() => {
+    const total = analysis.insights.length;
+    const byKind = (kind: InsightKind) =>
+      analysis.insights.filter((insight) => insight.kind === kind).length;
+    const byConfidence = Object.fromEntries(
+      CONFIDENCE_ORDER.map((level) => [
+        level,
+        analysis.insights.filter((insight) => insight.confidence === level).length,
+      ])
+    ) as Record<InsightConfidence, number>;
+
+    return {
+      total,
+      finding: byKind("finding"),
+      risk: byKind("risk"),
+      recommendation: byKind("recommendation"),
+      byConfidence,
+      solidShare: total > 0 ? Math.round((byConfidence.high / total) * 100) : 0,
     };
+  }, [analysis]);
 
-    // 1. El área más atrasada frente al calendario.
-    const byArea = new Map<string, PersonResultRow[]>();
-    rows
-      .filter((row) => row.counts)
-      .forEach((row) => {
-        const bucket = byArea.get(row.area);
-        if (bucket) bucket.push(row);
-        else byArea.set(row.area, [row]);
-      });
-    const areaScores = [...byArea.entries()]
-      .filter(([, members]) => members.length >= 3)
-      .map(([area, members]) => ({ area, percent: average(members.map((m) => m.percent)), size: members.length }))
-      .sort((a, b) => a.percent - b.percent);
+  const visibleGroups = React.useMemo<readonly InsightGroup[]>(
+    () =>
+      KIND_ORDER.map((kind) => ({
+        id: kind,
+        heading: KIND_META[kind].heading,
+        question: KIND_META[kind].question,
+        items: analysis.insights.filter(
+          (insight) =>
+            insight.kind === kind &&
+            confidence.levels.has(insight.confidence) &&
+            (kindFilter.size === 0 || kindFilter.has(insight.kind))
+        ),
+      })).filter((group) => group.items.length > 0),
+    [analysis, confidence.levels, kindFilter]
+  );
 
-    if (areaScores.length > 1) {
-      const worst = areaScores[0];
-      const best = areaScores[areaScores.length - 1];
-      const gap = Math.round(results.elapsed - worst.percent);
-      const spread = Math.round(best.percent - worst.percent);
+  const visibleCount = visibleGroups.reduce((sum, group) => sum + group.items.length, 0);
+  const nextNumbering = visibleGroups.length;
 
-      if (isClosed && spread >= 5) {
-        list.push({
-          id: "area-ultima",
-          tone: "negative",
-          icon: TrendingDown,
-          claim: `${worst.area} cerró como el área de menor cumplimiento.`,
-          evidence: `Cerró en ${formatPercent(worst.percent)} sobre ${worst.size} personas, ${spread} puntos por debajo de ${best.area}, que fue la más alta con ${formatPercent(best.percent)}. El promedio del ciclo quedó en ${formatPercent(results.overallPercent)}.`,
-          actionLabel: `Ver ${worst.area}`,
-          apply: focus("areas", worst.area, "cumplimiento"),
-        });
-      } else if (!isClosed && gap > 10) {
-        list.push({
-          id: "area-atrasada",
-          tone: "negative",
-          icon: TrendingDown,
-          claim: `${worst.area} es el área más atrasada del ciclo.`,
-          evidence: `Va en ${formatPercent(worst.percent)} con ${Math.round(
-            results.elapsed
-          )} % del calendario corrido — ${gap} puntos por debajo de lo esperado, sobre ${worst.size} personas. El promedio del ciclo es ${formatPercent(results.overallPercent)}.`,
-          actionLabel: `Ver ${worst.area}`,
-          apply: focus("areas", worst.area, "cumplimiento"),
-        });
-      }
+  /*
+   * La columna de la derecha de la tarjeta nunca se queda en blanco. Lo normal
+   * es que muestre los focos que más resultado ponen en juego; cuando el ciclo
+   * va tan parejo que ninguno se descuelga, muestra los grupos más rezagados
+   * del corte que más se abre, que es la única otra cosa que hay que mirar.
+   */
+  const topAreas = React.useMemo(() => {
+    if (analysis.focus.length > 0) {
+      return analysis.focus.slice(0, 3).map((row) => ({
+        id: row.id,
+        label: row.label,
+        value: row.weightShare,
+        displayValue: `${row.weightShare} % del peso`,
+      }));
     }
-
-    // 2. Cuello de botella de aprobación.
-    const porAprobar = results.lifecycleCounts.get("por-aprobar") ?? 0;
-    const porAjustar = results.lifecycleCounts.get("por-ajustar") ?? 0;
-    const blocked = porAprobar + porAjustar;
-    if (blocked > 0) {
-      const share = Math.round((blocked / Math.max(1, results.objectiveCount)) * 100);
-      list.push({
-        id: "aprobacion",
-        tone: share >= 15 ? "negative" : "warning",
-        icon: AlertTriangle,
-        claim:
-          share >= 15
-            ? `El ${share} % de los objetivos todavía no puede arrancar.`
-            : `${blocked} objetivos siguen esperando el flujo de aprobación.`,
-        evidence: isClosed
-          ? `${porAprobar} nunca recibieron el visto bueno de su líder y ${porAjustar} se quedaron con cambios pedidos. El ciclo cerró contándolos en cero sin que nadie hubiera podido moverlos.`
-          : `${porAprobar} esperan el visto bueno de su líder y ${porAjustar} volvieron con cambios pedidos. Ninguno de ellos suma avance, así que el ${formatPercent(
-              results.overallPercent
-            )} general se está calculando con objetivos que nadie puede mover todavía.`,
-        actionLabel: "Ver los bloqueados",
-        apply: focus("lifecycles", "por-aprobar", "cumplimiento"),
-      });
-    }
-
-    // 3. Objetivos que avanzan sin conversación.
-    const silent = entries.filter((entry) => entry.hasProgress && entry.commentCount === 0);
-    if (silent.length > 0 && entries.length > 0) {
-      const share = Math.round((silent.length / entries.length) * 100);
-      if (share >= 30) {
-        list.push({
-          id: "sin-conversacion",
-          tone: "info",
-          icon: MessageSquareOff,
-          claim: `${share} % de los objetivos con avance no tienen un solo comentario.`,
-          evidence: `${silent.length} objetivos registran cifras pero ninguna explicación. ${
-            isClosed
-              ? "El ciclo cerró sin que quede por escrito por qué subieron o bajaron"
-              : "Al cierre nadie va a poder decir por qué subieron o bajaron"
-          }, y esa es justo la conversación que un ciclo de objetivos debería dejar.`,
-          actionLabel: "Ver colaboradores",
-          apply: () => {
-            filters.clearAll();
-            onGoTo("colaboradores");
-          },
-        });
-      }
-    }
-
-    // 4. Desbalance de peso: mucho peso en objetivos que no arrancan.
-    const stalledWeight = entries
-      .filter((entry) => !entry.hasProgress)
-      .reduce((sum, entry) => sum + entry.objective.weight, 0);
-    const totalWeight = entries.reduce((sum, entry) => sum + entry.objective.weight, 0);
-    if (totalWeight > 0) {
-      const share = Math.round((stalledWeight / totalWeight) * 100);
-      if (share >= 25) {
-        list.push({
-          id: "peso-detenido",
-          tone: "warning",
-          icon: Scale,
-          claim: isClosed
-            ? `El ${share} % del peso del ciclo cerró sin ningún avance reportado.`
-            : `El ${share} % del peso del ciclo está en objetivos sin ningún avance.`,
-          evidence: isClosed
-            ? `No es lo mismo cerrar con muchos objetivos quietos que cerrar quietos los que más pesan. Ese peso por sí solo le puso techo al resultado en ${100 - share} %, sin importar cómo le fue al resto.`
-            : `No es lo mismo tener muchos objetivos quietos que tener quietos los que más pesan. Aquí el peso detenido supera un cuarto del total: aunque todo lo demás llegue al 100 %, el ciclo no puede pasar de ${100 - share} %.`,
-          actionLabel: "Ver los detenidos",
-          apply: focus("lifecycles", "por-iniciar", "cumplimiento"),
-        });
-      }
-    }
-
-    // 5. Riesgo concentrado. Solo mientras el ciclo siga vivo: en uno cerrado
-    // el riesgo ya se resolvió, para bien o para mal, y decirlo ahora sería
-    // repetir la banda de resultado con otra palabra.
-    const alto = results.riskCounts.get("alto") ?? 0;
-    if (!isClosed && alto > 0) {
-      list.push({
-        id: "riesgo-alto",
-        tone: "negative",
-        icon: AlertTriangle,
-        claim: `${alto} ${alto === 1 ? "persona está" : "personas están"} en riesgo alto de no cumplir.`,
-        evidence: `Su avance va 25 puntos o más por debajo del calendario ya corrido. Con ${results.daysLeft} ${
-          Math.abs(results.daysLeft) === 1 ? "día" : "días"
-        } ${results.daysLeft >= 0 ? "por delante" : "de cerrado el ciclo"}, es el grupo donde una conversación cambia el resultado.`,
-        actionLabel: "Ver en riesgo alto",
-        apply: focus("risks", "alto", "colaboradores"),
-      });
-    }
-
-    return list;
-  }, [results, rows, entries, filters, onGoTo]);
+    const widest = analysis.gaps[0];
+    if (!widest) return [];
+    return widest.laggards.slice(0, 3).map((group) => ({
+      id: `${widest.id}:${group.label}`,
+      label: group.label,
+      value: Math.abs(group.diff),
+      displayValue: `${group.diff} pts`,
+    }));
+  }, [analysis]);
 
   return (
-    <div className="flex flex-col gap-4">
-      <section className="flex items-start gap-3.5 rounded-2xl border border-ai-border bg-ai-bg p-5">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-surface shadow-card">
-          <Sparkles className="size-4 text-ai-gradient" strokeWidth={2.3} />
-        </span>
-        <div className="min-w-0">
-          <p className="text-[13.5px] font-bold text-text-primary">
-            {findings.length === 0
-              ? "Sin hallazgos que reportar"
-              : `${findings.length} ${findings.length === 1 ? "hallazgo" : "hallazgos"} sobre este ciclo`}
-          </p>
-          <p className="mt-0.5 text-[12.5px] leading-relaxed text-text-secondary">
-            Cada afirmación viene con la evidencia que la sostiene y con el atajo a la vista donde
-            se puede hacer algo al respecto. Todo sale de los mismos números de las demás pestañas.
-          </p>
-        </div>
-      </section>
+    <div className="flex h-full min-h-0 flex-col gap-6">
+      {/* La misma fila de cabecera con la que abren las otras pestañas: de qué
+          está hecha la lectura, para saber su tamaño antes de entrar en ella. */}
+      <MetricSummaryCard
+        accentColor="bg-primary"
+        title="Lecturas de la IA"
+        hint={
+          <div className="flex flex-col gap-3 leading-relaxed">
+            <p className="text-[12px]">
+              <strong>Análisis con IA:</strong>
+              <br />
+              Lecturas generadas a partir de los mismos números de las demás pestañas de este
+              ciclo.
+            </p>
+          </div>
+        }
+        bigValue={formatCount(counts.total)}
+        caption={`${counts.solidShare} % con confiabilidad alta`}
+        ringsLabel="Qué contiene la lectura"
+        ringsTotal={`${formatCount(counts.total)} en total`}
+        rings={KIND_ORDER.map((kind) => ({
+          id: kind,
+          label: KIND_META[kind].heading,
+          percentage: Math.round((counts[kind] / Math.max(counts.total, 1)) * 100),
+          color: RING_COLOR[kind],
+          count: formatCount(counts[kind]),
+          active: kindFilter.has(kind),
+          onToggle: () => toggleKind(kind),
+        }))}
+        topAreasTitle={
+          analysis.focus.length > 0
+            ? "Top 3 focos con más resultado en juego"
+            : "Top 3 grupos por debajo del promedio"
+        }
+        topAreas={topAreas}
+        chartTitle="Avance en el tiempo"
+        chart={
+          <Sparkline
+            points={results.timeline.map((point) => ({
+              id: point.date,
+              name: point.label,
+              value: point.percent,
+            }))}
+            format={(value) => formatPercent(value)}
+            ariaLabel="Avance del ciclo en el tiempo"
+            height={56}
+            showPoints
+            fitTarget={false}
+          />
+        }
+      />
 
-      {findings.length === 0 ? (
-        <EmptyState
-          title="Nada preocupante por ahora"
-          description="Ni el calendario, ni las aprobaciones, ni el reparto de pesos muestran algo fuera de lugar en este ciclo."
-        />
-      ) : (
-        <div className="flex flex-col gap-3">
-          {findings.map((finding, index) => (
-            <FindingCard key={finding.id} finding={finding} numbering={index + 1} />
-          ))}
+      {/* pb-20: la barra flotante de la pantalla se posa sobre los últimos ~80px. */}
+      <div className="min-h-0 flex-1 pb-20">
+        <div className="flex flex-col gap-4 rounded-2xl border border-border/60 bg-surface p-4 shadow-card">
+          {/* La misma barra pegajosa que usan Cumplimiento y Colaboradores. */}
+          <div className="sticky top-3 z-30 -mt-4 bg-surface pb-2 pt-4">
+            <div className="flex flex-wrap items-center gap-4 pb-2">
+              <div className="flex items-center gap-2">
+                <h3 className="text-[13px] font-bold text-text-primary">Lectura de la IA</h3>
+                <Badge
+                  variant="neutral"
+                  className="h-5 px-1.5 text-[11px] font-semibold tabular-nums"
+                >
+                  {visibleCount}
+                </Badge>
+              </div>
+
+              <div className="ml-auto flex items-center justify-end gap-3">
+                <InsightConfidenceFilter filter={confidence} counts={counts.byConfidence} />
+                <ReanalyzeChip
+                  isAnalyzing={isAnalyzing}
+                  onClick={() => {
+                    setProgress(0);
+                    setIsAnalyzing(true);
+                  }}
+                />
+                <MeasurementScaleButton
+                  items={CICLO_CONFIDENCE_LEGEND}
+                  title="Confiabilidad de la lectura"
+                  description="Cada lectura dice qué tan directa es la cifra en la que se apoya, y sobre cuánta gente descansa. Alta sale de un número del ciclo sobre un corte grande; media es una comparación razonable; baja es un indicio sobre pocas personas."
+                />
+              </div>
+            </div>
+          </div>
+
+          {isAnalyzing ? (
+            <AiAnalyzingState
+              title="Generando nuevo análisis"
+              progress={progress}
+              detail="Procesando el ciclo"
+              caption={LOADER_STEPS[Math.min(LOADER_STEPS.length - 1, Math.floor(progress / 25))]}
+            />
+          ) : (
+            <>
+              <AnalysisSummary summary={analysis.summary} />
+
+              {/* Una sola cascada compartida: cada bloque llega en su turno en
+                  vez de aparecer toda la pila como un bloque. */}
+              <motion.div
+                className="flex flex-col gap-6"
+                initial="hidden"
+                animate="show"
+                variants={cascadeContainer}
+              >
+                {visibleGroups.length === 0 ? (
+                  <EmptyState
+                    icon={Sparkles}
+                    title="Sin lecturas con esta confiabilidad"
+                    description="Ninguna lectura de este ciclo cae en las bandas seleccionadas. Vuelve a marcarlas en «Confiabilidad» para ver el análisis completo."
+                    className="border-none bg-transparent shadow-none"
+                  />
+                ) : (
+                  <CicloInsightList groups={visibleGroups} onAction={runAction} />
+                )}
+
+                {/* Los cuatro bloques propios del ciclo. Con un filtro de tipo
+                    puesto desaparecen: el lector pidió ver un tipo de lectura,
+                    no el informe completo. */}
+                {kindFilter.size === 0 && (
+                  <>
+                    <CicloAiFocusSection
+                      focus={analysis.focus}
+                      numbering={nextNumbering + 1}
+                      elapsed={results.showsRisk ? results.elapsed : null}
+                      onAction={runAction}
+                    />
+                    <CicloAiStrengthsSection
+                      strengths={analysis.strengths}
+                      numbering={nextNumbering + 2}
+                      onAction={runAction}
+                    />
+                    <CicloAiGapsSection
+                      gaps={analysis.gaps}
+                      numbering={nextNumbering + 3}
+                      onAction={runAction}
+                    />
+                    <CicloAiGovernanceSection
+                      governance={analysis.governance}
+                      numbering={nextNumbering + 4}
+                      onAction={runAction}
+                    />
+                  </>
+                )}
+              </motion.div>
+            </>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
 
-const TONE_STYLES = {
-  negative: {
-    border: "border-red-200/70 dark:border-red-800/40",
-    chip: "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300",
-  },
-  warning: {
-    border: "border-amber-200/70 dark:border-amber-800/40",
-    chip: "bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300",
-  },
-  info: {
-    border: "border-blue-200/70 dark:border-blue-800/40",
-    chip: "bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300",
-  },
-} as const;
-
-function FindingCard({ finding, numbering }: { finding: Finding; numbering: number }) {
-  const tone = TONE_STYLES[finding.tone];
+/**
+ * El resumen ejecutivo como una franja sobre el esquema.
+ *
+ * El mismo sitio —y el mismo fondo apagado— que el Resumen le da a su franja
+ * de pendientes: una referencia fija por la que el lector pasa camino al
+ * detalle, no un panel que se queda con el tercio superior de la pantalla.
+ */
+function AnalysisSummary({ summary }: { summary: string }) {
   return (
-    <article className={cn("flex flex-col gap-3 rounded-2xl border bg-surface p-5 shadow-card", tone.border)}>
-      <header className="flex items-start gap-3">
-        <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-xl", tone.chip)}>
-          <finding.icon className="size-4" strokeWidth={2.3} />
+    <div className="flex flex-col gap-3 rounded-xl border border-border/60 bg-muted/30 px-6 py-5">
+      <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] font-semibold leading-none text-text-secondary">
+        <Sparkles className="h-3.5 w-3.5 text-primary" strokeWidth={2} />
+        Resumen general
+        <span className="ml-auto text-[11px] font-medium text-muted-foreground">
+          Generado a partir de los resultados de este ciclo
         </span>
-        <div className="min-w-0 flex-1">
-          <p className="text-[10.5px] font-bold uppercase tracking-wide text-text-muted">
-            Hallazgo {numbering}
-          </p>
-          <p className="mt-0.5 text-[14.5px] font-bold leading-snug tracking-tight text-text-primary">
-            {finding.claim}
-          </p>
-        </div>
-      </header>
+      </span>
 
-      <p className="border-l-2 border-border pl-3.5 text-[12.5px] leading-relaxed text-text-secondary">
-        {finding.evidence}
-      </p>
+      <p className="max-w-5xl text-[13px] leading-[1.75] text-text-primary">{summary}</p>
+    </div>
+  );
+}
 
-      <div className="flex justify-end">
-        <Button variant="outline" size="sm" onClick={finding.apply} className="gap-1.5 text-[12.5px]">
-          {finding.actionLabel}
-          <ArrowRight className="size-3.5" strokeWidth={2.4} />
-        </Button>
-      </div>
-    </article>
+/** El botón de rehacer el análisis, con el borde degradado de la IA. */
+function ReanalyzeChip({
+  isAnalyzing,
+  onClick,
+}: {
+  isAnalyzing: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={isAnalyzing}
+      className="group relative flex h-9 shrink-0 items-center gap-1.5 overflow-hidden rounded-lg border border-border bg-surface px-3 text-[13px] font-semibold text-text-primary transition-colors hover:border-transparent disabled:opacity-60"
+    >
+      <span
+        aria-hidden
+        className="absolute inset-0 -z-10 bg-ai-gradient opacity-0 transition-opacity duration-300 group-hover:opacity-10"
+      />
+      <RefreshCw
+        className={cn("h-3.5 w-3.5 text-ai-gradient", isAnalyzing && "animate-spin")}
+        strokeWidth={2.2}
+      />
+      {isAnalyzing ? "Analizando…" : "Re-analizar"}
+    </button>
   );
 }

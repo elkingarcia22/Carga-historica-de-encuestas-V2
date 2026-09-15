@@ -62,6 +62,32 @@ export interface ResultsConfig {
   allowNegative: boolean;
 }
 
+/**
+ * El nivel que recibe quien todavía no ha reportado nada.
+ *
+ * No se configura ni se puede borrar, porque no es una banda de la escala: es
+ * la ausencia de la escala. Alguien sin un solo avance saldría en el primer
+ * nivel configurado —"Por mejorar" con un 0 %—, y eso es una calificación
+ * sobre un trabajo que nadie ha visto todavía. "Por iniciar" dice lo único
+ * que de verdad se sabe de esa persona.
+ */
+export const NIVEL_POR_INICIAR: NivelDesempenoConfig = {
+  id: "sin-iniciar",
+  nombre: "Por iniciar",
+  minPorcentaje: 0,
+  maxPorcentaje: 0,
+  colorHex: "#CBD5E1",
+};
+
+/**
+ * La escala de cumplimiento tal como se lee: "Por iniciar" primero y detrás
+ * los niveles configurados. Es también el orden con el que la tabla de
+ * colaboradores ordena su columna de estado.
+ */
+export const nivelesConSinIniciar = (
+  niveles: readonly NivelDesempenoConfig[]
+): readonly NivelDesempenoConfig[] => [NIVEL_POR_INICIAR, ...niveles];
+
 // ── Riesgo ─────────────────────────────────────────────────────────────────
 
 /**
@@ -170,6 +196,24 @@ export interface ResultEntry {
   inactivation: ObjectiveInactivation | null;
 }
 
+/**
+ * Cuántos objetivos cayeron en cada banda de cumplimiento configurada.
+ *
+ * Es el reparto que el producto llama "estado del objetivo" —el que el cliente
+ * configura—, no el ciclo de vida, que mezcla la aprobación con el avance y
+ * cuyos nombres ("Por iniciar", "En progreso") chocan con los de las bandas.
+ */
+export function countEstados(
+  entries: readonly { estado: ObjetivoEstadoConfig | null }[]
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  entries.forEach((entry) => {
+    if (!entry.estado) return;
+    counts.set(entry.estado.id, (counts.get(entry.estado.id) ?? 0) + 1);
+  });
+  return counts;
+}
+
 export interface PersonResultRow {
   person: TrackedPerson;
   collaborator: Collaborator;
@@ -182,6 +226,8 @@ export interface PersonResultRow {
   risk: RiskLevel;
   entries: readonly ResultEntry[];
   lifecycleCounts: Map<ObjectiveLifecycle, number>;
+  /** Sus objetivos repartidos por banda de cumplimiento configurada. */
+  estadoCounts: Map<string, number>;
   reportedCount: number;
   lastUpdate: ObjectiveUpdate | null;
   groupLabel: string;
@@ -191,22 +237,9 @@ export interface PersonResultRow {
 
 // ── Árbol ──────────────────────────────────────────────────────────────────
 
-export type ResultsAxis = "objetivos" | "organizacion" | "medida";
-
-export const AXIS_LABELS: Readonly<Record<ResultsAxis, string>> = {
-  objetivos: "Objetivos de empresa",
-  organizacion: "Organización",
-  medida: "Tipo de medida",
-};
-
-export type ResultNodeKind =
-  | "empresa"
-  | "grupo"
-  | "area"
-  | "lider"
-  | "medida"
-  | "objetivo"
-  | "persona";
+/** El árbol va siempre de objetivo de empresa para abajo; el segundo nivel lo
+ *  pone el "Ver por", así que no hay más formas de nodo que estas. */
+export type ResultNodeKind = "empresa" | "grupo" | "objetivo" | "persona";
 
 export interface ResultNode {
   id: string;
@@ -224,6 +257,8 @@ export interface ResultNode {
   objectiveCount: number;
   reportedCount: number;
   lifecycleCounts: Map<ObjectiveLifecycle, number>;
+  /** Los objetivos de debajo, repartidos por banda de cumplimiento. */
+  estadoCounts: Map<string, number>;
   risk: RiskLevel;
   personIds: readonly string[];
   children: readonly ResultNode[];
@@ -283,7 +318,8 @@ export interface CicloResults {
   lifecycleCounts: Map<ObjectiveLifecycle, number>;
   nivelCounts: Map<string, number>;
   /**
-   * Los niveles tal como están configurados, en su orden.
+   * La escala de cumplimiento: "Por iniciar" y detrás los niveles
+   * configurados, en su orden.
    *
    * Va aquí y no se rebusca desde las filas porque un nivel en el que no cayó
    * nadie no aparece en ninguna fila —y es justo el que hay que poder
@@ -307,7 +343,6 @@ export interface CicloResults {
    * cumplir— y uno cerrado no usa "En progreso".
    */
   estados: readonly ObjetivoEstadoConfig[];
-  estadoParticipanteCounts: Map<string, number>;
   riskCounts: Map<RiskLevel, number>;
   measureMix: readonly MeasureShare[];
   /** Cuántos objetivos cuelgan de cada objetivo de empresa, más los sueltos. */
@@ -416,6 +451,7 @@ export function buildCicloResults(
     });
 
     const percent = personCompliance(person, config.allowNegative);
+    const reportedCount = personEntries.filter((entry) => entry.hasProgress).length;
     // El estado del participante viaja con el colaborador en producción; aquí
     // lo trae el mock ya resuelto en `person.collaborator`.
     const estadoParticipante =
@@ -428,13 +464,14 @@ export function buildCicloResults(
       collaborator: person.collaborator,
       percent,
       estado: resolveEstado(config.estados, percent, data.status),
-      nivel: resolveNivel(config.niveles, percent),
+      nivel: reportedCount === 0 ? NIVEL_POR_INICIAR : resolveNivel(config.niveles, percent),
       estadoParticipante,
       counts: estadoParticipante?.cuentaEnResultados ?? true,
       risk: riskFor(percent, riskElapsed),
       entries: personEntries,
       lifecycleCounts: countLifecycles(personEntries.map((entry) => entry.lifecycle)),
-      reportedCount: personEntries.filter((entry) => entry.hasProgress).length,
+      estadoCounts: countEstados(personEntries),
+      reportedCount,
       lastUpdate: personLastUpdate(person),
       groupLabel: person.groupId ?? "Individual",
       area: person.collaborator.area,
@@ -450,18 +487,10 @@ export function buildCicloResults(
     return row?.counts ?? true;
   });
 
-  const nivelCounts = new Map<string, number>(config.niveles.map((nivel) => [nivel.id, 0]));
+  const niveles = nivelesConSinIniciar(config.niveles);
+  const nivelCounts = new Map<string, number>(niveles.map((nivel) => [nivel.id, 0]));
   scored.forEach((row) => {
     if (row.nivel) nivelCounts.set(row.nivel.id, (nivelCounts.get(row.nivel.id) ?? 0) + 1);
-  });
-
-  const estadoParticipanteCounts = new Map<string, number>(
-    config.estadosParticipante.map((estado) => [estado.id, 0])
-  );
-  rows.forEach((row) => {
-    if (!row.estadoParticipante) return;
-    const id = row.estadoParticipante.id;
-    estadoParticipanteCounts.set(id, (estadoParticipanteCounts.get(id) ?? 0) + 1);
   });
 
   const riskCounts = new Map<RiskLevel, number>(RISK_ORDER.map((level) => [level, 0]));
@@ -557,11 +586,10 @@ export function buildCicloResults(
     showsRisk,
     lifecycleCounts: countLifecycles(scoredEntries.map((entry) => entry.lifecycle)),
     nivelCounts,
-    niveles: config.niveles,
+    niveles,
     approvalCounts,
     estadoCounts,
     estados,
-    estadoParticipanteCounts,
     riskCounts,
     measureMix,
     companyObjectiveMix,

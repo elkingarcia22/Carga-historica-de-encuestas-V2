@@ -74,14 +74,39 @@ function SheetContent({
   children,
   side = "right",
   showCloseButton = true,
+  modal = true,
+  overlayClassName,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left"
   showCloseButton?: boolean
+  /** Debe coincidir con el `modal` del `Sheet`: decide quién dibuja el velo. */
+  modal?: boolean
+  /** Recorta el velo. Lo usa un panel que convive con algo fuera del drawer
+   *  —el del Agente IA— para no taparlo. */
+  overlayClassName?: string
 }) {
   return (
     <SheetPortal>
-      <SheetOverlay />
+      {modal ? (
+        <SheetOverlay className={overlayClassName} />
+      ) : (
+        /* Radix no dibuja velo cuando el diálogo no es modal —su Overlay
+           devuelve null—, así que lo ponemos nosotros. Sin él, el drawer
+           flotaría sobre una pantalla que sigue viva y clicable detrás: la
+           modalidad se apaga para dejar hablar a un panel concreto de al
+           lado, no para devolverle la página entera a quien está a mitad de
+           una edición. Va por debajo del panel (z-40 contra el z-50 del
+           contenido) y `overlayClassName` es lo que le abre el hueco. */
+        <div
+          data-slot="sheet-overlay"
+          aria-hidden
+          className={cn(
+            "fixed inset-y-0 left-0 right-0 z-40 bg-black/10 supports-[backdrop-filter]:backdrop-blur-[2px] animate-overlay-in",
+            overlayClassName
+          )}
+        />
+      )}
       <SheetPrimitive.Content
         data-slot="sheet-content"
         data-side={side}

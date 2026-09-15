@@ -12,6 +12,7 @@ import {
   TrendingUp,
   UserCog,
   UsersRound,
+  SlidersHorizontal,
   type LucideIcon,
 } from "lucide-react";
 import { toneForIndex, type Tone } from "@/lib/tone";
@@ -76,6 +77,7 @@ export const OBJECTIVE_CREATOR_VISUAL: Readonly<Record<CicloObjectiveCreator, Un
   leader: { icon: UserCog },
   collaborator: { icon: UsersRound },
   hr: { icon: Building2 },
+  custom: { icon: SlidersHorizontal },
 };
 
 /**

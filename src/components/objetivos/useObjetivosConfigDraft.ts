@@ -2,8 +2,8 @@ import * as React from "react";
 import { toast } from "sonner";
 import type { ConfigTab, PermissionDefinition } from "./objetivosConfigParts";
 import {
-  DEFAULT_ESTADOS_OBJETIVOS,
   ESTADOS_FIJOS_OBJETIVO,
+  estadosConPermisoNegativo,
   getObjetivosConfig,
   nivelesDesdeEstados,
   setObjetivosConfig,
@@ -261,29 +261,16 @@ export function useObjetivosConfigDraft({ open, initialTab, onSaved }: UseObjeti
     }
   }, [open, initialTab]);
 
+  // La regla vive en el store (`estadosConPermisoNegativo`), compartida con el
+  // estado inicial de la app: dos copias de "sin permiso no hay banda
+  // negativa" eran justo lo que dejaba el store arrancar desalineado de su
+  // propio permiso por defecto.
   React.useEffect(() => {
     setEstados((prev) => {
-      if (!allowNegativeResults) {
-        // Sin permiso no hay bandas negativas: se quitan las puramente
-        // negativas y se recortan a 0 las que asomaban por debajo.
-        const filtered = prev.filter((est) => est.maxPorcentaje >= 0);
-        let changed = filtered.length !== prev.length;
-        const next = filtered.map((est) => {
-          if (est.minPorcentaje < 0) {
-            changed = true;
-            return { ...est, minPorcentaje: 0 };
-          }
-          return est;
-        });
-        return changed ? next : prev;
-      }
-      // Al encender el permiso vuelve la banda negativa por defecto si no hay
-      // ninguna: es la que la pantalla de resultados espera encontrar.
-      const hasNegative = prev.some((est) => est.minPorcentaje < 0 || est.id === "resto");
-      if (hasNegative) return prev;
-      const restoState = DEFAULT_ESTADOS_OBJETIVOS.find((e) => e.id === "resto");
-      if (!restoState) return prev;
-      return [...prev, restoState].sort((a, b) => a.minPorcentaje - b.minPorcentaje);
+      const next = estadosConPermisoNegativo(prev, allowNegativeResults);
+      const unchanged =
+        next.length === prev.length && next.every((estado, index) => estado === prev[index]);
+      return unchanged ? prev : next;
     });
   }, [allowNegativeResults]);
 

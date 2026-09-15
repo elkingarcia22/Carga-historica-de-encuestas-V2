@@ -11,6 +11,12 @@ export {
   RailGroupShimmer,
   useContextChangeKey,
 } from "./ActionRailShell";
+export {
+  ConfirmActionPopover,
+  RailConfirmButton,
+  railButtonClass,
+} from "./ConfirmActionPopover";
+export type { ConfirmTone } from "./ConfirmActionPopover";
 export { RailOverflowMenu } from "./RailOverflowMenu";
 export type { RailOverflowItem } from "./RailOverflowMenu";
 export { RailSettingsMenu } from "./RailSettingsMenu";

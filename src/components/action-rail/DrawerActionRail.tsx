@@ -11,7 +11,12 @@ interface DrawerActionRailProps {
   hint?: React.ReactNode;
   /** Acciones puntuales del paso: cuadrar pesos, resolver un conflicto. */
   tools?: React.ReactNode;
-  /** Lo que cierra el paso: continuar, guardar. */
+  /**
+   * Lo que cierra el paso: continuar, guardar. `null` cuando las acciones
+   * dependen de una selección y no hay nada marcado — el grupo y su divisoria
+   * se caen del todo, igual que el `contextual` de `ActionRailShell`, en vez
+   * de quedarse montadas y apagadas.
+   */
   actions: React.ReactNode;
   /**
    * Mantiene la barra abierta pese a la preferencia de auto-ocultar. Los
@@ -149,8 +154,10 @@ export function DrawerActionRail({
               </>
             )}
 
-            {!minimal && <div className="mx-1 my-2 w-px self-stretch bg-white/10" />}
-            <div className="flex items-center gap-2">{actions}</div>
+            {!minimal && actions != null && (
+              <div className="mx-1 my-2 w-px self-stretch bg-white/10" />
+            )}
+            {actions != null && <div className="flex items-center gap-2">{actions}</div>}
           </div>
         </div>
       </div>

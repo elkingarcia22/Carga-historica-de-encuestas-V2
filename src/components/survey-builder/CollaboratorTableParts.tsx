@@ -10,9 +10,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { TableCell } from "@/components/ui/table";
-import type { Collaborator } from "@/mocks/collaborators";
-import { avatarColor, initials } from "./collaboratorTableShared";
 
 /** Which column the table is sorted by, and in which direction. */
 export type SortKey = "name" | "email";
@@ -159,36 +156,5 @@ export function PagerButton({
     >
       {children}
     </button>
-  );
-}
-
-/**
- * The data cells of a directory row, shared by the pickable list and the
- * import preview so both render the same columns the same way. The selection
- * checkbox is deliberately not part of it — the importer has nothing to
- * select.
- */
-export function CollaboratorRow({ person }: { person: Collaborator }) {
-  return (
-    <>
-      <TableCell className="min-w-[200px] py-2.5">
-        <div className="flex items-center gap-2.5">
-          <span
-            aria-hidden
-            className={cn(
-              "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] font-bold",
-              avatarColor(person.id)
-            )}
-          >
-            {initials(person.name)}
-          </span>
-          <p className="min-w-0 truncate text-[13px] font-semibold text-text-primary">{person.name}</p>
-        </div>
-      </TableCell>
-      <TableCell className="text-[13px] text-text-secondary">{person.username}</TableCell>
-      <TableCell className="text-[13px] text-text-secondary">{person.email}</TableCell>
-      <TableCell className="text-[13px] text-text-secondary">{person.area}</TableCell>
-      <TableCell className="pr-4 text-[13px] text-text-secondary">{person.leader ?? "—"}</TableCell>
-    </>
   );
 }

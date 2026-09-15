@@ -40,9 +40,53 @@ export function HeaderSelectionMark({ state }: { state: boolean | "indeterminate
   );
 }
 
+/**
+ * La casilla del encabezado cuando la tabla no se lee por páginas.
+ *
+ * Sin páginas no hay "esta página" que marcar, y un desplegable con una sola
+ * opción dentro es un clic de más para hacer lo que la casilla ya dice: en
+ * scroll infinito vuelve a ser una casilla —marca todo lo que hay, se vuelve a
+ * pulsar y lo desmarca— y el menú aparece solo cuando hay páginas de verdad.
+ */
+export function HeaderSelectAllCheckbox({
+  state,
+  disabled,
+  onSelectAll,
+  onDeselectAll,
+  align = "center",
+  label = "Seleccionar todos",
+}: {
+  state: boolean | "indeterminate";
+  disabled?: boolean;
+  onSelectAll: () => void;
+  onDeselectAll: () => void;
+  /** Igual que en el menú: tiene que caer sobre el eje de las filas. */
+  align?: "center" | "start";
+  label?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex h-8 w-full items-center",
+        align === "start" ? "justify-start" : "justify-center"
+      )}
+    >
+      <Checkbox
+        checked={state}
+        disabled={disabled}
+        aria-label={label}
+        /* "Algunas" cuenta como "no todas": el clic marca el resto, igual que
+           en cualquier lista con selección parcial. */
+        onCheckedChange={() => (state === true ? onDeselectAll() : onSelectAll())}
+      />
+    </div>
+  );
+}
+
 /** The bulk-selection menu that lives in a table's first header cell. */
 export function SelectionHeaderMenu({
   state,
+  paged,
   pageCount,
   matchCount,
   showSelectPage,
@@ -57,6 +101,12 @@ export function SelectionHeaderMenu({
   align = "center",
 }: {
   state: boolean | "indeterminate";
+  /**
+   * Si la tabla se lee por páginas. Solo entonces hay un menú: en scroll
+   * infinito "esta página" no nombra nada que el lector pueda ver, así que la
+   * casilla se queda sola y marca todo lo que hay.
+   */
+  paged: boolean;
   /** Rows on the current page, for the menu's own label. */
   pageCount: number;
   /** Rows matching the current search and filters, across every page. */
@@ -80,6 +130,19 @@ export function SelectionHeaderMenu({
    */
   align?: "center" | "start";
 }) {
+  if (!paged) {
+    return (
+      <HeaderSelectAllCheckbox
+        state={state}
+        disabled={!showSelectAll && !showDeselectAll}
+        onSelectAll={onSelectAll}
+        onDeselectAll={onDeselectAll}
+        align={align}
+        label={`Seleccionar todos (${formatCount(matchCount)})`}
+      />
+    );
+  }
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -129,6 +192,7 @@ export function SelectionHeaderMenu({
 /** A column that can be both sorted and filtered down to a set of values. */
 export function FilterSortHeader({
   label,
+  filterLabel,
   options,
   selected,
   onToggleFilter,
@@ -143,6 +207,12 @@ export function FilterSortHeader({
   defaultAllSelected = false,
 }: {
   label: string;
+  /**
+   * Cómo se nombra el embudo cuando la columna se filtra por algo que no es
+   * su propio título — "Colaborador" listando áreas—, para que el lector de
+   * pantalla no anuncie "Filtrar por Colaborador" sobre una lista de áreas.
+   */
+  filterLabel?: string;
   options: readonly string[];
   selected: ReadonlySet<string>;
   onToggleFilter: (value: string) => void;
@@ -179,7 +249,7 @@ export function FilterSortHeader({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            aria-label={`Filtrar por ${label}`}
+            aria-label={`Filtrar por ${filterLabel ?? label}`}
             className={cn(
               "flex h-6 w-6 items-center justify-center rounded-md transition-colors",
               activeCount > 0 ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted"

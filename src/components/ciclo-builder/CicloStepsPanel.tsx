@@ -3,8 +3,7 @@ import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
-  CICLO_STEP_HINTS,
-  CICLO_STEP_LABELS,
+  cicloStepLabel,
   cicloStepNumber,
   getCicloStepState,
   getCicloStepperOrder,
@@ -27,18 +26,28 @@ interface CicloStepsPanelProps {
 /**
  * The circle carrying a step's state: its number while reachable, a check once
  * done, and the same muted treatment as the survey builder while it is locked.
+ *
+ * El chulito no depende de que el paso esté quieto: un paso terminado lo
+ * lleva también mientras se está mirando, igual que las cabeceras del
+ * acordeón de la parametrización. Al retomar un borrador, eso es lo que
+ * cuenta de un vistazo cuánto camino hay hecho.
  */
 function StepMarker({
   step,
   state,
   stepOrder,
   hasError,
+  isComplete,
 }: {
   step: CicloStepId;
   state: CicloStepState;
   stepOrder: readonly CicloStepId[];
   hasError?: boolean;
+  /** El paso no tiene nada pendiente, esté activo o no. */
+  isComplete: boolean;
 }) {
+  const showCheck = isComplete && !hasError;
+
   return (
     <div className="relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-surface">
       {state === "complete" && !hasError && (
@@ -62,7 +71,7 @@ function StepMarker({
         )}
       >
         <AnimatePresence initial={false}>
-          {state === "complete" && !hasError ? (
+          {showCheck ? (
             <motion.div
               key="check"
               initial={{ scale: 0.5, opacity: 0 }}
@@ -127,7 +136,12 @@ export function CicloStepsPanel({
   const stateOf = (step: CicloStepId) => getCicloStepState(step, stepInput, activeStep);
   const hasError = (step: CicloStepId) =>
     errorSteps?.has(step) === true && !isCicloStepComplete(step, stepInput);
-  const stepOrder = getCicloStepperOrder(stepInput.draft);
+  // Un paso que el autor todavía no ha abierto no lleva chulito aunque sus
+  // valores por defecto ya cumplan — la misma regla que `getCicloStepState`.
+  const isComplete = (step: CicloStepId) =>
+    stepInput.visitedSteps.has(step) && isCicloStepComplete(step, stepInput);
+  const stepOrder = getCicloStepperOrder(stepInput.draft, stepInput.flow);
+  const labelOf = (step: CicloStepId) => cicloStepLabel(step, stepInput.flow);
 
   if (isCollapsed) {
     return (
@@ -173,15 +187,21 @@ export function CicloStepsPanel({
                       type="button"
                       onClick={isLocked ? undefined : () => onSelectStep(step)}
                       disabled={isLocked}
-                      aria-label={CICLO_STEP_LABELS[step]}
+                      aria-label={labelOf(step)}
                       aria-current={state === "active" ? "step" : undefined}
                       className="rounded-full transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed enabled:active:scale-95"
                     >
-                      <StepMarker step={step} state={state} stepOrder={stepOrder} hasError={hasError(step)} />
+                      <StepMarker
+                        step={step}
+                        state={state}
+                        stepOrder={stepOrder}
+                        hasError={hasError(step)}
+                        isComplete={isComplete(step)}
+                      />
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="right" className="max-w-[220px]">
-                    {CICLO_STEP_LABELS[step]}
+                    {labelOf(step)}
                   </TooltipContent>
                 </Tooltip>
               </div>
@@ -243,7 +263,13 @@ export function CicloStepsPanel({
                   />
                 )}
 
-                <StepMarker step={step} state={state} stepOrder={stepOrder} hasError={stepHasError} />
+                <StepMarker
+                  step={step}
+                  state={state}
+                  stepOrder={stepOrder}
+                  hasError={stepHasError}
+                  isComplete={isComplete(step)}
+                />
 
                 <span className="relative z-10 flex min-w-0 flex-1 flex-col gap-0.5">
                   <span
@@ -256,7 +282,7 @@ export function CicloStepsPanel({
                       state === "locked" && "font-medium text-muted-foreground/70"
                     )}
                   >
-                    {CICLO_STEP_LABELS[step]}
+                    {labelOf(step)}
                   </span>
                 </span>
               </button>

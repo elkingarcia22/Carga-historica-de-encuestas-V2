@@ -45,6 +45,14 @@ export interface ConfirmDialogProps {
   disabled?: boolean
   /** Custom classes for the dialog content */
   className?: string
+  /** Label for an optional third button, rendered between cancel and confirm
+   *  — e.g. a destructive "Salir sin guardar" alongside a primary "Guardar y
+   *  salir" `confirmLabel`. Omit for the plain two-button dialog. */
+  secondaryLabel?: string
+  /** Visual style for the secondary button. Defaults to "outline". */
+  secondaryVariant?: "default" | "destructive" | "outline"
+  /** Callback for the secondary button. Required when `secondaryLabel` is set. */
+  onSecondary?: () => void
 }
 
 export function ConfirmDialog({
@@ -62,6 +70,9 @@ export function ConfirmDialog({
   loading = false,
   disabled = false,
   className,
+  secondaryLabel,
+  secondaryVariant = "outline",
+  onSecondary,
 }: ConfirmDialogProps) {
   // Map variant to button variant
   const actionVariant = variant === "destructive" ? "destructive" : "default"
@@ -147,12 +158,26 @@ export function ConfirmDialog({
         )}
 
         <AlertDialogFooter>
-          <AlertDialogCancel 
+          <AlertDialogCancel
             onClick={onCancel}
             disabled={loading || disabled}
           >
             {cancelLabel}
           </AlertDialogCancel>
+          {secondaryLabel && (
+            <AlertDialogAction
+              variant={secondaryVariant}
+              onClick={(e) => {
+                if (onSecondary) {
+                  e.preventDefault()
+                  onSecondary()
+                }
+              }}
+              disabled={loading || disabled}
+            >
+              {secondaryLabel}
+            </AlertDialogAction>
+          )}
           <AlertDialogAction
             variant={actionVariant}
             onClick={(e) => {

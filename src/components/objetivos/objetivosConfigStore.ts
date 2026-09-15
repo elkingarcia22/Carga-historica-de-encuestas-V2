@@ -319,6 +319,44 @@ export function getEstadoBadgeConfig(est: ObjetivoEstadoConfig): EstadoBadgeConf
 export const DEFAULT_ALLOW_NEGATIVE_RESULTS = false;
 
 /**
+ * Las bandas de cumplimiento, coherentes con el permiso de resultados
+ * negativos: sin el permiso, ninguna banda negativa sobrevive.
+ *
+ * Existe porque `DEFAULT_ESTADOS_OBJETIVOS` trae "Restó (Negativo)" siempre
+ * —es una lista de bandas, no sabe de permisos— y antes solo el drawer
+ * aplicaba esta regla, al abrirse. Eso dejaba un hueco real: el estado
+ * inicial del store combinaba `DEFAULT_ESTADOS_OBJETIVOS` (con "Restó") y
+ * `DEFAULT_ALLOW_NEGATIVE_RESULTS` (`false`) sin pasar nunca por el drawer, así
+ * que toda la app arrancaba mostrando —en Resumen, en Cumplimiento, en el
+ * heatmap, en "Filtros"— una banda que la propia configuración por defecto
+ * dice que no está permitida. Se veía como si los resultados no supieran leer
+ * lo que ya se configuró.
+ *
+ * Ahora es la misma regla en un solo lugar: la usa el estado inicial del
+ * store (abajo) y el efecto del drawer que reacciona al toggle, en vez de
+ * cada uno con su propia copia que podía desalinearse.
+ */
+export function estadosConPermisoNegativo(
+  estados: readonly ObjetivoEstadoConfig[],
+  allowNegative: boolean
+): ObjetivoEstadoConfig[] {
+  if (!allowNegative) {
+    // Sin permiso no hay bandas negativas: se quitan las puramente negativas
+    // y se recortan a 0 las que asomaban por debajo.
+    return estados
+      .filter((estado) => estado.maxPorcentaje >= 0)
+      .map((estado) => (estado.minPorcentaje < 0 ? { ...estado, minPorcentaje: 0 } : estado));
+  }
+  // Con el permiso encendido, la banda negativa por defecto vuelve si no hay
+  // ninguna: es la que la pantalla de resultados espera encontrar.
+  const hasNegative = estados.some((estado) => estado.minPorcentaje < 0 || estado.id === "resto");
+  if (hasNegative) return [...estados];
+  const restoState = DEFAULT_ESTADOS_OBJETIVOS.find((estado) => estado.id === "resto");
+  if (!restoState) return [...estados];
+  return [...estados, restoState].sort((a, b) => a.minPorcentaje - b.minPorcentaje);
+}
+
+/**
  * Un nivel de desempeño: la calificación que recibe una persona según su
  * cumplimiento ponderado del ciclo ("Por mejorar", "Bueno", "Excelente").
  * A diferencia de los estados —que describen un objetivo— el nivel describe
@@ -456,7 +494,10 @@ interface ObjetivosConfigState {
 }
 
 let state: ObjetivosConfigState = {
-  estados: DEFAULT_ESTADOS_OBJETIVOS,
+  // No `DEFAULT_ESTADOS_OBJETIVOS` a secas: esa lista siempre trae "Restó
+  // (Negativo)", y arrancar con el permiso apagado y la banda presente es
+  // justo la inconsistencia que este arreglo cierra.
+  estados: estadosConPermisoNegativo(DEFAULT_ESTADOS_OBJETIVOS, DEFAULT_ALLOW_NEGATIVE_RESULTS),
   niveles: DEFAULT_NIVELES_DESEMPENO,
   estadosParticipante: DEFAULT_ESTADOS_PARTICIPANTE,
   allowNegativeResults: DEFAULT_ALLOW_NEGATIVE_RESULTS,

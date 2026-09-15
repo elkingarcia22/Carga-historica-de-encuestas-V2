@@ -9,12 +9,22 @@ import type { CicloResults } from "./resultsModel";
  * "168 días restantes" escondido en el pie de la tarjeta grande no era un
  * dato, era una nota al margen. Y solo no dice nada: lo que decide si hay que
  * mover algo es la comparación entre el calendario que ya corrió y el avance
- * que se lleva. Por eso las dos barras van una encima de la otra, a la misma
- * escala — la distancia entre sus puntas *es* la respuesta— y debajo va esa
- * distancia escrita, para que nadie tenga que restar de memoria.
+ * que se lleva.
+ *
+ * La primera versión dibujaba esa comparación tres veces —la línea de tiempo
+ * con su punto de "hoy", y debajo dos barras completas, una por calendario y
+ * otra por avance— y las tres decían lo mismo con contraste distinto: la
+ * barra del calendario, gris clarito sobre fondo gris, casi no se veía al
+ * lado de la del avance en azul sólido. Ahora es una sola barra —el avance,
+ * que es el dato que decide si hay que actuar— con una guía punteada en la
+ * posición del calendario ya corrido, igual que "Avance por área" marca su
+ * propio calendario: una barra de más no es una lectura más clara, es la
+ * misma lectura repetida con menos contraste.
  *
  * Un ciclo cerrado conserva la tarjeta: cuánto duró y con qué cerró siguen
- * siendo lo primero que se pregunta al abrir un reporte viejo.
+ * siendo lo primero que se pregunta al abrir un reporte viejo. Como ya cerró,
+ * la guía del calendario no aplica —el calendario entero ya corrió— así que
+ * desaparece junto con la frase de la diferencia.
  */
 
 const DAY_FORMAT = new Intl.DateTimeFormat("es-CO", { day: "numeric", month: "short" });
@@ -69,18 +79,22 @@ export function CicloTimePanel({ results }: { results: CicloResults }) {
           </span>
         </div>
 
-        {/* La línea de tiempo, con el día de hoy donde va. */}
+        {/* Una sola barra —el avance— con una guía punteada en la posición
+            del calendario ya corrido. La distancia entre el borde de la
+            barra y la guía *es* la respuesta; no hace falta una segunda
+            barra para decir lo mismo dos veces. */}
         <div className="flex flex-col gap-1.5">
-          <div className="relative h-2 w-full overflow-visible rounded-full bg-muted dark:bg-white/10">
+          <div className="relative h-2.5 w-full overflow-visible rounded-full bg-muted dark:bg-white/10">
             <span
-              className="pulse-bar-grow absolute inset-y-0 left-0 origin-left rounded-full bg-primary/35"
-              style={{ width: `${trackPosition}%` }}
+              className="pulse-bar-grow absolute inset-y-0 left-0 origin-left rounded-full bg-primary"
+              style={{ width: `${Math.max(1.5, Math.min(100, overallPercent))}%` }}
             />
             {showsRisk && (
               <span
-                className="pulse-fade-in absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-surface bg-primary shadow-sm"
+                aria-hidden
+                className="pulse-fade-in absolute -inset-y-1 z-10 w-0 border-l-2 border-dashed border-text-secondary/60"
                 style={{ left: `${trackPosition}%` }}
-                title={`Hoy · ${Math.round(elapsed)} % del calendario`}
+                title={`Calendario corrido · ${Math.round(elapsed)} %`}
               />
             )}
           </div>
@@ -90,10 +104,32 @@ export function CicloTimePanel({ results }: { results: CicloResults }) {
           </div>
         </div>
 
-        {/* Calendario contra avance, a la misma escala. */}
-        <div className="flex flex-col gap-2 border-t border-border/50 pt-3">
-          <RaceBar label="Calendario corrido" percent={elapsed} tone="muted" />
-          <RaceBar label="Avance del ciclo" percent={overallPercent} tone="brand" />
+        {/* La lectura exacta de esa misma barra, y la distancia entre sus
+            dos puntas escrita para que nadie tenga que restar de memoria. */}
+        <div className="flex flex-col gap-1.5 border-t border-border/50 pt-3">
+          <div className="flex items-center justify-between text-[11.5px] font-medium text-text-secondary">
+            <span className="flex items-center gap-1.5">
+              <span aria-hidden className="size-2 shrink-0 rounded-full bg-primary" />
+              Avance del ciclo
+            </span>
+            <span className="font-bold tabular-nums text-text-primary">
+              {Math.round(overallPercent)} %
+            </span>
+          </div>
+          {showsRisk && (
+            <div className="flex items-center justify-between text-[11.5px] font-medium text-text-secondary">
+              <span className="flex items-center gap-1.5">
+                <span
+                  aria-hidden
+                  className="size-2 shrink-0 rounded-full border-2 border-dashed border-text-secondary/60"
+                />
+                Calendario corrido
+              </span>
+              <span className="font-bold tabular-nums text-text-primary">
+                {Math.round(elapsed)} %
+              </span>
+            </div>
+          )}
           {showsRisk && (
             <p
               className={cn(
@@ -111,36 +147,5 @@ export function CicloTimePanel({ results }: { results: CicloResults }) {
         </div>
       </div>
     </SummaryPanel>
-  );
-}
-
-function RaceBar({
-  label,
-  percent,
-  tone,
-}: {
-  label: string;
-  percent: number;
-  tone: "muted" | "brand";
-}) {
-  const width = Math.max(1, Math.min(100, percent));
-  return (
-    <div className="flex items-center gap-2.5">
-      <span className="w-[112px] shrink-0 text-[11.5px] font-medium text-text-secondary">
-        {label}
-      </span>
-      <span className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted dark:bg-white/10">
-        <span
-          className={cn(
-            "pulse-bar-grow block h-full origin-left rounded-full",
-            tone === "brand" ? "bg-primary" : "bg-text-muted/45"
-          )}
-          style={{ width: `${width}%` }}
-        />
-      </span>
-      <span className="w-10 shrink-0 text-right text-[11.5px] font-bold tabular-nums text-text-primary">
-        {Math.round(percent)} %
-      </span>
-    </div>
   );
 }

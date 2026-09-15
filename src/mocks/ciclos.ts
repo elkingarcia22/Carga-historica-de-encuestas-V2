@@ -19,6 +19,7 @@ export interface CicloRow {
   /** The same figure as written in the table ("125%" can overshoot 100). */
   avance: string;
   tipoProgreso: string;
+  _draft?: import("@/components/ciclo-builder").CicloDraft;
 }
 
 export interface UsuarioSinObjetivosRow {
@@ -39,18 +40,18 @@ export interface UsuarioSinObjetivosRow {
  * already passed is not a state the product should be showing off.
  */
 const BASE_CICLOS: readonly CicloRow[] = [
-  { id: "1", nombre: "Kpis 2026", periodo: "Trimestre", fechaInicio: "01 julio 2026", fechaCierre: "01 octubre 2026", estado: "En curso", numObjetivos: 3, progreso: 7.5, avance: "7.5%", tipoProgreso: "warning" },
-  { id: "2", nombre: "Q3 GB", periodo: "Personalizado", fechaInicio: "25 agosto 2026", fechaCierre: "07 septiembre 2026", estado: "En curso", numObjetivos: 3, progreso: 100, avance: "125%", tipoProgreso: "success" },
-  { id: "3", nombre: "GBEAUTY", periodo: "Personalizado", fechaInicio: "25 agosto 2026", fechaCierre: "26 agosto 2026", estado: "Finalizado", numObjetivos: 2, progreso: 100, avance: "125%", tipoProgreso: "success" },
-  { id: "4", nombre: "bnh", periodo: "Semestre", fechaInicio: "26 agosto 2026", fechaCierre: "27 febrero 2027", estado: "Por iniciar", numObjetivos: 0, progreso: 0, avance: "0%", tipoProgreso: "neutral" },
+  { id: "1", nombre: "KPIs corporativos 2026", periodo: "Trimestre", fechaInicio: "01 julio 2026", fechaCierre: "01 octubre 2026", estado: "En curso", numObjetivos: 3, progreso: 7.5, avance: "7.5%", tipoProgreso: "warning" },
+  { id: "2", nombre: "Metas comerciales Q3", periodo: "Personalizado", fechaInicio: "25 agosto 2026", fechaCierre: "07 septiembre 2026", estado: "En curso", numObjetivos: 3, progreso: 100, avance: "125%", tipoProgreso: "success" },
+  { id: "3", nombre: "Objetivos de Talento humano", periodo: "Personalizado", fechaInicio: "25 agosto 2026", fechaCierre: "26 agosto 2026", estado: "Finalizado", numObjetivos: 2, progreso: 100, avance: "125%", tipoProgreso: "success" },
+  { id: "4", nombre: "Objetivos de Servicio al cliente · II semestre", periodo: "Semestre", fechaInicio: "26 agosto 2026", fechaCierre: "27 febrero 2027", estado: "Por iniciar", numObjetivos: 0, progreso: 0, avance: "0%", tipoProgreso: "neutral" },
   { id: "5", nombre: "Objetivos UBITS 2026", periodo: "Personalizado", fechaInicio: "26 agosto 2026", fechaCierre: "09 septiembre 2026", estado: "En curso", numObjetivos: 18, progreso: 41.75, avance: "41.75%", tipoProgreso: "warning" },
-  { id: "6", nombre: "asdasd", periodo: "Trimestre", fechaInicio: "24 agosto 2026", fechaCierre: "25 noviembre 2026", estado: "En curso", numObjetivos: 5, progreso: 20, avance: "20%", tipoProgreso: "warning" },
-  { id: "7", nombre: "Objetivos sales II semestre", periodo: "Personalizado", fechaInicio: "01 septiembre 2026", fechaCierre: "31 diciembre 2026", estado: "Por iniciar", numObjetivos: 2, progreso: 6.93, avance: "6.93%", tipoProgreso: "warning" },
-  { id: "8", nombre: "hgfhfghj", periodo: "Bimestre", fechaInicio: "20 agosto 2026", fechaCierre: "20 octubre 2026", estado: "En curso", numObjetivos: 2, progreso: 50, avance: "50%", tipoProgreso: "warning" },
-  { id: "9", nombre: "Ejemplo C.", periodo: "Semestre", fechaInicio: "20 agosto 2026", fechaCierre: "20 febrero 2027", estado: "En curso", numObjetivos: 10, progreso: 85, avance: "85%", tipoProgreso: "success" },
-  { id: "10", nombre: "Prueba con chicooos", periodo: "Mes", fechaInicio: "19 agosto 2026", fechaCierre: "19 septiembre 2026", estado: "En curso", numObjetivos: 4, progreso: 33.3, avance: "33.3%", tipoProgreso: "warning" },
-  { id: "11", nombre: "INNES Prueba Mapi", periodo: "Personalizado", fechaInicio: "01 julio 2026", fechaCierre: "18 agosto 2026", estado: "Finalizado", numObjetivos: 7, progreso: 93.81, avance: "93.81%", tipoProgreso: "success" },
-  { id: "12", nombre: "Prueba Vale Daily Talent", periodo: "Mes", fechaInicio: "18 agosto 2026", fechaCierre: "18 septiembre 2026", estado: "En curso", numObjetivos: 8, progreso: 65.5, avance: "65.5%", tipoProgreso: "success" },
+  { id: "6", nombre: "Objetivos de Producto Q4", periodo: "Trimestre", fechaInicio: "24 agosto 2026", fechaCierre: "25 noviembre 2026", estado: "En curso", numObjetivos: 5, progreso: 20, avance: "20%", tipoProgreso: "warning" },
+  { id: "7", nombre: "Objetivos de Ventas · II semestre", periodo: "Personalizado", fechaInicio: "01 septiembre 2026", fechaCierre: "31 diciembre 2026", estado: "Por iniciar", numObjetivos: 2, progreso: 6.93, avance: "6.93%", tipoProgreso: "warning" },
+  { id: "8", nombre: "Objetivos de Retención de clientes", periodo: "Bimestre", fechaInicio: "20 agosto 2026", fechaCierre: "20 octubre 2026", estado: "En curso", numObjetivos: 2, progreso: 50, avance: "50%", tipoProgreso: "warning" },
+  { id: "9", nombre: "Objetivos de compañía · II semestre", periodo: "Semestre", fechaInicio: "20 agosto 2026", fechaCierre: "20 febrero 2027", estado: "En curso", numObjetivos: 10, progreso: 85, avance: "85%", tipoProgreso: "success" },
+  { id: "10", nombre: "Objetivos de Crecimiento", periodo: "Mes", fechaInicio: "19 agosto 2026", fechaCierre: "19 septiembre 2026", estado: "En curso", numObjetivos: 4, progreso: 33.3, avance: "33.3%", tipoProgreso: "warning" },
+  { id: "11", nombre: "Objetivos de Liderazgo", periodo: "Personalizado", fechaInicio: "01 julio 2026", fechaCierre: "18 agosto 2026", estado: "Finalizado", numObjetivos: 7, progreso: 93.81, avance: "93.81%", tipoProgreso: "success" },
+  { id: "12", nombre: "Objetivos de Cultura organizacional", periodo: "Mes", fechaInicio: "18 agosto 2026", fechaCierre: "18 septiembre 2026", estado: "En curso", numObjetivos: 8, progreso: 65.5, avance: "65.5%", tipoProgreso: "success" },
 ];
 
 /** How many rows the list holds — enough to page through. */

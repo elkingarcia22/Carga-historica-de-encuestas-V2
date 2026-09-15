@@ -8,10 +8,21 @@ export { CicloIdentity } from "./CicloIdentity";
 export { CicloStepsPanel } from "./CicloStepsPanel";
 export { CicloBuilderRail } from "./CicloBuilderRail";
 export { CicloGeneralEditor } from "./CicloGeneralEditor";
+export * from "./objectiveModel";
+export { ObjectiveModelPicker } from "./ObjectiveModelPicker";
+export { ObjectiveModelDrawer } from "./ObjectiveModelDrawer";
+export { ObjectiveModelRulesEditor } from "./ObjectiveModelRulesEditor";
 export { CompanyObjectivesEditor } from "./CompanyObjectivesEditor";
 export { ObjectiveSetsEditor } from "./ObjectiveSetsEditor";
-export type { AssignmentDrawerRequest, ObjectiveSetsEditorProps } from "./ObjectiveSetsEditor";
+export type {
+  AssignmentDrawerRequest,
+  AssignmentView,
+  ObjectiveSetsEditorProps,
+} from "./ObjectiveSetsEditor";
 export { AssignmentGroupList } from "./AssignmentGroupList";
+export { AssignmentRowsTable } from "./AssignmentRowsTable";
+export * from "./assignmentRows";
+export type { AssignmentSelection } from "./assignmentSelection";
 export { ObjectiveKeyActionsField } from "./ObjectiveKeyActionsField";
 export {
   WeightBalanceDialog,
@@ -19,7 +30,7 @@ export {
   weightBalanceGroup,
 } from "./WeightBalanceDialog";
 export type { WeightBalanceGroup, WeightBalanceResult } from "./WeightBalanceDialog";
-export { WeightConflictDialog } from "./WeightConflictDialog";
+export { WeightConflictView, useWeightShares } from "./WeightConflictView";
 export * from "./weightConflicts";
 export { AssignmentDrawer } from "./AssignmentDrawer";
 export { ObjectivesStep } from "./ObjectivesStep";
@@ -42,4 +53,12 @@ export * from "./objectiveBankTypes";
 export { OBJECTIVE_BANK, bankItemCount, bankItemsForScope } from "./objectiveBankData";
 export { getBankAreasWithLibrary, addObjectiveToBank, useObjectiveBankLibrary } from "./objectiveBankLibrary";
 export { ObjectiveBankDrawer } from "./ObjectiveBankDrawer";
+export { ObjectiveBankPanel, ObjectiveBankStepHeader, useObjectiveBank } from "./ObjectiveBankPanel";
+export type { ObjectiveBankController } from "./ObjectiveBankPanel";
 export { AddObjectiveToBankDrawer } from "./AddObjectiveToBankDrawer";
+export * from "./cicloDates";
+export * from "./cicloSetup";
+export * from "./cicloSetupFlow";
+export { SetupBlock } from "./SetupBlock";
+export { CicloSetupEditor } from "./CicloSetupEditor";
+export { CicloSetupFlowToggle } from "./CicloSetupFlowToggle";

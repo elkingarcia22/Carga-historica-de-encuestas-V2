@@ -12,13 +12,19 @@ import {
   participantsGroupBreakdown,
 } from "@/components/survey-builder";
 import {
+  DEFAULT_OBJECTIVE_MODEL_RULES,
+  GOVERNANCE_META,
+  OBJECTIVE_MODEL_META,
+  CICLO_PARTICIPANTS_DESCRIPTIONS,
   PARTICIPANT_MODES_BY_CREATOR,
   CicloBuilderRail,
   CicloGeneralEditor,
   CicloIdentity,
+  CicloSetupEditor,
   CicloStepsPanel,
   CompanyObjectivesEditor,
   ObjectiveBankDrawer,
+  useCicloSetupFlow,
   assignedObjectiveCount,
   cicloStepIssue,
   createBlankObjective,
@@ -26,18 +32,24 @@ import {
   isCicloStepComplete,
   isObjectiveSetComplete,
   objectiveSetsReach,
+  resumeCicloStep,
+  visitedStepsUpTo,
   TOTAL_WEIGHT,
   totalWeight,
   setsOfKind,
+  DEFAULT_CICLO_RESULTS_POLICY,
   type AiComposerMode,
   type AiReviewActions,
   type AssignmentDrawerRequest,
+  type AssignmentSelection,
   type CicloBuilderAssignmentSeed,
   type CicloDraft,
+  type CicloResultsPolicy,
   type CicloStepId,
   type Objective,
   type ObjectiveSet,
   type ObjectiveSetKind,
+  type SetupBlockId,
 } from "@/components/ciclo-builder";
 import { ObjectivesStep } from "@/components/ciclo-builder/ObjectivesStep";
 import {
@@ -50,12 +62,18 @@ import * as sets from "@/components/ciclo-builder/objectiveSets";
 
 interface CicloBuilderProps {
   initialDraft?: CicloDraft;
+  /** El paso en el que abrir, cuando quien llama tiene uno en mente —
+   *  Participantes desde "Agregar usuarios", Objetivos desde la ficha. Sin
+   *  él, un borrador retoma donde lo dejó su autor (`_lastStep`). */
   initialStep?: CicloStepId;
+  initialObjectiveTab?: "groups" | "individual";
   /** Objetivos de plantilla en busca de destinatario — el paso de grupo o de
    *  individuo los ofrece solo en cuanto se llega a él. */
   initialAssignmentSeeds?: readonly CicloBuilderAssignmentSeed[];
   /** Called with the finished ciclo on "Finalizar", or undefined on exit. */
   onExit: (draft?: CicloDraft) => void;
+  /** Called to persist the draft without exiting */
+  onSaveDraft?: (draft: CicloDraft) => void;
 }
 
 export const createBlankCicloDraft = (): CicloDraft => {
@@ -69,7 +87,7 @@ export const createBlankCicloDraft = (): CicloDraft => {
   };
 
   const startDateStr = toISODate(start);
-  
+
   // calculate trimestre (add 3 months, minus 1 day)
   const end = new Date(start.getFullYear(), start.getMonth() + 3, start.getDate() - 1);
   const endDateStr = toISODate(end);
@@ -77,15 +95,21 @@ export const createBlankCicloDraft = (): CicloDraft => {
   return {
     name: "",
     status: "draft",
-    period: "trimestre",
+    // Sin periodo: es una pregunta de verdad del paso general, y una card ya
+    // marcada no distingue "todavía no se ha preguntado" de "ya contestó".
+    // Las fechas sí arrancan puestas —un trimestre desde hoy— como punto de
+    // partida; elegir el periodo recalcula el cierre.
+    period: null,
     startDate: startDateStr,
     endDate: endDateStr,
     description: "",
-    // El creador por defecto es "leader", así que el ciclo arranca con el
-    // mismo preset que `CicloGeneralEditor` aplicaría al elegirlo a mano —
-    // de otro modo, como esa card ya llega seleccionada, el autor nunca
-    // dispara el click que normalmente pone "Por grupos" agrupado por líder.
-    objectiveCreator: "leader",
+    // Sin modelo elegido: el paso general lo exige. Mientras tanto el ciclo
+    // corre con las reglas de SMART, que son el constructor de siempre.
+    objectiveModel: null,
+    modelRules: DEFAULT_OBJECTIVE_MODEL_RULES,
+    // El creador arranca nulo para forzar al autor a elegir una opción de gobierno
+    // explícitamente en el primer paso, en lugar de pre-seleccionar una.
+    objectiveCreator: null,
     participants: { ...DEFAULT_PARTICIPANTS, mode: "groups", groupSegmentBy: "leader" },
     useCompanyObjectives: true,
     companyObjectives: [],
@@ -96,7 +120,9 @@ export const createBlankCicloDraft = (): CicloDraft => {
     useGroupObjectives: true,
     useIndividualObjectives: false,
     assignment: { groupSegmentBy: "area", groupsAutoInclude: false },
+    resultsPolicy: DEFAULT_CICLO_RESULTS_POLICY,
     objectiveSets: [],
+    _id: `draft-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   };
 };
 
@@ -112,19 +138,70 @@ export const createBlankCicloDraft = (): CicloDraft => {
  */
 export function CicloBuilder({
   initialDraft,
-  initialStep = "general",
+  initialStep,
+  initialObjectiveTab,
   initialAssignmentSeeds,
   onExit,
+  onSaveDraft,
 }: CicloBuilderProps) {
   const blankDraft = React.useMemo(() => initialDraft ?? createBlankCicloDraft(), [initialDraft]);
   const [draft, setDraft] = React.useState<CicloDraft>(blankDraft);
-  const [activeStep, setActiveStep] = React.useState<CicloStepId>(initialStep);
+  // Qué versión del primer paso corre: decide el editor que se ve, el
+  // recorrido del stepper y qué exige cada paso (ver `cicloSetupFlow`).
+  const [flow] = useCicloSetupFlow();
+  const isParametrizado = flow === "parametrizado";
   const [activeObjectiveTab, setActiveObjectiveTab] = React.useState<"groups" | "individual">(() => {
+    if (initialObjectiveTab) return initialObjectiveTab;
     if (blankDraft.objectiveCreator === "collaborator") return "individual";
     return "groups";
   });
+
+  /**
+   * Dónde arranca el constructor.
+   *
+   * Un ciclo nuevo empieza por el principio, y quien abre el constructor con
+   * un paso en mente —"Agregar usuarios al ciclo", "Editar objetivos"— manda
+   * sobre todo lo demás. Lo que queda es el caso de "editar un borrador":
+   * ahí se retoma literalmente donde el autor lo dejó, paso y acordeón
+   * incluidos, porque volver al paso uno de algo a medio escribir obliga a
+   * recorrer otra vez decisiones que ya están tomadas.
+   */
+  const resumed = React.useMemo(() => {
+    const pendingSeedKinds = new Set(
+      (initialAssignmentSeeds ?? []).map((seed) => seed.kind)
+    );
+    const input = {
+      draft: blankDraft,
+      visitedSteps: new Set<CicloStepId>(),
+      pendingSeedKinds,
+      flow,
+    };
+    const step =
+      initialStep ??
+      (initialDraft ? resumeCicloStep(blankDraft._lastStep, input) : "general");
+    return { step, visited: visitedStepsUpTo(step, input) };
+    // Solo al montar: el borrador con el que se abrió no cambia de identidad.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const [activeStep, setActiveStep] = React.useState<CicloStepId>(resumed.step);
+
+  // Llegar a un paso implica haber pasado por los anteriores, así que el
+  // stepper los da por recorridos y cada uno enseña su chulito si está
+  // completo — el mismo que ya llevan las cabeceras del acordeón.
   const [visitedSteps, setVisitedSteps] = React.useState<ReadonlySet<CicloStepId>>(
-    () => new Set([initialStep])
+    () => resumed.visited
+  );
+
+  // El bloque abierto del paso de parametrización, guardado con el borrador
+  // para poder volver a él. Vive aquí, y no dentro del editor, porque es el
+  // constructor quien guarda.
+  const [openSetupBlock, setOpenSetupBlock] = React.useState<SetupBlockId | null>(
+    () => initialDraft?._lastSetupBlock ?? null
+  );
+  const handleOpenSetupBlockChange = React.useCallback(
+    (block: SetupBlockId | null) => setOpenSetupBlock(block),
+    []
   );
 
   // El mapa de alineación: a qué altura se está mirando el ciclo y dónde
@@ -244,26 +321,14 @@ export function CicloBuilder({
     (() => void) | null
   >(null);
 
-  // Ticked assignment rows, mirrored up from the step so the action bar can
-  // act on them — the same shape the participants table uses.
-  const [assignmentSelectionCount, setAssignmentSelectionCount] = React.useState(0);
-  const [clearAssignmentSelection, setClearAssignmentSelection] = React.useState<
-    (() => void) | null
-  >(null);
-  const [removeAssignmentSelection, setRemoveAssignmentSelection] = React.useState<
-    (() => void) | null
-  >(null);
-  /** The assignment behind a single ticked row, for "Editar objetivos". */
-  const [selectedAssignmentSetId, setSelectedAssignmentSetId] = React.useState<string | null>(null);
-
-  const handleAssignmentSelectionChange = React.useCallback(
-    (count: number, actions: TableSelectionActions) => {
-      setAssignmentSelectionCount(count);
-      setClearAssignmentSelection(() => actions.clear);
-      setRemoveAssignmentSelection(actions.remove ? () => actions.remove! : null);
-    },
-    []
-  );
+  /**
+   * Lo marcado en el paso de objetivos asignados, tal cual lo publica el paso.
+   *
+   * Aquí no se reconstruye nada: el paso ya resolvió qué acciones tienen
+   * sentido sobre esas filas, y la pantalla solo le pasa el objeto a la barra.
+   */
+  const [assignmentSelection, setAssignmentSelection] =
+    React.useState<AssignmentSelection | null>(null);
 
   const handleParticipantsSelectionChange = React.useCallback(
     (count: number, actions: TableSelectionActions) => {
@@ -275,17 +340,54 @@ export function CicloBuilder({
   );
 
   const autosave = useAutosave(draft);
+
+  /** El borrador más dónde se estaba: sin esas dos marcas, reabrirlo empieza
+   *  de cero aunque el contenido esté entero. */
+  const draftWithPosition = (): CicloDraft => ({
+    ...draft,
+    _lastStep: activeStep,
+    _lastSetupBlock: openSetupBlock,
+  });
+
+  const saveCiclo = () => {
+    onSaveDraft?.(draftWithPosition());
+    toast.success("Ciclo guardado");
+  };
+
+  React.useEffect(() => {
+    if (autosave.savedAt !== null) {
+      onSaveDraft?.(draftWithPosition());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autosave.savedAt]);
+
+  // "Salir" solo deja salir directo si el ciclo ya está guardado y no hay
+  // cambios pendientes. Si nunca se guardó (idle) o si hay cambios (saving/error),
+  // se debe mostrar el popover.
+  const hasUnsavedChanges = autosave.savedAt === null || autosave.status === "saving" || autosave.status === "error";
+  const requestExit = () => {
+    if (hasUnsavedChanges) {
+      setExitDialogOpen(true);
+      return;
+    }
+    // `savedAt` only lands once something has actually autosaved — pass the
+    // draft along so it shows up in the list instead of vanishing with the
+    // rest of the builder state.
+    onExit(draftWithPosition());
+  };
   const pendingSeedKinds = React.useMemo(
     () => new Set(pendingSeeds.map((seed) => seed.kind)),
     [pendingSeeds]
   );
-  const stepInput = { draft, visitedSteps, pendingSeedKinds };
+  const stepInput = { draft, visitedSteps, pendingSeedKinds, flow };
 
   const patchDraft = (patch: Partial<CicloDraft>) =>
     setDraft((current) => ({ ...current, ...patch }));
 
   const handleSelectStep = (step: CicloStepId) => {
-    if (activeStep === "objectives" && step !== "objectives") {
+    // En la parametrización los niveles se eligieron a propósito y no se
+    // apagan solos al dejar una pestaña vacía: el stepper los reclama.
+    if (!isParametrizado && activeStep === "objectives" && step !== "objectives") {
       const patch: Partial<CicloDraft> = {};
       if (draft.useGroupObjectives && groupSets.length === 0) {
         patch.useGroupObjectives = false;
@@ -328,13 +430,23 @@ export function CicloBuilder({
     TOTAL_WEIGHT - totalWeight(draft.companyObjectives)
   );
 
-  /** Same drop point as `addCompanyObjective`, para los objetivos que llegan
-   * ya escritos —de la IA o del banco—: vienen completos, así que el primero
-   * cae abierto para revisarlo, no para rellenarlo. */
-  const addWrittenCompanyObjectives = (incoming: readonly Objective[]) => {
+  /**
+   * Same drop point as `addCompanyObjective`, para los objetivos que llegan
+   * ya escritos —de la IA o del banco—: vienen completos, así que ninguno hay
+   * que abrirlo para rellenarlo.
+   *
+   * `expand` decide si el primero cae abierto. Del banco sí, porque se elige
+   * de uno en uno y abrirlo es seguir mirándolo; de la IA no, porque llega
+   * una tanda y abrir uno de cinco no es revisar la tanda, es tapar el resto
+   * con una tarjeta larga.
+   */
+  const addWrittenCompanyObjectives = (
+    incoming: readonly Objective[],
+    { expand = true }: { expand?: boolean } = {}
+  ) => {
     if (incoming.length === 0) return;
     patchDraft({ companyObjectives: [...draft.companyObjectives, ...incoming] });
-    setExpandedObjectiveIds(new Set([incoming[0].id]));
+    setExpandedObjectiveIds(expand ? new Set([incoming[0].id]) : new Set());
   };
 
   const changeCompanyObjective = (id: string, patch: Partial<Objective>) =>
@@ -443,10 +555,18 @@ export function CicloBuilder({
 
   // RH se salta "participants" por completo (ver `getCicloStepperOrder`), así
   // que el recorrido depende de quién escribe los objetivos, no es fijo.
-  const stepperOrder = getCicloStepperOrder(draft);
+  const stepperOrder = getCicloStepperOrder(draft, flow);
   const activeStepIndex = stepperOrder.indexOf(activeStep);
   const isLastStep = activeStep === stepperOrder[stepperOrder.length - 1];
-  const continueLabel = isLastStep ? "Finalizar" : "Continuar";
+  // Con líderes o colaboradores el administrador no reparte nada: al llegar
+  // al final lanza el ciclo y los demás escriben lo suyo.
+  // Un borrador nuevo arranca sin `objectiveCreator` —se elige en el paso 1—,
+  // así que hasta entonces no hay entrada en `GOVERNANCE_META` que leer.
+  const finishLabel =
+    isParametrizado && draft.objectiveCreator
+      ? GOVERNANCE_META[draft.objectiveCreator].finishLabel
+      : "Finalizar";
+  const continueLabel = isLastStep ? finishLabel : "Continuar";
 
   const markTouched = (step: CicloStepId) =>
     setTouchedSteps((current) => new Set(current).add(step));
@@ -482,7 +602,7 @@ export function CicloBuilder({
     // Auto-clean empty assignment types before finalizing so the user doesn't get blocked
     // by a mode they opened but left empty.
     let effectiveDraft = draft;
-    if (activeStep === "objectives") {
+    if (!isParametrizado && activeStep === "objectives") {
       const patch: Partial<CicloDraft> = {};
       if (draft.useGroupObjectives && groupSets.length === 0) patch.useGroupObjectives = false;
       if (draft.useIndividualObjectives && individualSets.length === 0) patch.useIndividualObjectives = false;
@@ -497,6 +617,18 @@ export function CicloBuilder({
 
     if (failing.length === 0) {
       setFinalizeErrorSteps(new Set());
+      if (isParametrizado && effectiveDraft.objectiveCreator !== "hr") {
+        toast.success("Ciclo lanzado", {
+          description:
+            effectiveDraft.objectiveCreator === "leader"
+              ? "Los líderes recibirán una notificación para crear los objetivos de sus equipos."
+              : effectiveDraft.objectiveCreator === "custom"
+                ? "Cada persona elegida recibirá una notificación para registrar sus propios objetivos."
+                : "Cada colaborador recibirá una notificación para registrar sus propios objetivos.",
+        });
+        onExit({ ...effectiveDraft, status: "scheduled" });
+        return;
+      }
       const count = assignedObjectiveCount(effectiveDraft.objectiveSets);
       const setCount = effectiveDraft.objectiveSets.length;
       toast.success("Ciclo creado", {
@@ -526,7 +658,19 @@ export function CicloBuilder({
   const renderMainPanel = () => {
     switch (activeStep) {
       case "general":
+        if (isParametrizado) {
+          return (
+            <CicloSetupEditor
+              draft={draft}
+              onChange={patchDraft}
+              showValidation={showValidation("general")}
+              initialOpenBlock={openSetupBlock}
+              onOpenBlockChange={handleOpenSetupBlockChange}
+            />
+          );
+        }
         return (
+          <div className="flex min-w-0 flex-1 flex-col gap-3 self-start">
           <CicloGeneralEditor
             draft={draft}
             onChange={(patch) => {
@@ -535,12 +679,15 @@ export function CicloBuilder({
               // HR empieza sin ninguno activo (el paso assignmentConfig los enciende),
               // leader/collaborator empiezan con ambos activos (el prompt dentro
               // del paso los desactiva si el autor quiere).
+              // El patch va al final: si quien cambia el creador es el
+              // modelo de objetivos, ya trae los niveles que ese modelo
+              // reparte y esos mandan sobre el preset por creador.
               if ("objectiveCreator" in patch && patch.objectiveCreator !== draft.objectiveCreator) {
                 const isHr = patch.objectiveCreator === "hr";
                 patchDraft({
-                  ...patch,
                   useGroupObjectives: !isHr,
                   useIndividualObjectives: !isHr,
+                  ...patch,
                 });
               } else {
                 patchDraft(patch);
@@ -548,6 +695,7 @@ export function CicloBuilder({
             }}
             showValidation={showValidation("general")}
           />
+          </div>
         );
 
       case "participants":
@@ -561,6 +709,12 @@ export function CicloBuilder({
             copy={{
               launchPhrase: "iniciar el ciclo",
               groupsDescription: "Elige áreas, líderes u otros grupos que entran al ciclo.",
+              // Quién escribe los objetivos cambia de qué va la lista, así
+              // que el subtítulo lo dice con todas las letras.
+              description:
+                draft.objectiveCreator === "hr"
+                  ? undefined
+                  : CICLO_PARTICIPANTS_DESCRIPTIONS[draft.objectiveCreator],
             }}
             modesOrder={
               draft.objectiveCreator === "hr"
@@ -587,7 +741,9 @@ export function CicloBuilder({
             onToggleExpanded={toggleObjectiveExpanded}
             onChange={changeCompanyObjective}
             onAdd={addCompanyObjective}
-            onAddFromAI={addWrittenCompanyObjectives}
+            onAddFromAI={(incoming) =>
+              addWrittenCompanyObjectives(incoming, { expand: false })
+            }
             onAiWorkingChange={setIsAiGenerating}
             onReviewActionsChange={setCompanyReviewActions}
             onRemove={removeCompanyObjective}
@@ -595,6 +751,18 @@ export function CicloBuilder({
             showValidation={showValidation("company")}
             enabled={draft.useCompanyObjectives}
             onEnabledChange={(enabled) => patchDraft({ useCompanyObjectives: enabled })}
+            // En la parametrización el norte ya se decidió —lo exige el
+            // modelo, o lo eligió el autor— y apagarlo aquí borraría el paso
+            // que se está mirando. La marca dice de dónde viene la decisión.
+            lockedReason={
+              !isParametrizado
+                ? undefined
+                : draft.modelRules.companyObjectives === "required"
+                  ? `Obligatorio en ${draft.objectiveModel && draft.objectiveModel !== "custom" ? OBJECTIVE_MODEL_META[draft.objectiveModel].label : "tu modelo"}`
+                  : "Definido en la parametrización"
+            }
+            rules={draft.modelRules}
+            model={draft.objectiveModel}
             composerMode={companyComposerMode}
             onComposerModeChange={setCompanyComposerMode}
           />
@@ -608,6 +776,8 @@ export function CicloBuilder({
             onChange={patchDraft}
             activeTab={activeObjectiveTab}
             onActiveTabChange={setActiveObjectiveTab}
+            levelsDecidedUpstream={isParametrizado}
+            onGoToSetup={() => handleSelectStep("general")}
             editorProps={{
               groupSets,
               individualSets,
@@ -615,8 +785,7 @@ export function CicloBuilder({
               onDrawerRequestChange: setDrawerRequest,
               onSaveSet: saveSet,
               onRemoveTargets: removeTargets,
-              onSelectionChange: handleAssignmentSelectionChange,
-              onRequestEdit: (setId) => setSelectedAssignmentSetId(setId === "" ? null : setId),
+              onSelectionChange: setAssignmentSelection,
               onAiWorkingChange: setIsAiGenerating,
               showValidation: showValidation("objectives"),
               groupCoverage,
@@ -749,9 +918,9 @@ export function CicloBuilder({
             onAddObjectiveAi={onAddObjectiveAi}
             onOpenObjectiveBank={onOpenObjectiveBank}
             reviewActions={activeStep === "company" ? companyReviewActions : null}
-            onSave={() => toast.success("Ciclo guardado")}
+            onSave={saveCiclo}
             onBack={handleBack}
-            onExit={() => setExitDialogOpen(true)}
+            onExit={requestExit}
             onContinue={handleContinue}
             continueLabel={continueLabel}
             participantsCount={totalParticipantCount(draft.participants)}
@@ -767,20 +936,7 @@ export function CicloBuilder({
             participantsSelectionCount={participantsSelectionCount}
             onClearParticipantsSelection={clearParticipantsSelection}
             onDeleteParticipantsSelection={deleteParticipantsSelection}
-            assignmentSelectionCount={isAssignmentStep ? assignmentSelectionCount : 0}
-            assignmentUnit={activeObjectiveTab === "individual" ? "persona" : "grupo"}
-            onClearAssignmentSelection={clearAssignmentSelection}
-            onRemoveAssignmentSelection={removeAssignmentSelection}
-            onEditAssignmentSelection={
-              selectedAssignmentSetId !== null && assignmentSelectionCount === 1
-                ? () =>
-                    setDrawerRequest({
-                      setId: selectedAssignmentSetId,
-                      phase: "objectives",
-                      intent: "manual",
-                    })
-                : null
-            }
+            assignmentSelection={isAssignmentStep ? assignmentSelection : null}
             alignmentActions={
               activeStep === "alignment" ? (
                 <ManualAlignmentPopover
@@ -812,13 +968,19 @@ export function CicloBuilder({
         open={exitDialogOpen}
         onOpenChange={setExitDialogOpen}
         title="¿Salir sin guardar?"
-        description="El ciclo que estás creando no se ha guardado. Si sales ahora, se perderán los cambios."
-        confirmLabel="Salir"
+        description="El ciclo que estás creando todavía no se ha guardado. Guárdalo antes de salir o descarta los cambios."
         cancelLabel="Cancelar"
-        variant="destructive"
-        onConfirm={() => {
+        secondaryLabel="Salir sin guardar"
+        secondaryVariant="destructive"
+        onSecondary={() => {
           setExitDialogOpen(false);
           onExit();
+        }}
+        confirmLabel="Guardar y salir"
+        onConfirm={() => {
+          saveCiclo();
+          setExitDialogOpen(false);
+          onExit(draftWithPosition());
         }}
       />
     </div>

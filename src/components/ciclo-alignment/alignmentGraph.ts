@@ -23,7 +23,26 @@ import {
   targetHint,
   targetLabel,
 } from "@/components/ciclo-builder/objectiveSets";
-import type { CicloDraft, Objective, ObjectiveSet } from "@/components/ciclo-builder";
+import type { Objective, ObjectiveSet } from "@/components/ciclo-builder";
+
+/**
+ * De dónde sale el mapa.
+ *
+ * Es el recorte del ciclo que el grafo necesita, y nada más. Era `CicloDraft`
+ * —el borrador del constructor— y eso ataba el mapa al paso donde nació: un
+ * ciclo que ya arrancó tiene los mismos objetivos de empresa y las mismas
+ * asignaciones, pero vive en otra forma, y copiarlo a un borrador falso solo
+ * para dibujarlo sería inventarse un ciclo que nadie está editando.
+ *
+ * `CicloDraft` la cumple tal cual, así que el constructor no cambió de nada.
+ */
+export interface AlignmentSource {
+  assignment: { groupSegmentBy: SegmentKey };
+  /** Si el ciclo tiene un norte al que apuntar. */
+  useCompanyObjectives: boolean;
+  companyObjectives: readonly Objective[];
+  objectiveSets: readonly ObjectiveSet[];
+}
 
 // ── Niveles ────────────────────────────────────────────────────────────────
 
@@ -160,7 +179,7 @@ interface BuildOptions {
  * flecha hacia la nada no es información, es ruido.
  */
 export function buildAlignmentGraph(
-  draft: CicloDraft,
+  draft: AlignmentSource,
   { level, search = "" }: BuildOptions
 ): AlignmentGraph {
   const segmentBy = draft.assignment.groupSegmentBy;
@@ -279,7 +298,7 @@ interface ContributorLayer {
 // ── Nivel: objetivos ───────────────────────────────────────────────────────
 
 function objectiveNodes(
-  draft: CicloDraft,
+  draft: AlignmentSource,
   livingAlignment: (objective: Objective) => string | null
 ): ContributorLayer {
   const nodes: AlignmentNode[] = [];
@@ -325,7 +344,7 @@ function objectiveNodes(
 // ── Nivel: agrupación ──────────────────────────────────────────────────────
 
 function targetNodes(
-  draft: CicloDraft,
+  draft: AlignmentSource,
   segmentBy: SegmentKey,
   alignmentOf: (ref: ObjectiveRef) => string | null
 ): ContributorLayer {
@@ -387,7 +406,7 @@ interface PersonEntry {
 }
 
 function personNodes(
-  draft: CicloDraft,
+  draft: AlignmentSource,
   segmentBy: SegmentKey,
   alignmentOf: (ref: ObjectiveRef) => string | null,
   search: string
