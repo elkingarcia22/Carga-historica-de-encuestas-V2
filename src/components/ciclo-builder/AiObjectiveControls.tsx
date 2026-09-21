@@ -18,6 +18,7 @@ import {
 import { cn } from "@/lib/utils";
 import { toneChip, toneText } from "@/lib/tone";
 import { MagicCard } from "@/components/ui/magic-card";
+import { MovingBorderBeam } from "@/components/ui/moving-border-beam";
 import { AMBITION_TONE, FOCUS_TONE } from "./measureVisual";
 import {
   AMBITION_META,
@@ -394,38 +395,58 @@ export function StarterChips({
  * pasos sigue siendo escribir el objetivo a mano, y un botón sólido de IA
  * al lado de uno punteado invertiría esa jerarquía sin que nadie lo haya
  * decidido.
+ *
+ * Trabajando, el botón es la única señal de que algo está pasando —no hay
+ * un segundo loader debajo del campo repitiendo el mismo mensaje—: el
+ * degradado que normalmente sólo se ve en el hover queda encendido fijo,
+ * un brillo de vidrio lo cruza en bucle, y una luz recorre el borde.
  */
 export const AiTriggerButton = React.forwardRef<
   HTMLButtonElement,
-  React.ComponentProps<"button"> & { label: string; animated?: boolean }
->(function AiTriggerButton({ label, className, animated = true, ...props }, ref) {
+  React.ComponentProps<"button"> & { label: string; animated?: boolean; loading?: boolean }
+>(function AiTriggerButton({ label, className, animated = true, loading = false, style, ...props }, ref) {
   return (
     <button
       ref={ref}
       type="button"
+      aria-busy={loading}
       className={cn(
         "group relative flex h-11 items-center gap-2 self-start overflow-hidden rounded-xl px-4 text-[13px] font-semibold text-text-primary",
-        "border-ai-gradient-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30",
+        // El borde propio se apaga mientras carga: lo que se ve entonces es
+        // sólo el que dibuja `MovingBorderBeam` en movimiento — animar un
+        // borde encima de otro se veía como dos bordes distintos.
+        loading ? "border border-transparent bg-surface" : "border-ai-gradient-surface",
         animated && "transition-all hover:shadow-card active:scale-[0.98]",
+        loading && "shimmer-mirror",
         className
       )}
+      // `shadow-ai-premium` (clase) choca de nombre con una utilidad que
+      // Tailwind genera sola a partir del theme, y esa gana la cascada sin
+      // avisar — el brillo nunca se veía. En línea no hay con qué chocar.
+      style={loading ? { ...style, boxShadow: "var(--shadow-ai-premium)" } : style}
       {...props}
     >
       <span
         aria-hidden
         className={cn(
-          "absolute inset-0 opacity-0",
-          animated && "transition-opacity duration-300 group-hover:opacity-100"
+          "absolute inset-0",
+          loading ? "opacity-100" : "opacity-0",
+          animated && !loading && "transition-opacity duration-300 group-hover:opacity-100"
         )}
         style={{
-          background:
-            "linear-gradient(135deg, rgba(46,198,255,0.10), rgba(124,58,237,0.08) 55%, rgba(244,63,94,0.09))",
+          background: loading
+            ? "linear-gradient(135deg, rgba(46,198,255,0.32), rgba(124,58,237,0.28) 55%, rgba(244,63,94,0.30))"
+            : "linear-gradient(135deg, rgba(46,198,255,0.10), rgba(124,58,237,0.08) 55%, rgba(244,63,94,0.09))",
         }}
       />
+      {loading && (
+        <MovingBorderBeam duration={2200} borderWidth={1.5} rx={12} ry={12} mode="line" />
+      )}
       <Sparkles
         className={cn(
-          "relative size-4 text-ai-gradient-start",
-          animated && "transition-transform duration-300 group-hover:rotate-12 group-hover:scale-110"
+          "relative size-4 shrink-0 text-ai-gradient-start",
+          !loading && animated && "transition-transform duration-300 group-hover:rotate-12 group-hover:scale-110"
         )}
         strokeWidth={2.3}
       />

@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { DrawerShell } from "@/components/overlays";
+import { agentPanelShift } from "@/components/ai/agentPanelMotion";
 import { DrawerActionRail, DrawerRailButton } from "@/components/action-rail";
 import { WeightBalanceDialog, weightBalanceGroup } from "./WeightBalanceDialog";
 import { WeightConflictView, useWeightShares } from "./WeightConflictView";
@@ -251,8 +252,12 @@ export function AssignmentDrawer({
     [isGroup, segmentBy, selection]
   );
 
+  // Un grupo que ya carga objetivos por otra asignación se puede volver a
+  // marcar: el peso que eso reparte de más entre las dos vías es justo lo
+  // que el aviso de conflicto y "Repartir el peso" más abajo existen para
+  // resolver, la misma pantalla que ya se usa cuando el choque es entre un
+  // individual y un grupal.
   const toggleGroup = (value: string) => {
-    if (takenIds.has(value) && !selection.includes(value)) return;
     setSelection(
       selection.includes(value) ? selection.filter((v) => v !== value) : [...selection, value]
     );
@@ -263,11 +268,17 @@ export function AssignmentDrawer({
    *
    * Se calcula ignorando la asignación que se está editando: su peso todavía
    * se está decidiendo, y contarlo haría que el aviso se acusara a sí mismo.
+   * A quien ya se sacó de este borrador (ver `onSeparate` más abajo) tampoco
+   * se le cuenta: esta asignación todavía no existe en `allSets` mientras se
+   * está creando, así que su exclusión no puede venir de ahí — se descarta
+   * aquí, a mano, o el aviso seguiría acusando a alguien que ya se resolvió.
    */
-  const priorLoads: readonly PersonLoad[] = React.useMemo(
-    () => loadsForTargets(allSets, segmentBy, kind, selection, { excludeSetId: draft.id }),
-    [allSets, segmentBy, kind, selection, draft.id]
-  );
+  const priorLoads: readonly PersonLoad[] = React.useMemo(() => {
+    const loads = loadsForTargets(allSets, segmentBy, kind, selection, { excludeSetId: draft.id });
+    if (!draft.excludedIds || draft.excludedIds.length === 0) return loads;
+    const excluded = new Set(draft.excludedIds);
+    return loads.filter((load) => !excluded.has(load.personId));
+  }, [allSets, segmentBy, kind, selection, draft.id, draft.excludedIds]);
 
   /** Lo máximo que cabe sin pasar de 100 % a la persona más cargada. */
   const freeShare = tightestFreeShare(priorLoads);
@@ -490,6 +501,11 @@ export function AssignmentDrawer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, phase, intent]);
 
+  // Con el panel abierto el cajón se corre; en la fase de elegir a quién no,
+  // porque ahí el generador todavía no tiene nada sobre lo que escribir.
+  const isShiftedByAgent = phase === "objectives" && isComposerOpen;
+  const agentShift = agentPanelShift(isShiftedByAgent);
+
   const headline =
     selection.length === 0
       ? isGroup
@@ -598,22 +614,26 @@ export function AssignmentDrawer({
       // haberse quedado en otro sitio.
       className={cn(
         "!w-[min(1280px,96vw)] !top-0 !bottom-0 !h-dvh !rounded-none sm:!rounded-l-2xl !border-y-0",
-        "transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-        (phase === "objectives" && isComposerOpen)
-          // 448 px = el panel (416) más el aire que deja ver que detrás sigue
-          // estando la app, para que el cajón no se coma la pantalla entera.
-          ? "!max-w-[calc(100vw_-_448px)] !right-[416px] !border-r !border-border/60"
-          : "!max-w-[min(1280px,96vw)] !right-0 !border-r-0"
+        isShiftedByAgent ? "!border-r !border-border/60" : "!border-r-0"
       )}
+      // El sitio que deja y cómo se mueve van en línea, no en clases: así el
+      // cajón se corre exactamente lo que mide el panel —ni un pixel de la
+      // app asomando entre los dos— y con su misma curva. Ver
+      // `agentPanelMotion`.
+      contentStyle={agentShift.content}
+      overlayStyle={agentShift.overlay}
       /*
-       * Con el generador abierto el drawer deja de ser modal. El panel del
+       * Nunca modal, ni siquiera antes de abrir el generador. El panel del
        * Agente IA vive en la concha de la app, fuera del portal del drawer, y
        * un diálogo modal apaga los eventos de puntero de todo lo que no sea
-       * él: el chat quedaba dibujado pero inerte. El velo sigue estando —lo
-       * dibuja `SheetContent`—, recortado justo donde empieza el panel.
+       * él: el chat quedaba dibujado pero inerte. Pero encenderlo y apagarlo
+       * sobre la marcha era peor: Radix monta un componente distinto para cada
+       * modalidad, así que cambiarla en caliente reconstruye el cajón entero y
+       * lo hace entrar otra vez desde la derecha, como si fuera uno nuevo. El
+       * velo sigue estando —lo dibuja `SheetContent`, que además bloquea el
+       * scroll del fondo—, recortado justo donde empieza el panel.
        */
-      modal={!isComposerOpen}
-      overlayClassName={isComposerOpen ? "right-[416px]" : undefined}
+      modal={false}
       onInteractOutside={(e) => {
         // Prevent closing the Drawer if the AI panel is open (because clicks in the AI panel are outside the DrawerShell)
         if (isComposerOpen) e.preventDefault();
@@ -770,9 +790,22 @@ export function AssignmentDrawer({
             controller={conflictShares}
             affected={conflictLoads.length}
             onBack={() => setIsConflictOpen(false)}
-            onSeparate={(setId, personId) =>
-              onAllSetsChange(excludeFromSet(allSets, setId, personId))
-            }
+            onSeparate={(setId, personId) => {
+              // "Esta asignación (nueva)" todavía es solo el borrador: no
+              // existe en `allSets` hasta que se guarda, así que
+              // `excludeFromSet` no encontraría nada que tocar. Sacar a
+              // alguien de ella es escribirlo directo en el borrador; sacarlo
+              // de cualquier otra asignación sigue yendo por `allSets`, que
+              // es donde esa sí vive.
+              if (setId === draft.id) {
+                setDraft((current) => ({
+                  ...current,
+                  excludedIds: [...new Set([...(current.excludedIds ?? []), personId])],
+                }));
+                return;
+              }
+              onAllSetsChange(excludeFromSet(allSets, setId, personId));
+            }}
           />
         </div>
       ) : phase === "targets" ? (
@@ -797,8 +830,8 @@ export function AssignmentDrawer({
                   <AutoIncludeToggle
                     checked={autoInclude}
                     onCheckedChange={onAutoIncludeChange}
-                    title="Sincronizar automáticamente con el grupo"
-                    description="Sigue el organigrama de la empresa: si alguien entra a uno de estos grupos durante el ciclo hereda sus objetivos, y si sale —cambia de área, de líder, o se desvincula— se los retiramos solos."
+                    title="Sincronizar con el grupo"
+                    description="Sigue el organigrama: quien entre hereda estos objetivos. Quien salga queda inactivo, con los suyos disponibles para consulta pero sin contar en el avance."
                   />
                 </div>
               )}
@@ -817,11 +850,9 @@ export function AssignmentDrawer({
               }}
               selectedGroups={selection}
               onToggleGroup={toggleGroup}
-              onSelectAll={(values) =>
-                setSelection(values.filter((v) => !takenIds.has(v) || selection.includes(v)))
-              }
+              onSelectAll={setSelection}
               onClearAll={() => setSelection([])}
-              disabledGroups={{ ids: takenIds, reason: "Ya tiene objetivos" }}
+              groupBadges={{ ids: takenIds, reason: "Ya tiene objetivos" }}
             />
           ) : (
             <CollaboratorTable
@@ -916,6 +947,20 @@ export function AssignmentDrawer({
               onRemoveObjectives: removeManyFromAI,
               maxCount: Math.max(1, MAX_AI_OBJECTIVES - draft.objectives.length),
               scopeLabel: isGroup ? "del grupo" : "de la persona",
+              // Aquí la IA ya no parte de cero: lleva el norte de la empresa y
+              // las reglas del modelo, que es lo que le deja preguntar de qué
+              // objetivo cuelga esto en vez de volver a abrir el ciclo entero.
+              scope: isGroup ? "grupo" : "colaborador",
+              // Con varios marcados el titular dice "10 grupos", que dentro de
+              // una pregunta queda cojo ("depende de 10 grupos"): el
+              // demostrativo lo vuelve una frase que se puede leer en voz alta.
+              audienceLabel:
+                selection.length === 1
+                  ? headline
+                  : `${isGroup ? "estos" : "estas"} ${headline}`,
+              companyObjectives,
+              rules,
+              model,
               onWorkingStateChange: (isWorking, progress, caption, detail) => {
                 if (isWorking) {
                   setWorkingState({ progress, caption, detail });
@@ -938,17 +983,15 @@ export function AssignmentDrawer({
           )}
 
           {draft.objectives.length === 0 && !isComposerOpen ? (
-            <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border bg-surface-muted/30 px-6 py-10 text-center">
-              <span className="flex size-11 items-center justify-center rounded-2xl bg-surface text-text-secondary">
-                <Target className="size-5" strokeWidth={2} />
-              </span>
-              <p className="text-[13.5px] font-semibold text-text-primary">
-                Esta asignación se quedó sin objetivos
-              </p>
-              <p className="max-w-[52ch] text-[12.5px] leading-relaxed text-text-secondary">
-                Añade al menos uno desde la barra de acciones antes de guardar.
-              </p>
-            </div>
+            // Sin objetivos la pregunta sigue siendo la misma que al entrar
+            // —cómo se van a escribir—, así que el hueco vuelve a ofrecer las
+            // tres formas en vez de limitarse a señalar que falta algo. Es el
+            // estado al que se cae también al cerrar el panel de la IA.
+            <ObjectiveStartChoices
+              onOpenComposer={() => setIsComposerOpen(true)}
+              onOpenBank={() => setIsBankOpen(true)}
+              onAddBlank={addObjective}
+            />
           ) : draft.objectives.length === 0 && isComposerOpen && workingState === null ? (
             <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-border bg-surface px-6 py-16 text-center">
               <div className="relative flex size-14 items-center justify-center rounded-2xl bg-surface shadow-sm">
@@ -1277,6 +1320,79 @@ function WeightMeter({
  * que abrir una asignación no cambie el gesto: la barra de abajo es donde
  * están las acciones del paso, y añadir es una de ellas.
  */
+/**
+ * El hueco de una asignación sin objetivos. Repite las tres procedencias de la
+ * pantalla de la que viene —IA, banco, a mano— porque mientras no haya ninguno
+ * la pregunta abierta sigue siendo de dónde salen, no qué falta para guardar.
+ */
+function ObjectiveStartChoices({
+  onOpenComposer,
+  onOpenBank,
+  onAddBlank,
+}: {
+  onOpenComposer: () => void;
+  onOpenBank: () => void;
+  onAddBlank: () => void;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border bg-surface-muted/30 px-6 py-12 text-center">
+      <span className="flex size-11 items-center justify-center rounded-2xl bg-surface text-text-secondary">
+        <Target className="size-5" strokeWidth={2} />
+      </span>
+      <p className="text-[13.5px] font-semibold text-text-primary">
+        Todavía no hay objetivos en esta asignación
+      </p>
+      <p className="max-w-[52ch] text-[12.5px] leading-relaxed text-text-secondary">
+        Elige cómo quieres escribirlos. Puedes cambiar de idea después: lo que
+        salga de aquí se edita igual.
+      </p>
+
+      {/* El mismo orden que la pantalla de la que se viene y que el cajón de
+          colaboradores: escribirlo a mano primero, la IA al final. */}
+      <div className="mt-1 flex flex-wrap items-center justify-center gap-2.5">
+        <button
+          type="button"
+          onClick={onAddBlank}
+          className="flex h-11 items-center gap-2 rounded-xl bg-primary px-4 text-[13px] font-semibold text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 active:scale-[0.98]"
+        >
+          <Plus className="size-4" strokeWidth={2.4} />
+          Crear manualmente
+        </button>
+
+        <button
+          type="button"
+          onClick={onOpenBank}
+          className="flex h-11 items-center gap-2 rounded-xl border border-dashed border-border bg-surface px-4 text-[13px] font-semibold text-text-secondary transition-all hover:border-primary/40 hover:bg-primary/5 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 active:scale-[0.98]"
+        >
+          <Library className="size-4" strokeWidth={2.2} />
+          Elegir del banco
+        </button>
+
+        <button
+          type="button"
+          onClick={onOpenComposer}
+          className="ai-trigger group flex h-11 items-center gap-2 rounded-xl border border-border bg-surface px-4 text-[13px] font-semibold text-text-primary transition-all hover:border-primary/40 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 active:scale-[0.98]"
+        >
+          <svg width="0" height="0" className="absolute">
+            <defs>
+              <linearGradient id="ai-gradient-assignment-empty" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="hsl(var(--ai-gradient-start))" />
+                <stop offset="100%" stopColor="hsl(var(--ai-gradient-end))" />
+              </linearGradient>
+            </defs>
+          </svg>
+          <Sparkles
+            className="size-4"
+            strokeWidth={2.4}
+            stroke="url(#ai-gradient-assignment-empty)"
+          />
+          <span className="text-ai-gradient">Proponer con IA</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AddObjectiveMenu({
   open,
   onOpenChange,

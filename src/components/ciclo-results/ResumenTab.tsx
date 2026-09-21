@@ -464,7 +464,7 @@ export function ResumenTab({
           hay que atender, y recién después con qué recortarlo. Arriba, en el
           renglón de las pestañas, competían con ellas por la misma mirada. */}
       {globalControls && (
-        <ResumenBoardBlock id="filtros" label="Filtros del reporte" span={6} fixed>
+        <ResumenBoardBlock id="filtros" label="Filtros del reporte" span={6} fixed sticky>
         <section className="flex flex-col gap-2" aria-label="Filtros del reporte">
           <div className="flex flex-wrap items-center justify-end gap-3">{globalControls}</div>
           {globalChips}

@@ -17,6 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { Switch } from "@/components/ui/switch";
 import { AddObjectiveToBankDrawer } from "./AddObjectiveToBankDrawer";
 import { ObjectiveOptionCard } from "./ObjectiveOptionCard";
@@ -30,7 +31,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { AiGeneratedBadge, AILoader } from "@/components/ai-interaction";
+import { AiGeneratedBadge } from "@/components/ai-interaction";
 import { InlineDeleteConfirm } from "./InlineDeleteConfirm";
 import { AiTriggerButton } from "./AiObjectiveControls";
 import { generateObjectiveFromContext, refineObjectiveWording } from "./aiObjectiveGenerator";
@@ -58,6 +59,7 @@ import {
 } from "./cicloBuilderTypes";
 import {
   DEFAULT_OBJECTIVE_MODEL_RULES,
+  objectiveChildrenVocab,
   objectiveModelVocab,
   type ObjectiveModelId,
   type ObjectiveModelRules,
@@ -115,6 +117,11 @@ interface ObjectiveCardCompactProps {
 
 const MAX_TITLE_LENGTH = 150;
 const AI_WORK_MS = 1100;
+/** Pausa de inactividad antes de destapar el siguiente paso: ni tan corta
+ *  que la tarjeta salte a medio número, ni tan larga que se sienta lenta.
+ *  Se nota bastante más cuando se encadena varias veces seguidas —como en
+ *  la cascada que arma la IA—, así que se queda del lado corto. */
+const STEP_REVEAL_DEBOUNCE_MS = 450;
 
 type AiPhase = "idle" | "context" | "working";
 
@@ -157,7 +164,7 @@ export function ObjectiveCardCompact({
     rules.alignment === "required" &&
     rules.companyObjectives !== "off" &&
     companyObjectives.length > 0;
-  // El modelo de la empresa no lleva lo que cuelga (ver `showActionsStep`),
+  // El modelo de la empresa no lleva lo que cuelga (ver `hasActionsStep`),
   // así que tampoco se le exige.
   const cardRules = variant === "company" ? { ...rules, children: "none" as const } : rules;
   const issue = objectiveIssue(objective, {
@@ -172,51 +179,233 @@ export function ObjectiveCardCompact({
 
   const titleInputRef = React.useRef<HTMLInputElement>(null);
   const ai = useCardAi(objective, onChange, titleInputRef);
+  // Lo que le queda disponible a este objetivo dentro de su cupo: es lo que
+  // se le asigna una vez el paso de peso queda a la vista, cuando la IA
+  // generó de cero. Los objetivos de la empresa no llevan peso, así que no
+  // hay nada que asignarles.
+  const remainingWeightForAi = requireWeight ? Math.max(0, weightBudget - otherObjectivesWeight) : null;
 
   const { measure, direction } = objective;
-  const hasTitle = objective.title.trim() !== "";
+  // Igual que la meta o el piso y el techo: el paso de medida espera una
+  // pausa real de escritura antes de destaparse, no cada tecla — si no,
+  // "¿Cómo se mide?" saltaría a la vista a mitad de la primera palabra.
+  // Mientras la IA está llenando la tarjeta esa espera se apaga (delay 0):
+  // su propia cascada ya se paso a paso con sus propias pausas
+  // (`STEP_REVEAL_DEBOUNCE_MS` en `useCardAi`), y sumarle esta encima solo
+  // duplicaba el silencio entre el título y la medida sin que nada se
+  // moviera en pantalla.
+  const debouncedTitle = useDebouncedValue(objective.title, ai.isWorking ? 0 : STEP_REVEAL_DEBOUNCE_MS);
+  const hasTitle = debouncedTitle.trim() !== "";
   const showMeasureType = hasTitle && ai.phase === "idle";
   const isBoolean = measure === "boolean";
   const showDirection = showMeasureType && measure !== null && !isBoolean;
   const showValues = showDirection && direction !== null;
 
   const target = parseAmount(objective.targetValue);
-  const declaredInitial = parseAmount(objective.initialValue);
+
+  // Los pasos que dependen de tener una meta usable (mínimos y máximos,
+  // peso, alineación) esperan una pausa real de escritura antes de
+  // aparecer: si se destaparan tecla a tecla, la tarjeta "saltaría" al peso
+  // mientras el autor todavía está terminando de escribir el número.
+  const debouncedTargetValue = useDebouncedValue(objective.targetValue, STEP_REVEAL_DEBOUNCE_MS);
+  const debouncedInitialValue = useDebouncedValue(objective.initialValue, STEP_REVEAL_DEBOUNCE_MS);
+  const debouncedTarget = parseAmount(debouncedTargetValue);
+  const debouncedDeclaredInitial = parseAmount(debouncedInitialValue);
   const trackIsUsable =
-    target !== null &&
+    debouncedTarget !== null &&
     direction !== null &&
-    trackBlockingIssue(direction, target, declaredInitial) === null;
+    trackBlockingIssue(direction, debouncedTarget, debouncedDeclaredInitial) === null;
   // Si es boolean, asumimos que trackIsUsable siempre será true si ponen meta
   const showTail = (showMeasureType && isBoolean) || (showValues && trackIsUsable);
-  // Los objetivos de la empresa no llevan el paso de acciones clave: ese
-  // desglose es propio de objetivos asignados a personas o equipos. Y el
-  // modelo puede quitarlo del todo —KPI mide con una sola cifra y no cuelga
-  // nada debajo—, en cuyo caso el paso no existe para nadie.
-  const showActionsStep = showTail && variant !== "company" && rules.children !== "none";
-  /** Los resultados clave siempre miden el objetivo: no es opcional. */
-  const childrenDrive = rules.children === "results" || rules.childrenDriveProgress;
   const startLine =
-    trackIsUsable && target !== null && direction !== null
-      ? resolveStartLine(direction, target, declaredInitial)
+    trackIsUsable && debouncedTarget !== null && direction !== null
+      ? resolveStartLine(direction, debouncedTarget, debouncedDeclaredInitial)
       : null;
-  const canSimulate = isBoolean || (
+  // Todo lo que cuelga de aquí —rango, peso, alineación, acciones, probar—
+  // se apoya en `measure`/`direction`/valores que "Mejorar con IA" no toca
+  // y por eso no se limpian con el título: sin este candado seguirían
+  // marcando el objetivo de antes como listo mientras la IA todavía está
+  // redactando, y esos pasos se quedarían a la vista encima de una tarjeta
+  // que se supone que no debería mostrar nada.
+  const canSimulate = showMeasureType && (isBoolean || (
     trackIsUsable &&
     measure !== null &&
     direction !== null &&
     startLine !== null &&
-    target !== null
+    debouncedTarget !== null
+  ));
+  // Mínimos y máximos entra en el mismo momento que peso: los dos dependen
+  // de la misma meta ya asentada. Un objetivo booleano no tiene piso ni
+  // techo que preguntar.
+  const showRangeStep = canSimulate && !isBoolean;
+  const hasAlignmentOptions = companyObjectives.length > 0 || cycleObjectives.length > 0;
+  // Los objetivos de la empresa no llevan este paso: ese desglose es propio
+  // de objetivos asignados a personas o equipos. Los demás siempre lo tienen,
+  // pero no siempre significa lo mismo: donde el modelo no cuelga nada que
+  // mida —KPI— son tareas de seguimiento, un plan opcional que no toca el
+  // avance, y de ahí que el vocabulario y el interruptor cambien con él.
+  const hasActionsStep = variant !== "company";
+  const isFollowUpPlan = rules.children === "none";
+  const childrenVocab = objectiveChildrenVocab(model ?? null, rules);
+  /** Los resultados clave siempre miden el objetivo: no es opcional. */
+  const childrenDrive =
+    !isFollowUpPlan && (rules.children === "results" || rules.childrenDriveProgress);
+
+  const [isSimulating, setIsSimulating] = React.useState(false);
+  // Con el rango activado, probar sólo tiene algo que decir una vez hay un
+  // piso o un techo puestos — antes de eso, un resultado de ejemplo se
+  // comportaría igual que sin rango, y ofrecerlo sería una promesa vacía.
+  const hasRangeValue =
+    parseAmount(objective.minValue) !== null || parseAmount(objective.maxValue) !== null;
+  // Ninguna de las dos tarjetas —Sí, No— empieza marcada: `rangeEnabled` por
+  // sí solo no distingue "todavía no se ha preguntado" de "ya contestó que
+  // no", así que esta bandera lo hace. Arranca contestada sólo si el
+  // objetivo ya trae algo de esa respuesta (activado, o con un valor ya
+  // escrito).
+  const [rangeAnswered, setRangeAnswered] = React.useState(
+    () => objective.rangeEnabled || hasRangeValue || objective.createdByAI
   );
+  const handleRangeChoice = (rangeEnabled: boolean) => {
+    setRangeAnswered(true);
+    onChange({ rangeEnabled });
+  };
+
+  // Cuando la IA genera el objetivo de punta a punta, también resuelve
+  // mínimos y máximos (que no, por defecto), peso (lo que quede disponible)
+  // y alineación (ninguna) — pero no de una, en el mismo instante que el
+  // resto: cada uno se contesta solo cuando SU PROPIO paso queda a la
+  // vista, más abajo, para que la tarjeta se destape en cascada igual que
+  // si un autor real fuera haciendo clic paso por paso. `objective.createdByAI`
+  // sólo dice si ESTE objetivo lo generó la IA en algún momento, no si
+  // acaba de pasar: se compara contra el valor anterior para no relanzar
+  // la cascada cada vez que se re-renderiza.
+  const [aiPendingRangeAnswer, setAiPendingRangeAnswer] = React.useState(false);
+  const [aiPendingWeight, setAiPendingWeight] = React.useState(false);
+  const [aiPendingAlignment, setAiPendingAlignment] = React.useState(false);
+  const wasCreatedByAI = React.useRef(objective.createdByAI);
+  React.useEffect(() => {
+    if (!wasCreatedByAI.current && objective.createdByAI) {
+      setAiPendingRangeAnswer(true);
+      setAiPendingWeight(true);
+      setAiPendingAlignment(true);
+    }
+    wasCreatedByAI.current = objective.createdByAI;
+  }, [objective.createdByAI]);
+
+  // Cada paso siguiente espera su propia pausa de inactividad antes de
+  // destaparse — la misma idea que la meta, encadenada: mínimos y máximos
+  // no suelta peso hasta que la respuesta (Sí/No, y si Sí, el piso o el
+  // techo) deja de cambiar; peso no suelta alineación hasta que su valor
+  // deja de moverse; y así hasta probar. Todo de un golpe se sentiría como
+  // el mismo salto que el peso apareciendo con la primera tecla de la meta.
+  const debouncedRangeAnswered = useDebouncedValue(rangeAnswered, STEP_REVEAL_DEBOUNCE_MS);
+  const debouncedRangeChoice = useDebouncedValue(objective.rangeEnabled, STEP_REVEAL_DEBOUNCE_MS);
+  // Igual que el par valor inicial/meta: mínimo y máximo comparten un solo
+  // reloj de inactividad en vez de uno cada uno. Si cada campo tuviera el
+  // suyo, llenar el mínimo y quedarse escribiendo el máximo no alcanzaría a
+  // frenar nada — el mínimo, ya asentado, destaparía el peso solo.
+  const rangeValuesKey = `${objective.minValue}|${objective.maxValue}`;
+  const debouncedRangeValuesKey = useDebouncedValue(rangeValuesKey, STEP_REVEAL_DEBOUNCE_MS);
+  // Con "Sí" elegido, piso y techo cuentan como un paquete: mientras falte
+  // cualquiera de los dos, el paso sigue abierto — llenar sólo el mínimo no
+  // basta para destapar el peso.
+  const debouncedHasBothRangeValues =
+    debouncedRangeValuesKey === rangeValuesKey &&
+    parseAmount(objective.minValue) !== null &&
+    parseAmount(objective.maxValue) !== null;
+  const rangeSettled = debouncedRangeAnswered && (!debouncedRangeChoice || debouncedHasBothRangeValues);
+  // Un objetivo booleano no tiene mínimos y máximos que contestar: el peso
+  // le llega directo en cuanto la meta ya está asentada.
+  const readyForWeight = isBoolean ? showTail : showRangeStep && rangeSettled;
+  const showWeightStep = requireWeight && readyForWeight;
+
+  // El peso no llega en blanco —trae un valor ya repartido—, así que
+  // debouncear su cifra tal cual no bastaría: ya estaría "asentada" desde
+  // antes de que el paso existiera. Se ancla en cambio al momento en que el
+  // paso se destapa —`null` mientras no es así—, para que la espera cuente
+  // desde ahí y no desde que se montó la tarjeta.
+  const weightSettleKey = showWeightStep ? String(objective.weight) : null;
+  // Mientras la IA trabaja, `showWeightStep` se apaga y esta llave cae a
+  // `null` aunque el peso en sí no haya cambiado; sin el mismo candado que
+  // el título, al terminar tendría que "reasentarse" otros 450ms de la
+  // nada, arrastrando el mismo retraso a alineación y acciones que cuelgan
+  // de este paso.
+  const debouncedWeightSettleKey = useDebouncedValue(weightSettleKey, ai.isWorking ? 0 : STEP_REVEAL_DEBOUNCE_MS);
+  const weightSettled = weightSettleKey !== null && debouncedWeightSettleKey === weightSettleKey;
+  // Objetivos de la empresa no llevan peso: para ellos ya se pasó esta
+  // etapa en cuanto se llegó a la anterior, sin nada propio que esperar.
+  const pastWeightStage = requireWeight ? showWeightStep && weightSettled : readyForWeight;
+  const showAlignmentStep = pastWeightStage && hasAlignmentOptions;
+
+  // Cada uno de estos tres contesta su propio paso justo cuando ese paso
+  // queda a la vista —no antes—, así que la respuesta automática de la IA
+  // hereda la misma cascada que un clic real: mínimos y máximos primero,
+  // peso después de que eso se asiente, alineación después de que el peso
+  // se asiente.
+  React.useEffect(() => {
+    if (!aiPendingRangeAnswer || !showRangeStep) return;
+    setRangeAnswered(true);
+    onChange({ rangeEnabled: false, minValue: "", maxValue: "" });
+    setAiPendingRangeAnswer(false);
+  }, [aiPendingRangeAnswer, showRangeStep, onChange]);
+
+  React.useEffect(() => {
+    if (!aiPendingWeight || !showWeightStep || remainingWeightForAi === null) return;
+    onChange({ weight: remainingWeightForAi });
+    setAiPendingWeight(false);
+  }, [aiPendingWeight, showWeightStep, remainingWeightForAi, onChange]);
+
+  React.useEffect(() => {
+    if (!aiPendingAlignment || !showAlignmentStep) return;
+    onChange({ alignedTo: null });
+    setAiPendingAlignment(false);
+  }, [aiPendingAlignment, showAlignmentStep, onChange]);
+
+  // Misma idea que el peso: ancla la espera al momento en que el paso de
+  // alineación aparece, no a cuándo se creó el objetivo.
+  const alignmentSettleKey = showAlignmentStep ? objective.alignedTo ?? "__ninguno__" : null;
+  const debouncedAlignmentSettleKey = useDebouncedValue(
+    alignmentSettleKey,
+    ai.isWorking ? 0 : STEP_REVEAL_DEBOUNCE_MS
+  );
+  const alignmentSettled =
+    alignmentSettleKey !== null && debouncedAlignmentSettleKey === alignmentSettleKey;
+  const pastAlignmentStage = hasAlignmentOptions ? showAlignmentStep && alignmentSettled : pastWeightStage;
+
+  // Resultados/acciones clave va después de peso y alineación, no antes:
+  // cuelga del objetivo, así que sólo tiene sentido preguntarlo una vez el
+  // objetivo en sí —cuánto pesa, de qué depende— ya quedó resuelto.
+  const showActionsStep = pastAlignmentStage && hasActionsStep;
+  // Igual que el peso: ancla la espera al momento en que el paso de
+  // acciones clave aparece, no a cuándo se creó el objetivo.
+  const actionsSettleKey = showActionsStep ? JSON.stringify(objective.keyActions) : null;
+  const debouncedActionsSettleKey = useDebouncedValue(
+    actionsSettleKey,
+    ai.isWorking ? 0 : STEP_REVEAL_DEBOUNCE_MS
+  );
+  const actionsSettled =
+    actionsSettleKey !== null && debouncedActionsSettleKey === actionsSettleKey;
+
+  // Probar es el último paso: sólo tiene sentido una vez todo lo anterior
+  // —mínimos y máximos, peso, alineación si existe, y resultados/acciones
+  // clave si el modelo los lleva— ya se asentó. Aun con todo asentado,
+  // espera su propia pausa antes de aparecer.
+  const readyToTest = hasActionsStep ? showActionsStep && actionsSettled : pastAlignmentStage;
+  // Mismo candado que el título: si la IA está trabajando, esconder no
+  // puede esperar los 450ms de siempre, o "Probar objetivo" se quedaría
+  // colgado a la vista mientras "Redactando…" ya lo desmintió arriba.
+  const showTestStep = useDebouncedValue(readyToTest, ai.isWorking ? 0 : STEP_REVEAL_DEBOUNCE_MS);
 
   const cardRef = React.useRef<HTMLElement>(null);
-  const hasAlignmentOptions = companyObjectives.length > 0 || cycleObjectives.length > 0;
   const visibleSteps =
     1 +
     (showMeasureType ? 1 : 0) +
     (showValues ? 1 : 0) +
+    (showRangeStep ? 1 : 0) +
+    (showWeightStep ? 1 : 0) +
+    (showAlignmentStep ? 1 : 0) +
     (showActionsStep ? 1 : 0) +
-    (showTail && requireWeight ? 1 : 0) +
-    (showTail && requireWeight && hasAlignmentOptions ? 1 : 0) +
-    (canSimulate ? 1 : 0);
+    (showTestStep ? 1 : 0);
 
   const scrollToNewestStep = React.useCallback(() => {
     const steps = cardRef.current?.querySelectorAll("[data-objective-step]");
@@ -240,32 +429,42 @@ export function ObjectiveCardCompact({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isExpanded]);
 
+  // Mínimos y máximos hace scroll a sí mismo al activarse, y probar al
+  // abrirse: cada uno busca su propio bloque en vivo por el texto de su
+  // pregunta, en vez de guardar un ref de antemano — el bloque cambia de
+  // forma (uno o dos campos, simulador abierto o cerrado) y React lo
+  // desmonta y remonta, así que un ref capturado antes puede apuntar
+  // todavía a `null` en el primer commit del nuevo bloque.
+  const findStep = React.useCallback((text: string): HTMLElement | undefined => {
+    const steps = cardRef.current?.querySelectorAll<HTMLElement>("[data-objective-step]");
+    return steps ? Array.from(steps).find((step) => step.textContent?.includes(text)) : undefined;
+  }, []);
+
+  React.useEffect(() => {
+    if (!objective.rangeEnabled) return;
+    const timer = setTimeout(() => {
+      findStep("Mínimos y máximos de avance")?.scrollIntoView({ behavior: "auto", block: "start" });
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [objective.rangeEnabled, findStep]);
+
+  React.useEffect(() => {
+    if (!isSimulating) return;
+    const timer = setTimeout(() => {
+      findStep("¿Cómo se va a calcular el avance?")?.scrollIntoView({
+        behavior: "auto",
+        block: "start",
+      });
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [isSimulating, findStep]);
+
   const [wantsDescription, setWantsDescription] = React.useState(!!objective.description);
   const showDescription = wantsDescription || objective.description !== "";
 
   const setDescriptionShown = (checked: boolean) => {
     if (!checked && objective.description) onChange({ description: "" });
     setWantsDescription(checked);
-  };
-
-  const [isSimulating, setIsSimulating] = React.useState(false);
-  // Con el rango activado, probar sólo tiene algo que decir una vez hay un
-  // piso o un techo puestos — antes de eso, un resultado de ejemplo se
-  // comportaría igual que sin rango, y ofrecerlo sería una promesa vacía.
-  const hasRangeValue =
-    parseAmount(objective.minValue) !== null || parseAmount(objective.maxValue) !== null;
-  // Ninguna de las dos tarjetas —Sí, No— empieza marcada: `rangeEnabled` por
-  // sí solo no distingue "todavía no se ha preguntado" de "ya contestó que
-  // no", así que esta bandera lo hace. Arranca contestada sólo si el
-  // objetivo ya trae algo de esa respuesta (activado, o con un valor ya
-  // escrito); vive aquí y no en `RulesAndTestBlocks` para sobrevivir a que
-  // la tarjeta se contraiga y se vuelva a abrir.
-  const [rangeAnswered, setRangeAnswered] = React.useState(
-    () => objective.rangeEnabled || hasRangeValue || objective.createdByAI
-  );
-  const handleRangeChoice = (rangeEnabled: boolean) => {
-    setRangeAnswered(true);
-    onChange({ rangeEnabled });
   };
 
   const [isPendingDelete, setIsPendingDelete] = React.useState(false);
@@ -284,10 +483,11 @@ export function ObjectiveCardCompact({
   const titleStep = stepNumber(true);
   const measureStep = stepNumber(showMeasureType);
   const valuesStep = stepNumber(showValues);
+  const rangeStep = stepNumber(showRangeStep);
+  const weightStep = stepNumber(showWeightStep);
+  const alignmentStep = stepNumber(showAlignmentStep);
   const actionsStep = stepNumber(showActionsStep);
-  const weightStep = stepNumber(showTail && requireWeight);
-  const alignmentStep = stepNumber(showTail && requireWeight && hasAlignmentOptions);
-  const rulesStep = stepNumber(canSimulate);
+  const testStep = stepNumber(showTestStep);
 
   return (
     <>
@@ -535,56 +735,51 @@ export function ObjectiveCardCompact({
                 </CompactStep>
               )}
 
-              {showActionsStep && (
+              {showRangeStep && !isBoolean && measure !== null && (
                 <CompactStep
-                  key="actions"
+                  key="range"
                   className="py-4"
-                  number={actionsStep}
-                  question={
-                    rules.children === "results"
-                      ? `¿Qué ${vocab.children?.toLowerCase()} demuestran que llegaste?`
-                      : `¿Qué ${vocab.children?.toLowerCase()} llevan a la meta?`
-                  }
-                  help={
-                    rules.childrenRequired
-                      ? `Obligatorio en este modelo. ${
-                          rules.children === "results"
-                            ? "Cada uno lleva su propia métrica y el avance del objetivo sale de ellos."
-                            : "El trabajo concreto que mueve la cifra."
-                        }`
-                      : "Opcional. El trabajo concreto que mueve la cifra; puedes hacer que el avance se calcule con ellas."
-                  }
-                  aside={
-                    objective.keyActions.length > 0 ? (
-                      <span
-                        className={cn(
-                          "rounded-full px-2.5 py-1 text-[11px] font-bold tabular-nums",
-                          childrenDrive &&
-                            keyActionsTotal(objective.keyActions) !== TOTAL_WEIGHT
-                            ? "bg-surface-muted text-text-secondary"
-                            : "bg-primary/10 text-primary"
-                        )}
-                      >
-                        {objective.keyActions.length}{" "}
-                        {objective.keyActions.length === 1
-                          ? vocab.child?.toLowerCase()
-                          : vocab.children?.toLowerCase()}
-                      </span>
-                    ) : undefined
-                  }
+                  number={rangeStep}
+                  question="¿Quieres poner límites al objetivo?"
+                  help="Opcional. El avance será 0 % antes del piso y dejará de sumar al llegar al techo."
                 >
-                  <ObjectiveKeyActionsField
-                    actions={objective.keyActions}
-                    driveProgress={objective.keyActionsDriveProgress}
-                    onChange={(patch) => onChange(patch)}
-                    showValidation={showValidation}
-                    vocab={vocab}
-                    lockDriveProgress={rules.children === "results"}
-                  />
+                  <div className="flex flex-col gap-2">
+                    <span className="flex items-center gap-1.5 text-[13px] font-semibold text-text-primary">
+                      <Gauge className="size-3.5 text-text-secondary" strokeWidth={2} />
+                      Mínimos y máximos de avance
+                    </span>
+                    <RangeChoiceCards
+                      value={rangeAnswered ? objective.rangeEnabled : null}
+                      onChange={handleRangeChoice}
+                    />
+                  </div>
+                  <AnimatePresence initial={false}>
+                    {objective.rangeEnabled && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: "auto", opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.22, ease: "easeOut" }}
+                        className="overflow-hidden pt-4"
+                      >
+                        <ProgressRangeField
+                          embedded
+                          measure={measure}
+                          direction={direction!}
+                          initialValue={objective.initialValue}
+                          targetValue={objective.targetValue}
+                          enabled={objective.rangeEnabled}
+                          minValue={objective.minValue}
+                          maxValue={objective.maxValue}
+                          onChange={(patch) => onChange(patch)}
+                        />
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </CompactStep>
               )}
 
-              {showTail && requireWeight && (
+              {showWeightStep && (
                 <CompactStep
                   key="weight"
                   className="py-4"
@@ -602,7 +797,7 @@ export function ObjectiveCardCompact({
                 </CompactStep>
               )}
 
-              {showTail && requireWeight && hasAlignmentOptions && (
+              {showAlignmentStep && (
                 <CompactStep
                   key="alignment"
                   className="py-4"
@@ -625,44 +820,102 @@ export function ObjectiveCardCompact({
                 </CompactStep>
               )}
 
-              {canSimulate && measure !== null && (
-                <RulesAndTestBlocks
-                  key="tools"
-                  cardRef={cardRef}
-                  stepNumber={rulesStep!}
-                  rangeEnabled={objective.rangeEnabled}
-                  rangeAnswered={rangeAnswered}
-                  onRangeChoice={handleRangeChoice}
-                  hasRangeValue={hasRangeValue}
-                  isSimulating={isSimulating}
-                  onSimulatingChange={setIsSimulating}
-                  rangeFields={
-                    isBoolean ? null : (
-                      <ProgressRangeField
-                        embedded
-                        measure={measure}
-                        direction={direction!}
-                        initialValue={objective.initialValue}
-                        targetValue={objective.targetValue}
-                        enabled={objective.rangeEnabled}
-                        minValue={objective.minValue}
-                        maxValue={objective.maxValue}
-                        onChange={(patch) => onChange(patch)}
-                      />
-                    )
+              {showActionsStep && (
+                <CompactStep
+                  key="actions"
+                  className="py-4"
+                  number={actionsStep}
+                  question={
+                    isFollowUpPlan
+                      ? `¿Qué ${childrenVocab.children?.toLowerCase()} quieres dejar anotadas?`
+                      : rules.children === "results"
+                        ? `¿Qué ${childrenVocab.children?.toLowerCase()} demuestran que llegaste?`
+                        : `¿Qué ${childrenVocab.children?.toLowerCase()} llevan a la meta?`
                   }
-                  simulator={
-                    <ComplianceSimulator
-                      layout="compact"
-                      measure={measure}
-                      direction={direction ?? "increase"}
-                      start={startLine?.value ?? 0}
-                      target={target ?? 1}
-                      min={objective.rangeEnabled ? parseAmount(objective.minValue) : null}
-                      max={objective.rangeEnabled ? parseAmount(objective.maxValue) : null}
+                  help={
+                    isFollowUpPlan
+                      ? "Opcional. Este modelo se mide con una sola cifra, así que esto es el plan para sostenerla: no cambia el avance."
+                      : rules.childrenRequired
+                        ? `Obligatorio en este modelo. ${
+                            rules.children === "results"
+                              ? "Cada uno lleva su propia métrica y el avance del objetivo sale de ellos."
+                              : "El trabajo concreto que mueve la cifra."
+                          }`
+                        : "Opcional. El trabajo concreto que mueve la cifra; puedes hacer que el avance se calcule con ellas."
+                  }
+                  aside={
+                    objective.keyActions.length > 0 ? (
+                      <span
+                        className={cn(
+                          "rounded-full px-2.5 py-1 text-[11px] font-bold tabular-nums",
+                          childrenDrive &&
+                            keyActionsTotal(objective.keyActions) !== TOTAL_WEIGHT
+                            ? "bg-surface-muted text-text-secondary"
+                            : "bg-primary/10 text-primary"
+                        )}
+                      >
+                        {objective.keyActions.length}{" "}
+                        {objective.keyActions.length === 1
+                          ? childrenVocab.child?.toLowerCase()
+                          : childrenVocab.children?.toLowerCase()}
+                      </span>
+                    ) : undefined
+                  }
+                >
+                  <ObjectiveKeyActionsField
+                    actions={objective.keyActions}
+                    driveProgress={objective.keyActionsDriveProgress}
+                    onChange={(patch) => onChange(patch)}
+                    showValidation={showValidation}
+                    vocab={childrenVocab}
+                    progressMode={
+                      rules.children === "results"
+                        ? "locked-on"
+                        : isFollowUpPlan
+                          ? "locked-off"
+                          : "choice"
+                    }
+                  />
+                </CompactStep>
+              )}
+
+              {showTestStep && measure !== null && (
+                <CompactStep
+                  key="test"
+                  className="py-4"
+                  number={testStep}
+                  question="¿Cómo se va a calcular el avance?"
+                  help="Prueba un resultado de ejemplo y comprueba que el cumplimiento sale como esperas."
+                  aside={
+                    <SimulateTrigger
+                      isSimulating={isSimulating}
+                      onToggle={() => setIsSimulating(!isSimulating)}
                     />
                   }
-                />
+                >
+                  <AnimatePresence initial={false}>
+                    {isSimulating && (
+                      <motion.div
+                        key="simulator"
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: "auto", opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.22, ease: "easeOut" }}
+                        className="overflow-hidden"
+                      >
+                        <ComplianceSimulator
+                          layout="compact"
+                          measure={measure}
+                          direction={direction ?? "increase"}
+                          start={startLine?.value ?? 0}
+                          target={target ?? 1}
+                          min={objective.rangeEnabled ? parseAmount(objective.minValue) : null}
+                          max={objective.rangeEnabled ? parseAmount(objective.maxValue) : null}
+                        />
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </CompactStep>
               )}
 
               {hasError && (
@@ -691,19 +944,34 @@ export function ObjectiveCardCompact({
 
 interface CardAi {
   phase: AiPhase;
+  /** El botón sigue en modo carga más allá de `phase === "working"`: cubre
+   *  también la cascada que rellena medida, dirección y valores después de
+   *  esa primera espera. `phase` por sí solo ya no basta para saber si el
+   *  botón debe verse ocupado. */
+  isWorking: boolean;
   label: string;
   trigger: () => void;
   cancelContext: () => void;
 }
 
-/** Con texto ya escrito mejora la redacción; en blanco, pide una frase de
- * contexto y redacta el objetivo entero. */
+/** Con texto ya escrito y la medida todavía sin elegir, ese texto ya es el
+ * contexto: genera el objetivo entero a partir de él, igual que si se
+ * hubiera pedido aparte. Sólo mejora la redacción sola —sin tocar medida,
+ * dirección ni valores— una vez esos pasos ya quedaron contestados, para no
+ * pisarle al autor una elección que ya hizo. En blanco, pide la frase de
+ * contexto antes de generar. */
 function useCardAi(
   objective: Objective,
   onChange: (patch: Partial<Objective>) => void,
   inputRef: React.RefObject<HTMLInputElement | null>
 ): CardAi {
   const [phase, setPhase] = React.useState<AiPhase>("idle");
+  // `phase` vuelve a "idle" en cuanto el título queda escrito —para que
+  // "¿Cómo se mide?" pueda destaparse— pero la IA todavía tiene medida y
+  // valores por escribir. Esta bandera aparte mantiene el botón en modo
+  // carga durante esa cascada, sin bloquear los pasos que ya deberían
+  // poder aparecer.
+  const [isAutoFilling, setIsAutoFilling] = React.useState(false);
 
   // La IA tarda un momento y el autor puede seguir escribiendo mientras: se
   // lee el objetivo de cuando termina, no de cuando se pulsó.
@@ -713,46 +981,92 @@ function useCardAi(
   });
 
   const run = async (mode: "refine" | "generate") => {
-    if (objectiveRef.current.title.trim() === "") return;
+    const current = objectiveRef.current;
+    if (current.title.trim() === "") return;
+    const rawContext = current.title.trim();
     setPhase("working");
+
+    // Limpiar de una vez: mientras la IA redacta —generando o mejorando, en
+    // empresa, grupo o colaborador, la misma tarjeta para los tres— no debe
+    // quedar nada de la versión anterior a la vista. Lo de abajo ya se
+    // esconde solo (`showMeasureType` exige `ai.phase === "idle"`); el
+    // título no, así que se vacía aquí para que lo nuevo aparezca en
+    // cascada sobre una tarjeta en blanco, no encima de la anterior.
+    onChange({ title: "", description: "" });
+
     await new Promise((resolve) => setTimeout(resolve, AI_WORK_MS));
 
-    const current = objectiveRef.current;
     if (mode === "generate") {
-      const generated = generateObjectiveFromContext(current.title.trim());
-      onChange({
+      const generated = generateObjectiveFromContext(rawContext);
+      // El título es lo primero que se contesta —destapa "¿Cómo se mide?"—,
+      // y ahí se detiene: escribir medida, dirección y valores en el mismo
+      // instante los haría aparecer los tres de un golpe, aunque cada uno
+      // viva en un paso propio. Cada pieza espera la misma pausa que un
+      // autor real tardaría en leer la pregunta y contestarla. `phase`
+      // suelta el candado ya mismo —el botón sigue "ocupado" por
+      // `isAutoFilling`, no por `phase`— para que esos pasos puedan ir
+      // apareciendo mientras la cascada sigue su curso.
+      // Cada llamada repite también lo que ya se contestó antes: si algún
+      // `onChange` de más arriba mezcla contra una instantánea vieja del
+      // objetivo en vez de contra la más reciente, la del medio se perdería
+      // apenas la de después la pisara — llevando siempre el acumulado
+      // encima no depende de que eso esté bien resuelto.
+      const stage1 = {
         title: generated.title,
         description: generated.description,
-        measure: generated.measure,
-        direction: generated.direction,
+        createdByAI: true,
+      };
+      onChange(stage1);
+      setPhase("idle");
+      setIsAutoFilling(true);
+      await new Promise((resolve) => setTimeout(resolve, STEP_REVEAL_DEBOUNCE_MS));
+      const stage2 = { ...stage1, measure: generated.measure, direction: generated.direction };
+      onChange(stage2);
+      await new Promise((resolve) => setTimeout(resolve, STEP_REVEAL_DEBOUNCE_MS));
+      onChange({
+        ...stage2,
         initialValue: generated.initialValue,
         targetValue: generated.targetValue,
-        createdByAI: true,
       });
-    } else {
-      onChange(refineObjectiveWording(current));
+      setIsAutoFilling(false);
+      // Mínimos y máximos, peso y alineación se contestan solos más
+      // adelante, cada uno cuando su propio paso queda a la vista (ver los
+      // efectos `aiPending*`), continuando esta misma cascada.
+      return;
     }
+    onChange(refineObjectiveWording(current));
+    // `isAutoFilling` no es solo del modo "generate": es la señal de "esto
+    // lo acaba de escribir la IA, no lo debounces" que lee `hasTitle` más
+    // arriba. Si se apagara junto con `phase` en el mismo tick, el título
+    // recién redactado llegaría con `isWorking` ya en falso y el paso de
+    // medida —que ya tenía todo escrito, sin nada que regenerar— se
+    // quedaría escondido detrás del debounce hasta que ese medio segundo
+    // pasara solo.
     setPhase("idle");
+    setIsAutoFilling(true);
+    await new Promise((resolve) => setTimeout(resolve, STEP_REVEAL_DEBOUNCE_MS));
+    setIsAutoFilling(false);
   };
 
+  const isWorking = phase === "working" || isAutoFilling;
+
   const trigger = () => {
-    if (phase === "working") return;
+    if (isWorking) return;
     if (phase === "idle" && objective.title.trim() === "") {
       setPhase("context");
       requestAnimationFrame(() => inputRef.current?.focus());
       return;
     }
-    void run(phase === "context" ? "generate" : "refine");
+    void run(phase === "context" || objective.measure === null ? "generate" : "refine");
   };
 
-  const label =
-    phase === "working"
-      ? "Redactando…"
-      : objective.title.trim() === "" || phase === "context"
-        ? "Generar con IA"
-        : "Mejorar con IA";
+  const label = isWorking
+    ? "Redactando…"
+    : objective.title.trim() === "" || phase === "context" || objective.measure === null
+      ? "Generar con IA"
+      : "Mejorar con IA";
 
-  return { phase, label, trigger, cancelContext: () => setPhase("idle") };
+  return { phase, isWorking, label, trigger, cancelContext: () => setPhase("idle") };
 }
 
 function TitleRow({
@@ -769,7 +1083,7 @@ function TitleRow({
   onChange: (patch: Partial<Objective>) => void;
 }) {
   const isAskingContext = ai.phase === "context";
-  const isWorking = ai.phase === "working";
+  const isWorking = ai.isWorking;
   const isEmpty = objective.title.trim() === "";
 
   return (
@@ -808,13 +1122,21 @@ function TitleRow({
         <AiTriggerButton
           label={ai.label}
           onClick={ai.trigger}
+          loading={isWorking}
           disabled={isWorking || (isAskingContext && isEmpty)}
           aria-label={
-            isEmpty || isAskingContext
+            isEmpty || isAskingContext || objective.measure === null
               ? "Generar el objetivo con IA a partir del contexto"
               : "Mejorar la redacción del objetivo con IA"
           }
-          className="h-10 shrink-0 disabled:cursor-not-allowed disabled:opacity-50"
+          className={cn(
+            "h-10 shrink-0 disabled:cursor-not-allowed",
+            // Deshabilitado de verdad (sin texto en el modo contexto) se
+            // aprieta con la opacidad de siempre; trabajando no está "apagado",
+            // está ocupado — el fondo, el borde y el brillo ya lo dicen, así
+            // que el texto se queda con su color normal.
+            !isWorking && "disabled:opacity-50"
+          )}
         />
       </div>
 
@@ -824,195 +1146,11 @@ function TitleRow({
           medida y su meta.
         </p>
       )}
-
-      {isWorking && (
-        <AILoader
-          variant="inline"
-          label={isAskingContext ? "Redactando el objetivo…" : "Mejorando la redacción…"}
-        />
-      )}
     </div>
   );
 }
 
 // ── Reglas opcionales y prueba ──────────────────────────────────────────────
-
-interface RulesAndTestBlocksProps {
-  /** El `<article>` de la tarjeta entera: sirve para buscar el paso en vivo
-   * al momento de hacer scroll, en vez de guardar un ref al `CompactStep` de
-   * antemano — ese `CompactStep` cambia de forma entre "piso y techo
-   * apagado" y "encendido" (un solo bloque vs. dos), así que React lo
-   * desmonta y remonta, y un ref guardado con anticipación puede apuntar
-   * todavía a `null` en el primer commit del nuevo bloque. */
-  cardRef: React.RefObject<HTMLElement | null>;
-  rangeEnabled: boolean;
-  /** Si ya se contestó la pregunta al menos una vez. `rangeEnabled` por sí
-   * solo no distingue "todavía sin contestar" de "contestó que no" —los dos
-   * son `false`—, así que mientras esto sea falso ninguna de las dos
-   * tarjetas se pinta marcada y no se ofrece probar. */
-  rangeAnswered: boolean;
-  onRangeChoice: (enabled: boolean) => void;
-  /** Si ya hay un piso o un techo escrito. Con el rango activado, probar
-   * sólo se habilita una vez esto es cierto — antes, no hay nada distinto
-   * que comprobar. */
-  hasRangeValue: boolean;
-  isSimulating: boolean;
-  onSimulatingChange: (value: boolean) => void;
-  rangeFields: React.ReactNode;
-  simulator: React.ReactNode;
-  /** Número del bloque. La prueba, cuando está abierta, ocupa el siguiente. */
-  stepNumber: number;
-}
-
-/**
- * Los dos controles opcionales que cierran la tarjeta.
- *
- * Mínimos y máximos es un sí/no explícito, no un interruptor: decir que sí
- * despliega `rangeFields`, y "Probar objetivo" se habilita en cuanto queda
- * escrito un piso o un techo — antes de eso no hay nada distinto que
- * comprobar. Decir que no habilita probar de inmediato, como la salida
- * contraria: sin rango propio, un resultado de ejemplo es la única forma de
- * ver cómo se comporta el avance. Una línea separa las dos preguntas cuando
- * las dos existen, y el botón "Probar objetivo" / "Ocultar prueba" vive
- * siempre en el mismo sitio —a la derecha de su propio encabezado—, ofrecido
- * o ya abierto: abrir o cerrar la prueba nunca le mueve el lugar.
- */
-function RulesAndTestBlocks({
-  cardRef,
-  rangeEnabled,
-  rangeAnswered,
-  onRangeChoice,
-  hasRangeValue,
-  isSimulating,
-  onSimulatingChange,
-  rangeFields,
-  simulator,
-  stepNumber,
-}: RulesAndTestBlocksProps) {
-  // Busca el paso EN VIVO en el momento de hacer scroll, por su texto, en vez
-  // de guardar un ref al `CompactStep` de antemano: ese bloque cambia de
-  // forma entre "piso y techo apagado" (uno) y "encendido" (dos, y con
-  // "Probar objetivo" en uno de ellos), así que React lo desmonta y remonta
-  // — un ref capturado con anticipación puede seguir apuntando a `null` en
-  // el primer commit del nuevo bloque, y el scroll no ocurre nunca. Buscar
-  // por `cardRef` (el `<article>`, estable durante toda la vida de la
-  // tarjeta) no tiene ese problema.
-  const findStep = (text: string): HTMLElement | undefined => {
-    const steps = cardRef.current?.querySelectorAll<HTMLElement>("[data-objective-step]");
-    return steps ? Array.from(steps).find((step) => step.textContent?.includes(text)) : undefined;
-  };
-
-  // `setTimeout` y no `requestAnimationFrame`: rAF sólo se dispara con la
-  // pestaña visible y en primer plano — en fondo (u oculta) el navegador lo
-  // congela indefinidamente, y entonces el scroll nunca llega a ocurrir. Un
-  // `setTimeout(0)` corre igual, sin esa condición, y sigue siendo la
-  // siguiente vuelta del bucle de eventos — imperceptible, muy lejos del
-  // medio segundo que se sentía como demora con la espera anterior.
-  React.useEffect(() => {
-    if (!isSimulating) return;
-    const timer = setTimeout(() => {
-      findStep("¿Cómo se va a calcular el avance?")?.scrollIntoView({
-        behavior: "auto",
-        block: "start",
-      });
-    }, 0);
-    return () => clearTimeout(timer);
-  }, [isSimulating]);
-
-  React.useEffect(() => {
-    if (!rangeEnabled) return;
-    const timer = setTimeout(() => {
-      findStep("Mínimos y máximos de avance")?.scrollIntoView({ behavior: "auto", block: "start" });
-    }, 0);
-    return () => clearTimeout(timer);
-  }, [rangeEnabled]);
-
-  // Probar sólo tiene algo que ofrecer una vez la pregunta de rango tiene
-  // respuesta, y sólo si esa respuesta fue "No" (un resultado de ejemplo es
-  // la única vista posible) o, habiendo dicho "Sí", ya hay un piso o un techo
-  // escrito. Un objetivo booleano no tiene rango que preguntar, así que para
-  // él probar está disponible siempre.
-  const canOfferSimulate = rangeAnswered && (!rangeEnabled || hasRangeValue);
-  const showProbarBlock = rangeFields ? canOfferSimulate : true;
-
-  const rangeToggle = (
-    <div className="flex flex-col gap-2">
-      <span className="flex items-center gap-1.5 text-[13px] font-semibold text-text-primary">
-        <Gauge className="size-3.5 text-text-secondary" strokeWidth={2} />
-        Mínimos y máximos de avance
-      </span>
-      <RangeChoiceCards value={rangeAnswered ? rangeEnabled : null} onChange={onRangeChoice} />
-    </div>
-  );
-
-  // El botón de probar vive siempre como el `aside` del encabezado de su
-  // propio paso —a la altura de la pregunta, no en una fila propia debajo—,
-  // ofrecido o ya abierto: abrir o cerrar la prueba nunca le mueve el lugar.
-  const simulateTrigger = (
-    <SimulateTrigger isSimulating={isSimulating} onToggle={() => onSimulatingChange(!isSimulating)} />
-  );
-
-  const renderSimulateBody = () => (
-    <AnimatePresence initial={false}>
-      {isSimulating && (
-        <motion.div
-          key="simulator"
-          initial={{ height: 0, opacity: 0 }}
-          animate={{ height: "auto", opacity: 1 }}
-          exit={{ height: 0, opacity: 0 }}
-          transition={{ duration: 0.22, ease: "easeOut" }}
-          className="overflow-hidden"
-        >
-          {simulator}
-        </motion.div>
-      )}
-    </AnimatePresence>
-  );
-
-  // Piso/techo y prueba son dos preguntas más de la conversación, con su
-  // enunciado y su explicación siempre a la vista. La línea entre las dos
-  // preguntas la pone el propio `divide-y` del contenedor que las agrupa
-  // junto al resto de pasos de la tarjeta.
-  return (
-    <>
-      {rangeFields && (
-        <CompactStep
-          className="py-4"
-          number={stepNumber}
-          question="¿Quieres poner límites al objetivo?"
-          help="Opcional. El avance será 0 % antes del piso y dejará de sumar al llegar al techo."
-        >
-          {rangeToggle}
-          <AnimatePresence initial={false}>
-            {rangeEnabled && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: "auto", opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.22, ease: "easeOut" }}
-                className="overflow-hidden pt-4"
-              >
-                {rangeFields}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </CompactStep>
-      )}
-
-      {showProbarBlock && (
-        <CompactStep
-          className="py-4"
-          number={rangeFields ? stepNumber + 1 : stepNumber}
-          question="¿Cómo se va a calcular el avance?"
-          help="Prueba un resultado de ejemplo y comprueba que el cumplimiento sale como esperas."
-          aside={simulateTrigger}
-        >
-          {renderSimulateBody()}
-        </CompactStep>
-      )}
-    </>
-  );
-}
 
 /**
  * Sí / No como dos tarjetas, igual que el resto de las preguntas de la

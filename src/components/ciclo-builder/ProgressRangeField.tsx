@@ -87,7 +87,7 @@ export function ProgressRangeField({
   // la versión no embebida, donde el interruptor vive en este mismo
   // componente. En la versión embebida (tarjeta compacta) el interruptor
   // vive en el padre, así que es el padre quien hace este mismo scroll sobre
-  // su propio `CompactStep` — ver `RulesAndTestBlocks`.
+  // su propio `CompactStep` — ver `ObjectiveCardCompact`.
   // Sin espera: se ancla el contenedor arriba del scroll de inmediato y los
   // campos crecen *dentro* de ese encuadre ya fijo, en vez de esperar a que
   // terminen de crecer para recién entonces saltar — eso es lo que se sentía

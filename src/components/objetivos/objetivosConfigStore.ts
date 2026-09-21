@@ -20,6 +20,16 @@ import {
  * snapshot) leído con `useSyncExternalStore`, no una librería de estado.
  */
 
+/**
+ * En qué momento del ciclo se le puede poner esta banda a un objetivo.
+ *
+ * `al-cierre` es un veredicto: solo tiene sentido cuando ya no queda tiempo
+ * para mejorar ("No cumplió" a mitad de ciclo sería mentira, todavía puede
+ * cumplir). `en-curso` es un logro ya conseguido, que nada de lo que pase
+ * después le quita, así que se muestra apenas se alcanza y también al cierre.
+ */
+export type EstadoAplicaEn = "en-curso" | "al-cierre";
+
 export interface ObjetivoEstadoConfig {
   id: string;
   nombre: string;
@@ -34,7 +44,16 @@ export interface ObjetivoEstadoConfig {
    * para resolver un avance, pero no se edita ni se elimina desde el drawer.
    */
   locked?: boolean;
+  /**
+   * Cuándo aplica la banda. Mientras el ciclo sigue abierto, un objetivo que
+   * todavía no alcanza ninguna banda `en-curso` se queda en "En progreso".
+   */
+  aplicaEn?: EstadoAplicaEn;
 }
+
+/** Una banda sin `aplicaEn` explícito se comporta como siempre: aplica siempre. */
+export const aplicaEnDe = (estado: ObjetivoEstadoConfig): EstadoAplicaEn =>
+  estado.aplicaEn ?? "en-curso";
 
 export const DEFAULT_ESTADOS_OBJETIVOS: ObjetivoEstadoConfig[] = [
   {
@@ -57,21 +76,25 @@ export const DEFAULT_ESTADOS_OBJETIVOS: ObjetivoEstadoConfig[] = [
     colorHex: "#EF4444",
     descripcion: "El desempeño restó o fue negativo.",
     isDefault: true,
+    // Un avance negativo ya pasó: no es un veredicto que haya que esperar al
+    // cierre, se ve apenas se reporta.
+    aplicaEn: "en-curso",
   },
   {
     id: "no-cumplio",
     nombre: "No cumplió",
     minPorcentaje: 0,
-    maxPorcentaje: 0,
+    maxPorcentaje: 39,
     variant: "negative",
     colorHex: "#FCA5A5",
     descripcion: "Al cierre del ciclo, el objetivo no alcanzó el umbral mínimo aceptable.",
     isDefault: true,
+    aplicaEn: "al-cierre",
   },
   {
     id: "no-cumplio-parcialmente",
     nombre: "No cumplió parcialmente",
-    minPorcentaje: 1,
+    minPorcentaje: 40,
     maxPorcentaje: 69,
     variant: "warning",
     // Un naranja distinto del de "Denegado" (#FDBA74): comparten familia de
@@ -80,15 +103,16 @@ export const DEFAULT_ESTADOS_OBJETIVOS: ObjetivoEstadoConfig[] = [
     colorHex: "#F97316",
     descripcion: "El objetivo no alcanzó la meta mínima al cierre.",
     isDefault: true,
+    aplicaEn: "al-cierre",
   },
   {
     id: "en-progreso",
     nombre: "En progreso",
     minPorcentaje: 1,
-    maxPorcentaje: 69,
+    maxPorcentaje: 99,
     variant: "warning",
     colorHex: "#FCD34D",
-    descripcion: "Tiene avance reportado y todavía no llega a la meta.",
+    descripcion: "Tiene avance reportado y todavía no llega a la primera banda que aplica en curso.",
     isDefault: true,
     locked: true,
   },
@@ -101,6 +125,7 @@ export const DEFAULT_ESTADOS_OBJETIVOS: ObjetivoEstadoConfig[] = [
     colorHex: "#93C5FD",
     descripcion: "Avance significativo cercano a la meta total.",
     isDefault: true,
+    aplicaEn: "al-cierre",
   },
   {
     id: "cumplido",
@@ -111,6 +136,7 @@ export const DEFAULT_ESTADOS_OBJETIVOS: ObjetivoEstadoConfig[] = [
     colorHex: "#86EFAC",
     descripcion: "El objetivo alcanzó el 100% de la meta fijada.",
     isDefault: true,
+    aplicaEn: "en-curso",
   },
   {
     id: "sobrecumplio",
@@ -121,8 +147,51 @@ export const DEFAULT_ESTADOS_OBJETIVOS: ObjetivoEstadoConfig[] = [
     colorHex: "#22C55E",
     descripcion: "El objetivo superó el 100% de la meta fijada.",
     isDefault: true,
+    aplicaEn: "en-curso",
   },
 ];
+
+/**
+ * Hasta dónde llega "En progreso" con una configuración dada: hasta justo
+ * antes de la primera banda que sí aplica con el ciclo abierto.
+ *
+ * No se configura porque no es una decisión aparte: es el hueco que dejan las
+ * demás. Si "Cumplido" empieza en 100, un objetivo está "En progreso" de 1 a
+ * 99; si la empresa marca "Cumplió parcialmente" (70) como banda en curso,
+ * "En progreso" se encoge a 1–69 sola. Dejarlo a mano era pedir que alguien
+ * mantuviera sincronizados dos números que siempre significan lo mismo.
+ */
+export function rangoEnProgreso(estados: readonly ObjetivoEstadoConfig[]): {
+  min: number;
+  max: number;
+} {
+  const primeraEnCurso = estados
+    .filter((estado) => !estado.locked && aplicaEnDe(estado) === "en-curso")
+    .filter((estado) => estado.minPorcentaje > 0)
+    .reduce<number | null>(
+      (menor, estado) => (menor === null ? estado.minPorcentaje : Math.min(menor, estado.minPorcentaje)),
+      null
+    );
+  // Sin ninguna banda en curso por encima de 0, "En progreso" cubre todo el
+  // avance hasta la meta: el ciclo abierto no tiene nada más que mostrar.
+  return { min: 1, max: (primeraEnCurso ?? 100) - 1 };
+}
+
+/**
+ * La lista con el rango de "En progreso" recalculado. Es el invariante que
+ * `resolveEstado` necesita para no dejar huecos: se aplica al guardar y al
+ * arrancar el store, no en cada lectura.
+ */
+export function conRangoEnProgreso(
+  estados: readonly ObjetivoEstadoConfig[]
+): ObjetivoEstadoConfig[] {
+  const rango = rangoEnProgreso(estados);
+  return estados.map((estado) =>
+    estado.id === "en-progreso"
+      ? { ...estado, minPorcentaje: rango.min, maxPorcentaje: rango.max }
+      : estado
+  );
+}
 
 /**
  * Un estado fijo del objetivo: los cuatro que no son una opinión de la empresa
@@ -205,6 +274,20 @@ export const ESTADOS_FIJOS_OBJETIVO: readonly EstadoFijoObjetivo[] = [
   })),
   ...ESTADOS_FIJOS_INACTIVACION,
 ];
+
+/**
+ * Los mismos cinco fijos, pero con el rango de "En progreso" leído de la
+ * configuración que se está editando en vez del de la lista por defecto: es el
+ * único de los cinco cuyo rango se mueve cuando alguien cambia las bandas.
+ */
+export function estadosFijosParaConfig(
+  estados: readonly ObjetivoEstadoConfig[]
+): EstadoFijoObjetivo[] {
+  const rango = rangoEnProgreso(estados);
+  return ESTADOS_FIJOS_OBJETIVO.map((fijo) =>
+    fijo.id === "en-progreso" ? { ...fijo, rango } : fijo
+  );
+}
 
 export interface EstadoBadgeConfig {
   bg: string;
@@ -497,7 +580,9 @@ let state: ObjetivosConfigState = {
   // No `DEFAULT_ESTADOS_OBJETIVOS` a secas: esa lista siempre trae "Restó
   // (Negativo)", y arrancar con el permiso apagado y la banda presente es
   // justo la inconsistencia que este arreglo cierra.
-  estados: estadosConPermisoNegativo(DEFAULT_ESTADOS_OBJETIVOS, DEFAULT_ALLOW_NEGATIVE_RESULTS),
+  estados: conRangoEnProgreso(
+    estadosConPermisoNegativo(DEFAULT_ESTADOS_OBJETIVOS, DEFAULT_ALLOW_NEGATIVE_RESULTS)
+  ),
   niveles: DEFAULT_NIVELES_DESEMPENO,
   estadosParticipante: DEFAULT_ESTADOS_PARTICIPANTE,
   allowNegativeResults: DEFAULT_ALLOW_NEGATIVE_RESULTS,

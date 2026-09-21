@@ -5,10 +5,11 @@ import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { HeaderSelectionMark } from "@/components/data-display";
 import { formatCount, type SegmentKey } from "@/components/survey-builder";
-import { TOTAL_WEIGHT, type ObjectiveSetKind } from "./cicloBuilderTypes";
+import { TOTAL_WEIGHT, type ObjectiveSet, type ObjectiveSetKind } from "./cicloBuilderTypes";
 import { targetHint, targetLabel } from "./objectiveSets";
 import { assignmentRowId, type AssignmentSetSummary } from "./assignmentRows";
 import { AssignmentStatusPill, AssignmentWeightMeter } from "./assignmentPieces";
+import { ExceptionsDrawer } from "./ExceptionsDrawer";
 
 export interface AssignmentGroupListProps {
   kind: ObjectiveSetKind;
@@ -20,6 +21,9 @@ export interface AssignmentGroupListProps {
   selectedRowIds: ReadonlySet<string>;
   onToggleRow: (rowId: string) => void;
   onToggleSet: (setId: string) => void;
+  /** Todo lo repartido del ciclo: lo que abre "N excepciones" necesita ver los
+   *  objetivos individuales de quien se sacó de la agrupación. */
+  allSets: readonly ObjectiveSet[];
 }
 
 /**
@@ -47,7 +51,13 @@ export function AssignmentGroupList({
   selectedRowIds,
   onToggleRow,
   onToggleSet,
+  allSets,
 }: AssignmentGroupListProps) {
+  // Qué agrupación tiene el cajón de excepciones abierto, o null si está
+  // cerrado. Vive aquí y no en cada tarjeta porque solo puede haber un cajón
+  // abierto a la vez, sin importar cuántas tarjetas tengan excepciones.
+  const [exceptionsSetId, setExceptionsSetId] = React.useState<string | null>(null);
+  const exceptionsSummary = summaries.find((summary) => summary.set.id === exceptionsSetId) ?? null;
   // La agrupación recién creada entra abierta: es lo que se acaba de hacer, y
   // cerrarla obligaría a buscarla para comprobar que quedó como se quería.
   const [expandedIds, setExpandedIds] = React.useState<ReadonlySet<string>>(
@@ -87,8 +97,16 @@ export function AssignmentGroupList({
           selectedRowIds={selectedRowIds}
           onToggleRow={onToggleRow}
           onToggleSet={onToggleSet}
+          onShowExceptions={() => setExceptionsSetId(summary.set.id)}
         />
       ))}
+
+      <ExceptionsDrawer
+        open={exceptionsSummary !== null}
+        onOpenChange={(open) => !open && setExceptionsSetId(null)}
+        excludedIds={exceptionsSummary?.set.excludedIds ?? []}
+        allSets={allSets}
+      />
     </div>
   );
 }
@@ -103,6 +121,7 @@ function AssignmentGroupCard({
   selectedRowIds,
   onToggleRow,
   onToggleSet,
+  onShowExceptions,
 }: {
   summary: AssignmentSetSummary;
   kind: ObjectiveSetKind;
@@ -110,6 +129,7 @@ function AssignmentGroupCard({
   showValidation: boolean;
   isExpanded: boolean;
   onToggleExpanded: () => void;
+  onShowExceptions: () => void;
 } & Pick<AssignmentGroupListProps, "selectedRowIds" | "onToggleRow" | "onToggleSet">) {
   const { set, position, title, isShared, reach, excludedCount, weight, budget, issue } = summary;
   const isGroup = kind === "grupal";
@@ -162,12 +182,17 @@ function AssignmentGroupCard({
               </span>
             )}
             {excludedCount > 0 && (
-              <span
-                className="shrink-0 rounded-full bg-status-warning/10 px-2 py-0.5 text-[10.5px] font-bold text-status-warning"
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onShowExceptions();
+                }}
                 title="Personas del grupo que se sacaron de esta asignación porque llevan objetivos propios"
+                className="shrink-0 rounded-full bg-status-warning/10 px-2 py-0.5 text-[10.5px] font-bold text-status-warning transition-colors hover:bg-status-warning/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-status-warning/40"
               >
                 {excludedCount === 1 ? "1 excepción" : `${excludedCount} excepciones`}
-              </span>
+              </button>
             )}
           </span>
           <span className="truncate text-[11.5px] font-medium text-text-muted">

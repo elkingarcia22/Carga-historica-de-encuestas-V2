@@ -708,6 +708,7 @@ export function ObjectiveSetsEditor({
                   selectedRowIds={selectedRowIds}
                   onToggleRow={toggleRow}
                   onToggleSet={toggleSet}
+                  allSets={allSets}
                 />
               ) : (
                 <AssignmentRowsTable

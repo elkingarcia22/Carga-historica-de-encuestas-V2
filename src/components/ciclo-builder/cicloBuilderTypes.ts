@@ -123,6 +123,24 @@ export const CICLO_PERIOD_MONTHS: Readonly<Record<CicloPeriod, number | null>> =
   personalizado: null,
 };
 
+/** Cada cuánto se les recuerda a los participantes que actualicen su avance,
+ *  cuando el ciclo tiene esos recordatorios encendidos. */
+export type ReminderFrequency = "daily" | "weekly" | "biweekly" | "monthly";
+
+export const REMINDER_FREQUENCY_LABELS: Readonly<Record<ReminderFrequency, string>> = {
+  daily: "Todos los días",
+  weekly: "Cada semana",
+  biweekly: "Cada dos semanas",
+  monthly: "Cada mes",
+};
+
+export const REMINDER_FREQUENCY_ORDER: readonly ReminderFrequency[] = [
+  "daily",
+  "weekly",
+  "biweekly",
+  "monthly",
+];
+
 /**
  * Everything the editor needs to say about one measure type.
  *
@@ -393,36 +411,6 @@ export interface CicloAssignment {
   groupsAutoInclude: boolean;
 }
 
-/**
- * Qué pasa con el avance de alguien cuando el paso de Participantes lo
- * sincroniza en vivo con el organigrama y detecta que salió de la empresa o
- * que cambió de área/grupo a mitad del ciclo. Solo importa mientras esa
- * sincronización está activa (`companyAutoInclude`/`groupsAutoInclude` en
- * `ParticipantsSelection`) — con la lista congelada no hay evento que dispare
- * ninguna de las dos.
- *
- * Vive aparte de `ParticipantsSelection` a propósito: esa selección es
- * compartida con la encuesta, que no tiene avance que contar o no contar.
- */
-export interface CicloResultsPolicy {
-  /** Se desvincula de la empresa: ¿su avance hasta ese momento se retira de
-   *  los promedios (false), o sigue contando igual (true)? */
-  onCompanyLeaveCounts: boolean;
-  /** Cambia de área o de grupo ("Por grupos" solamente): en el grupo
-   *  anterior queda marcado inactivo siempre — eso no se elige—; esto decide
-   *  si ese avance sigue contando ahí o no. En el grupo nuevo entra activo,
-   *  sin relación con esta bandera. */
-  onGroupChangeCounts: boolean;
-}
-
-/** Igual que "Retirado" en los estados de participante hoy: alguien que se va
- *  deja de contar por defecto, pero un traslado de área sí conserva lo
- *  avanzado en el equipo anterior. */
-export const DEFAULT_CICLO_RESULTS_POLICY: CicloResultsPolicy = {
-  onCompanyLeaveCounts: false,
-  onGroupChangeCounts: true,
-};
-
 /** Lifecycle of a ciclo. Mirrors the survey's own states. */
 export type CicloStatus = "draft" | "scheduled" | "live" | "closed";
 
@@ -453,15 +441,16 @@ export interface CicloDraft {
    * applies, and in what order it offers its methods. */
   objectiveCreator: CicloObjectiveCreator | null;
   participants: ParticipantsSelection;
-  /** Qué pasa con el avance de alguien a quien la sincronización automática
-   *  del paso de Participantes le detecta una salida de la empresa o un
-   *  cambio de área/grupo. Ver `CicloResultsPolicy`. */
-  resultsPolicy: CicloResultsPolicy;
   /** Whether the company has top-level objectives for this ciclo. */
   useCompanyObjectives: boolean;
   /** Company-level objectives. Carry no weight: they frame the ciclo, they
    * are not something a single person is scored on. */
   companyObjectives: readonly Objective[];
+  /** Si el ciclo les envía recordatorios automáticos a los participantes
+   *  para que actualicen su avance. */
+  remindersEnabled: boolean;
+  /** Cada cuánto se envían, mientras `remindersEnabled` esté encendido. */
+  reminderFrequency: ReminderFrequency;
   /** Whether this ciclo hands out objectives by group at all. Off hides the
    * step's content and drops its "at least one assignment" requirement —
    * a ciclo can run on individual assignments alone, or on none. */

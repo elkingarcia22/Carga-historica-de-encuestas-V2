@@ -17,6 +17,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import type { EstadoAplicaEn } from "./objetivosConfigStore";
 
 /**
  * Las piezas con las que se arma el drawer de configuración de objetivos: el
@@ -187,6 +188,64 @@ export interface RangeColorOption {
 }
 
 /**
+ * En qué momento del ciclo puede aparecer una banda. Son dos opciones
+ * excluyentes y ambas caben escritas, así que van como dos pastillas y no como
+ * un `Select`: se ve la decisión tomada y la alternativa sin abrir nada, y
+ * cambiarla cuesta un clic en vez de dos.
+ */
+function AplicaEnToggle({
+  value,
+  onChange,
+}: {
+  value: EstadoAplicaEn;
+  onChange: (value: EstadoAplicaEn) => void;
+}) {
+  const options: { value: EstadoAplicaEn; label: string; hint: string }[] = [
+    {
+      value: "en-curso",
+      label: "En curso",
+      hint: "Se muestra apenas el objetivo llega a este rango, con el ciclo abierto. Hasta entonces el objetivo se ve “En progreso”.",
+    },
+    {
+      value: "al-cierre",
+      label: "Al cierre",
+      hint: "Es un veredicto: solo aparece cuando el ciclo cierra. Mientras siga abierto, el objetivo se ve “En progreso”.",
+    },
+  ];
+
+  return (
+    <div className="flex h-9 items-center gap-0.5 rounded-lg border border-border/70 bg-surface-muted p-0.5">
+      {options.map((option) => {
+        const isActive = option.value === value;
+        return (
+          <Tooltip key={option.value} delayDuration={200}>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => onChange(option.value)}
+                aria-pressed={isActive}
+                className={cn(
+                  "h-full flex-1 rounded-[6px] px-2 text-[12px] font-semibold transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+                  isActive
+                    ? "bg-surface text-text-primary shadow-xs"
+                    : "text-text-muted hover:text-text-secondary"
+                )}
+              >
+                {option.label}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top" sideOffset={6} className="max-w-[16rem] text-[12px]">
+              {option.hint}
+            </TooltipContent>
+          </Tooltip>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
  * Una banda con nombre, rango y color: la fila con la que se editan tanto los
  * estados de un objetivo como los niveles de desempeño.
  *
@@ -207,6 +266,8 @@ export function RangeRow({
   colorHex,
   colors,
   onColorChange,
+  aplicaEn,
+  onAplicaEnChange,
   allowNegative,
   onDelete,
   deleteDisabledReason,
@@ -224,6 +285,13 @@ export function RangeRow({
   colorHex: string;
   colors: readonly RangeColorOption[];
   onColorChange: (hex: string) => void;
+  /**
+   * En qué momento del ciclo aplica la banda. Solo lo tienen los estados del
+   * objetivo: un nivel de desempeño califica a una persona al cierre y no
+   * tiene esta decisión, así que ahí la columna no se dibuja.
+   */
+  aplicaEn?: EstadoAplicaEn;
+  onAplicaEnChange?: (value: EstadoAplicaEn) => void;
   allowNegative: boolean;
   onDelete: () => void;
   /** Por qué no se puede borrar esta fila, o null si sí se puede. */
@@ -276,6 +344,11 @@ export function RangeRow({
       <Field label="Hasta (%)" className={cn(isInline && "w-24 shrink-0")}>
         <PercentInput value={max} onChange={onMaxChange} allowNegative={allowNegative} />
       </Field>
+      {aplicaEn !== undefined && onAplicaEnChange && (
+        <Field label="Aplica" className={cn(isInline && "w-[9.5rem] shrink-0")}>
+          <AplicaEnToggle value={aplicaEn} onChange={onAplicaEnChange} />
+        </Field>
+      )}
       <Field label="Color" className={cn(isInline && "w-36 shrink-0")}>
         <Select value={colorHex} onValueChange={onColorChange}>
           {/*
@@ -324,7 +397,16 @@ export function RangeRow({
         {deleteButton}
       </div>
 
-      <div className="grid grid-cols-[1fr_1fr_9rem] gap-2 pl-9">{rangeFields}</div>
+      <div
+        className={cn(
+          "grid gap-2 pl-9",
+          aplicaEn !== undefined && onAplicaEnChange
+            ? "grid-cols-[1fr_1fr_9.5rem_9rem]"
+            : "grid-cols-[1fr_1fr_9rem]"
+        )}
+      >
+        {rangeFields}
+      </div>
     </div>
   );
 }

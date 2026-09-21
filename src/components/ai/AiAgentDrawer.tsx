@@ -4,6 +4,7 @@ import { ShellAgentPanelSlot } from "@/components/app-shell";
 import { MovingBorderBeam } from "@/components/ui/moving-border-beam";
 import { ArrowUp, Plus, Sparkles, X } from "lucide-react";
 import { AI_GRADIENT, CURRENT_USER } from "@/components/app-shell/appShellData";
+import { AGENT_PANEL_WIDTH, agentPanelTransition } from "./agentPanelMotion";
 import {
   AiObjectiveChatPanel,
   type AiChatComposerMode,
@@ -11,7 +12,7 @@ import {
 } from "@/components/ciclo-builder/AiObjectiveChatPanel";
 
 /** Width of the open panel — the content column narrows by exactly this much. */
-const PANEL_WIDTH = 400;
+const PANEL_WIDTH = AGENT_PANEL_WIDTH;
 
 export type AiAgentContext = "dashboard" | "builder" | "results" | "demographics" | "objectives";
 
@@ -80,16 +81,22 @@ export function AiAgentDrawer({ open, onOpenChange, context = "dashboard", objec
           column next to it — `overflow-hidden` clips the fixed-width panel
           inside it as this shrinks to 0, instead of reflowing its contents. */}
       <div
-        className="h-full shrink-0 overflow-hidden transition-[width] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
-        style={{ width: open ? PANEL_WIDTH : 0 }}
+        className="h-full shrink-0 overflow-hidden"
+        style={{
+          width: open ? PANEL_WIDTH : 0,
+          transition: agentPanelTransition("width"),
+        }}
       >
           {isObjectives && objectiveCallbacks ? (
             <div
-              className={cn(
-                "h-full transition-opacity duration-300 delay-100",
-                !open && "invisible"
-              )}
-              style={{ width: PANEL_WIDTH }}
+              className={cn("h-full", !open && "invisible")}
+              style={{
+                width: PANEL_WIDTH,
+                // Sin retraso: el contenido aparece mientras el hueco se abre,
+                // no después. Esperar a que termine se leía como dos pasos.
+                opacity: open ? 1 : 0,
+                transition: agentPanelTransition("opacity"),
+              }}
               aria-hidden={!open}
             >
               <AiObjectiveChatPanel

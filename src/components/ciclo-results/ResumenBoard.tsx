@@ -112,6 +112,8 @@ export interface ResumenBoardBlockProps {
   /** Una pieza que no se puede mover (el hueco de trabajo de la IA, que dura
    *  dos segundos y no es de nadie). */
   fixed?: boolean;
+  /** Si la pieza debe quedarse fija al hacer scroll. */
+  sticky?: boolean;
   /**
    * Convierte la pieza en el título de una subsección.
    *
@@ -548,7 +550,7 @@ export function ResumenBoard({
       style={{ gridTemplateColumns: `repeat(${COLUMNS}, minmax(0, 1fr))` }}
     >
       {blocks.map((block, index) => {
-        const { id, label, fixed, heading, hint } = block.props;
+        const { id, label, fixed, sticky, heading, hint } = block.props;
         const span = spans[index];
         const isDragging = dragging === id;
         const isTravelling = !isDragging && travelling?.has(id) === true;
@@ -572,10 +574,10 @@ export function ResumenBoard({
               else nodes.current.delete(id);
             }}
             data-block-id={id}
-            layout={!isDragging && !isTravelling}
+            layout={!isDragging && !isTravelling && !sticky}
             transition={{ duration: 0.26, ease: [0.16, 1, 0.3, 1] }}
             style={{ gridColumn: `span ${span} / span ${span}` }}
-            className="flex min-w-0 flex-col"
+            className={cn("flex min-w-0 flex-col", sticky && "sticky top-4 z-40 bg-background -mx-2 px-2")}
           >
             <div
               className={cn(

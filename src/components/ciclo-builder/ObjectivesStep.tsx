@@ -289,7 +289,12 @@ export function ObjectivesStep({
     autoInclude: draft.assignment.groupsAutoInclude,
     onAutoIncludeChange: (groupsAutoInclude: boolean) =>
       onChange({ assignment: { ...draft.assignment, groupsAutoInclude } }),
-    companyObjectives: draft.companyObjectives,
+    // Un ciclo sin norte no tiene a qué alinear, aunque el borrador arrastre
+    // objetivos de empresa de antes de apagarlo: es la misma lectura que hace
+    // el mapa de alineación (`AlignmentStep`), y sin ella el chat de IA
+    // preguntaba a qué objetivo de la empresa apunta un grupo en ciclos que
+    // no tienen ninguno.
+    companyObjectives: draft.useCompanyObjectives ? draft.companyObjectives : [],
     rules: draft.modelRules,
     model: draft.objectiveModel,
     drawerRequest: editorProps.drawerRequest,

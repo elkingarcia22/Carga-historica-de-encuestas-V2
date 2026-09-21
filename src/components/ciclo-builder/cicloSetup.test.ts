@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_PARTICIPANTS } from "@/components/survey-builder";
-import { DEFAULT_CICLO_RESULTS_POLICY, type CicloDraft } from "./cicloBuilderTypes";
+import type { CicloDraft } from "./cicloBuilderTypes";
 import {
   levelsForCreator,
   setupBlockIssue,
@@ -37,10 +37,11 @@ const draftWith = (extra: Partial<CicloDraft> = {}): CicloDraft => ({
   participants: DEFAULT_PARTICIPANTS,
   useCompanyObjectives: true,
   companyObjectives: [],
+  remindersEnabled: false,
+  reminderFrequency: "weekly",
   useGroupObjectives: true,
   useIndividualObjectives: false,
   assignment: { groupSegmentBy: "area", groupsAutoInclude: false },
-  resultsPolicy: DEFAULT_CICLO_RESULTS_POLICY,
   objectiveSets: [],
   ...extra,
 });

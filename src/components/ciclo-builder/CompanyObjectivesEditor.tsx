@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Building2, Lock, Plus, Target } from "lucide-react";
+import { Building2, Lock, Plus, Sparkles, Target } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { ObjectiveCardCompact } from "./ObjectiveCardCompact";
 import { AiAgentDrawer } from "@/components/ai/AiAgentDrawer";
@@ -148,6 +148,12 @@ export function CompanyObjectivesEditor({
         onRemoveObjectives: onRemoveMany,
         maxCount: remaining,
         scopeLabel: "de la empresa",
+        // El norte no cuelga de nada, así que va sin `companyObjectives`: lo
+        // que el modelo sí cambia aquí es el vocabulario y qué se pregunta.
+        scope: "empresa",
+        audienceLabel: "la empresa",
+        rules,
+        model,
         onWorkingStateChange: (isWorking, progress, caption, detail) => {
           if (isWorking) {
             setWorkingState({ progress, caption, detail });
@@ -216,6 +222,23 @@ export function CompanyObjectivesEditor({
           caption={workingState.caption}
           detail={workingState.detail}
         />
+      )}
+
+      {/* Mientras la IA conversa —antes de generar, cuando aún no hay
+          progreso que mostrar en el loader de arriba— el lienzo no puede
+          quedar en blanco: dice que los objetivos van a caer ahí mismo en
+          cuanto el Agente termine de preguntar. */}
+      {enabled && isEmpty && composerMode !== null && workingState === null && (
+        <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-border bg-surface-muted/30 px-6 py-12 text-center">
+          <span className="flex size-11 items-center justify-center rounded-2xl bg-surface text-text-secondary shadow-sm">
+            <Sparkles className="size-5 text-primary" strokeWidth={2.2} />
+          </span>
+          <p className="text-[14px] font-semibold text-text-primary">Creando objetivos con IA</p>
+          <p className="max-w-[46ch] text-[12.5px] leading-relaxed text-text-secondary">
+            Cuéntale al Agente IA qué resultados necesita la empresa en este ciclo. Los
+            objetivos que proponga aparecerán aquí para que los revises.
+          </p>
+        </div>
       )}
 
       {enabled && isEmpty && composerMode === null && (

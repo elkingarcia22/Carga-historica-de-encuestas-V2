@@ -15,13 +15,8 @@
 import * as React from "react";
 import { motion } from "framer-motion";
 import {
-  ArrowRight,
   ArrowUp,
-  Check,
-  RefreshCw,
-  SlidersHorizontal,
   Sparkles,
-  Trash2,
   TrendingDown,
   TrendingUp,
   X,
@@ -34,27 +29,47 @@ import { AiSparkGlyph } from "@/components/ai-interaction/AiSparkGlyph";
 import {
   AMBITION_META,
   AMBITION_ORDER,
-  FOCUS_META,
-  FOCUS_ORDER,
-  createBlankBrief,
   generateObjectiveSet,
-  isBriefReady,
   focusLabel,
-  isPresetFocus,
-  type AiObjectiveBrief,
-  type AmbitionLevel,
   type BriefFocus,
-  type ObjectiveFocus,
 } from "./aiObjectiveBrief";
-import { MEASURE_META, formatRawValue, type Objective } from "./cicloBuilderTypes";
+import { type Objective } from "./cicloBuilderTypes";
 import {
+  DEFAULT_OBJECTIVE_MODEL_RULES,
+  type ObjectiveModelId,
+  type ObjectiveModelRules,
+} from "./objectiveModel";
+import {
+  createEmptyBrief,
+  focusesFromObjectives,
   parseBriefFromMessage,
-  getMissingCriteria,
   mergeBriefUpdate,
   toAiObjectiveBrief,
-  type CriterionId,
   type ParsedBrief,
 } from "./aiChatParser";
+import {
+  CONTINUE_VALUE,
+  NO_ALIGNMENT_VALUE,
+  NO_CHILDREN_VALUE,
+  SKIP_BASELINE_VALUE,
+  SKIP_LEVER_VALUE,
+  WRITE_OWN_VALUE,
+  alignmentChips,
+  chatChildrenVocab,
+  chatGreeting,
+  chatVocab,
+  companyObjectiveLabel,
+  criterionChips,
+  criterionQuestion,
+  focusChips,
+  freeCompanyObjectives,
+  missingCriteria,
+  workingPhases,
+  type ChatChip,
+  type ChatContext,
+  type CriterionId,
+  type ObjectiveScope,
+} from "./aiChatQuestions";
 
 /* ------------------------------------------------------------------ *
  * Tipos de mensajes del chat
@@ -88,67 +103,66 @@ type ChatMessage =
   | ChipsMessage
   | TypingMessage;
 
-interface ChatChip {
-  label: string;
-  value: string;
-}
-
 /* ------------------------------------------------------------------ *
  * Constantes
  * ------------------------------------------------------------------ */
 
-const GREETING_SINGLE =
-  "¡Hola! 👋 Cuéntame qué objetivo quieres crear. Descríbelo con tus palabras: qué quieres lograr, para qué área, y qué tan exigente debe ser la meta.";
-
-const getGreetingSet = (scopeLabel: string) =>
-  `¡Hola! 👋 Cuéntame qué objetivos quieres crear. Describe lo que necesitas: cuántos, para qué áreas, qué contexto debe reflejarse en los objetivos ${scopeLabel}, y qué tan exigentes deben ser las metas.`;
-
-
-const GREETING_STARTERS: readonly ChatChip[] = [
-  { label: "3 objetivos de crecimiento y clientes, retadores", value: "Quiero crear 3 objetivos enfocados en crecimiento y clientes, que sean retadores" },
-  { label: "Subir la satisfacción del cliente este trimestre", value: "Subir la satisfacción del cliente este trimestre" },
-  { label: "Reducir la rotación y mejorar el clima laboral", value: "Quiero reducir la rotación de los colaboradores y mejorar el clima organizacional" },
-];
-
-const FOCUS_CHIPS: readonly ChatChip[] = FOCUS_ORDER.map((focus) => ({
-  label: FOCUS_META[focus].label,
-  value: focus,
-}));
-
-const COUNT_CHIPS: readonly ChatChip[] = [
-  { label: "1", value: "1" },
-  { label: "2", value: "2" },
-  { label: "3", value: "3" },
-  { label: "4", value: "4" },
-  { label: "5", value: "5" },
-];
-
-const AMBITION_CHIPS: readonly ChatChip[] = AMBITION_ORDER.map((level) => ({
-  label: `${AMBITION_META[level].label} — ${AMBITION_META[level].tagline}`,
-  value: level,
-}));
-
-const CLARIFICATION_QUESTIONS: Record<CriterionId, string> = {
-  focuses: "¿En qué frentes se juega este ciclo? Elige los que apliquen:",
-  count: "¿Cuántos objetivos quieres que genere?",
-  ambition: "¿Qué tan exigentes deben ser las metas?",
-};
-
-const CLARIFICATION_CHIPS: Record<CriterionId, readonly ChatChip[]> = {
-  focuses: FOCUS_CHIPS,
-  count: COUNT_CHIPS,
-  ambition: AMBITION_CHIPS,
-};
-
-/** Lo que la IA dice estar haciendo mientras genera. */
-const WORKING_PHASES: readonly string[] = [
-  "Leyendo tu contexto…",
-  "Eligiendo cómo medir cada objetivo…",
-  "Definiendo la dirección de cada métrica…",
-  "Proponiendo metas para el ciclo…",
+/** Las acciones sobre la propuesta ya generada, como una pregunta más del
+ *  chat —chips en una fila, igual que el resto de la conversación— en vez
+ *  de una barra de botones aparte que rompía el patrón. */
+const REVIEW_CHIPS: readonly ChatChip[] = [
+  { label: "Conservar todos", value: "conservar", tone: "primary" },
+  { label: "Otra propuesta", value: "regenerar" },
+  { label: "Modificar", value: "modificar" },
+  { label: "Descartar", value: "descartar", tone: "danger" },
 ];
 
 const GENERATION_MS = 2800;
+
+/** Cómo se nombra al destinatario cuando nadie pasó un nombre propio. */
+const defaultAudience = (scope: ObjectiveScope): string =>
+  scope === "empresa" ? "la empresa" : scope === "grupo" ? "el equipo" : "la persona";
+
+/** Las formas de decir "ya está, sigamos" sin elegir la fila que lo dice. */
+const isContinueWord = (text: string): boolean =>
+  ["seguir", "seguir con estos", "continuar", "listo", "ninguno", "ya", "no"].includes(
+    text.toLowerCase().trim()
+  );
+
+/**
+ * Lo que la IA dice haber hecho: cuántos, de qué cuelgan y qué llevan debajo.
+ *
+ * Nombrarlo importa porque lo que se generó ya no es solo una lista de
+ * títulos: si el modelo pidió resultados clave, están escritos, y si el grupo
+ * apunta al norte, ya quedaron colgados. Decirlo evita que alguien abra las
+ * tarjetas a revisar si hay que completarlas a mano.
+ */
+function proposalSummary(
+  generated: readonly Objective[],
+  brief: ParsedBrief,
+  ctx: ChatContext
+): string {
+  const vocab = chatVocab(ctx);
+  const childrenVocab = chatChildrenVocab(ctx);
+  const noun = generated.length === 1 ? vocab.objective.toLowerCase() : vocab.objectives.toLowerCase();
+  const parts = [`Acabo de proponer ${generated.length} ${noun}`];
+
+  const children = generated[0]?.keyActions.length ?? 0;
+  if (children > 0 && childrenVocab.children) {
+    parts.push(
+      `con ${children} ${childrenVocab.children.toLowerCase()} cada ${vocab.objective.toLowerCase()}`
+    );
+  }
+  if (brief.alignedTo.length > 0) {
+    parts.push(
+      brief.alignedTo.length === 1
+        ? "colgados del objetivo de la empresa que elegiste"
+        : `repartidos entre los ${brief.alignedTo.length} objetivos de la empresa que elegiste`
+    );
+  }
+
+  return `${parts.join(", ")}. Están en la pantalla principal: échales un vistazo allí.`;
+}
 
 let _messageId = 0;
 function nextId(): string {
@@ -167,6 +181,22 @@ export interface AiObjectiveChatPanelProps {
   onClose: () => void;
   maxCount?: number;
   scopeLabel?: string;
+  /**
+   * Para quién se escribe. No es cosmético: decide qué se pregunta y en qué
+   * orden —el norte de la empresa parte de cero, un grupo parte de ese norte—.
+   */
+  scope?: ObjectiveScope;
+  /** Las reglas del modelo del ciclo. Sin ellas corre como SMART, que es el
+   *  constructor de siempre. */
+  rules?: ObjectiveModelRules;
+  /** Solo para el vocabulario y el nombre del modelo en el saludo: lo que
+   *  decide el flujo son las reglas. */
+  model?: ObjectiveModelId | null;
+  /** El norte ya escrito, para poder colgar de él lo que se genere aquí. */
+  companyObjectives?: readonly Objective[];
+  /** De quién son estos objetivos, como se diría en voz alta: "Marketing",
+   *  "Ana Pérez", "la empresa". */
+  audienceLabel?: string;
   onRemoveObjectives?: (ids: string[]) => void;
   onWorkingStateChange?: (isWorking: boolean, progress: number, caption: string, detail: string) => void;
   /**
@@ -190,6 +220,11 @@ export function AiObjectiveChatPanel({
   onClose,
   maxCount = 10,
   scopeLabel = "del ciclo",
+  scope = "empresa",
+  rules = DEFAULT_OBJECTIVE_MODEL_RULES,
+  model = null,
+  companyObjectives = [],
+  audienceLabel,
   onRemoveObjectives,
   onWorkingStateChange,
   onKeep,
@@ -197,13 +232,30 @@ export function AiObjectiveChatPanel({
   const [messages, setMessages] = React.useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = React.useState("");
   const [phase, setPhase] = React.useState<ChatPhase>("chatting");
-  const [brief, setBrief] = React.useState<ParsedBrief>({
-    count: mode === "single" ? 1 : null,
-    focuses: [],
-    ambition: null,
-    context: "",
-    notes: "",
-  });
+  const [brief, setBrief] = React.useState<ParsedBrief>(() =>
+    createEmptyBrief(mode === "single" ? 1 : null)
+  );
+
+  /**
+   * Todo lo que el chat sabe antes de hablar. Se arma una vez por apertura:
+   * el modelo y el norte no cambian a mitad de una conversación, y recalcularlo
+   * en cada render volvería a barajar las opciones que el autor está leyendo.
+   */
+  const ctx: ChatContext = React.useMemo(
+    () => ({
+      scope,
+      // El norte no lleva nada colgando —la tarjeta de empresa apaga los
+      // hijos aunque el modelo los exija (`ObjectiveCardCompact`)—, así que
+      // aquí tampoco se preguntan ni se escriben: serían datos invisibles.
+      rules: scope === "empresa" ? { ...rules, children: "none" as const } : rules,
+      model,
+      companyObjectives,
+      audienceLabel: audienceLabel ?? defaultAudience(scope),
+      maxCount,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scope, rules, model, companyObjectives, audienceLabel, maxCount]
+  );
   const [pendingCriteria, setPendingCriteria] = React.useState<CriterionId[]>([]);
   const [generatedObjectives, setGeneratedObjectives] = React.useState<Objective[]>([]);
   const [insertedIds, setInsertedIds] = React.useState<string[]>([]);
@@ -233,14 +285,14 @@ export function AiObjectiveChatPanel({
     []
   );
 
-  // Saludo inicial.
+  // Saludo inicial — sin opciones: la primera respuesta es el contexto del
+  // ciclo, y sugerirlo sería poner en boca del autor un ciclo que no es suyo.
   React.useEffect(() => {
-    const greeting: ChipsMessage = {
+    const greeting: TextMessage = {
       id: nextId(),
       role: "ai",
-      kind: "chips",
-      text: mode === "single" ? GREETING_SINGLE : getGreetingSet(scopeLabel),
-      chips: GREETING_STARTERS,
+      kind: "text",
+      text: chatGreeting(ctx, mode),
       timestamp: new Date(),
     };
     setMessages([greeting]);
@@ -294,6 +346,29 @@ export function AiObjectiveChatPanel({
   const removeMessage = (id: string) =>
     setMessages((prev) => prev.filter((m) => m.id !== id));
 
+  /**
+   * Un mensaje de la IA, con los tres puntos de "escribiendo" antes —igual
+   * que ya hacía `startGeneration`, aquí para el resto de la conversación—.
+   * Sin esto cada pregunta aparecía de golpe tras el `setTimeout`, que se lee
+   * como una interfaz reaccionando, no como alguien pensando la respuesta.
+   */
+  const sendAiText = (text: string, delay = 550) => {
+    const typingId = addTyping();
+    setTimeout(() => {
+      removeMessage(typingId);
+      addAiText(text);
+    }, delay);
+  };
+
+  const sendAiChips = (text: string, chips: readonly ChatChip[], delay = 550) => {
+    const typingId = addTyping();
+    setTimeout(() => {
+      removeMessage(typingId);
+      addAiChips(text, chips);
+      inputRef.current?.focus();
+    }, delay);
+  };
+
   /* ---- Generación ---- */
 
   const startGeneration = async (finalBrief: ParsedBrief) => {
@@ -303,15 +378,18 @@ export function AiObjectiveChatPanel({
 
     const typingId = addTyping();
 
-    // Iniciar progreso
+    // Iniciar progreso. Las fases dicen lo que este ciclo de verdad hace:
+    // colgar del norte solo cuando hay norte, escribir resultados clave solo
+    // cuando el modelo los pide.
+    const phases = workingPhases(ctx);
     let progress = 0;
     const detail = mode === "single" ? "Creando un objetivo..." : `Creando objetivos ${scopeLabel}...`;
-    onWorkingStateChange?.(true, progress, WORKING_PHASES[0], detail);
+    onWorkingStateChange?.(true, progress, phases[0], detail);
 
     const interval = setInterval(() => {
       progress = Math.min(95, progress + 5);
-      const step = Math.floor((progress / 100) * WORKING_PHASES.length);
-      const caption = WORKING_PHASES[Math.min(WORKING_PHASES.length - 1, Math.max(0, step))];
+      const step = Math.floor((progress / 100) * phases.length);
+      const caption = phases[Math.min(phases.length - 1, Math.max(0, step))];
       onWorkingStateChange?.(true, progress, caption, detail);
     }, 150);
 
@@ -324,7 +402,7 @@ export function AiObjectiveChatPanel({
     }
 
     progress = 100;
-    onWorkingStateChange?.(true, 100, WORKING_PHASES[WORKING_PHASES.length - 1], detail);
+    onWorkingStateChange?.(true, 100, phases[phases.length - 1], detail);
     await new Promise((resolve) => setTimeout(resolve, 450));
     if (run.cancelled) {
       onWorkingStateChange?.(false, 0, "", "");
@@ -334,10 +412,14 @@ export function AiObjectiveChatPanel({
     removeMessage(typingId);
     onWorkingStateChange?.(false, 0, "", "");
 
-    // Generar objetivos
+    // Generar objetivos, ya con la forma que el modelo pide: colgados del
+    // norte elegido y con sus resultados clave, acciones o tareas debajo.
     const aiBrief = toAiObjectiveBrief(finalBrief);
     const generated = generateObjectiveSet(aiBrief, {
       useContextAsObjective: mode === "single",
+      rules: ctx.rules,
+      alignTo: finalBrief.alignedTo,
+      childrenCount: finalBrief.childrenCount,
     });
 
     setGeneratedObjectives(generated);
@@ -346,13 +428,109 @@ export function AiObjectiveChatPanel({
     onConfirm(generated);
     setInsertedIds(generated.map((o) => o.id));
 
-    const countLabel = generated.length === 1
-      ? "1 objetivo"
-      : `${generated.length} objetivos`;
-
-    addAiText(`¡Listo! Acabo de proponer ${countLabel} en la pantalla principal. Revísalos allí y usa los botones de abajo para decidir qué hacer con ellos.`);
-
+    addAiText(`¡Listo! ${proposalSummary(generated, finalBrief, ctx)}`);
     setPhase("reviewing");
+
+    sendAiChips("¿Qué hacemos con ellos?", REVIEW_CHIPS, 350);
+  };
+
+  /* ---- Ronda de frentes ---- */
+
+  /**
+   * Tras sumar un frente se vuelve a preguntar, venga de la lista o escrito a
+   * mano: antes escribirlo saltaba directo a generar, así que quien tenía dos
+   * frentes propios solo podía contar el primero.
+   */
+  const askMoreFocuses = (focuses: readonly string[], addedLabel: string) => {
+    sendAiChips(
+      `Frente "${addedLabel}" añadido. ¿Quieres agregar otro o seguimos?`,
+      [
+        {
+          label: "Seguir con estos",
+          value: CONTINUE_VALUE,
+          tone: "primary",
+          description: focuses.map(focusLabel).join(", "),
+        },
+        ...focusChips(ctx, focuses),
+      ],
+      350
+    );
+  };
+
+  /** Cierra la ronda de frentes y sigue con lo que falte. */
+  const finishFocuses = (current: ParsedBrief) => {
+    continueAfter(current, "focuses");
+  };
+
+  /* ---- Ronda de alineación ---- */
+
+  /**
+   * Igual que los frentes pero sobre el norte: un grupo puede empujar dos
+   * objetivos de la empresa a la vez, y obligarlo a elegir uno solo sería
+   * inventar una exclusividad que el ciclo no tiene.
+   */
+  const askMoreAlignment = (picked: readonly string[]) => {
+    const labels = picked
+      .map((id) => {
+        const index = ctx.companyObjectives.findIndex((objective) => objective.id === id);
+        return index === -1 ? null : companyObjectiveLabel(ctx.companyObjectives[index], index);
+      })
+      .filter((label): label is string => label !== null);
+
+    // Sin objetivos libres no hay ronda que seguir: se cierra sola. Se cuentan
+    // los objetivos de la empresa, no las filas — "Ninguno" y "Otro" están
+    // siempre y harían que la ronda no terminara nunca.
+    if (freeCompanyObjectives(ctx, picked) === 0) {
+      finishAlignment(brief);
+      return;
+    }
+
+    const remainingChips = alignmentChips(ctx, picked).filter(
+      (chip) => chip.value !== NO_ALIGNMENT_VALUE
+    );
+
+    sendAiChips(
+      "Anotado. ¿Le aporta a alguno más o seguimos?",
+      [
+        {
+          label: "Seguir con estos",
+          value: CONTINUE_VALUE,
+          tone: "primary",
+          description: labels.join(", "),
+        },
+        ...remainingChips,
+      ],
+      350
+    );
+  };
+
+  /**
+   * Cierra la alineación y, de paso, saca los frentes de ella.
+   *
+   * Es el momento en que el contexto de lo ya escrito paga: los frentes del
+   * grupo salen de los objetivos de la empresa a los que apunta, así que la
+   * pregunta de frentes desaparece en vez de repetirle al autor algo que la
+   * compañía ya decidió dos pasos antes.
+   */
+  const finishAlignment = (current: ParsedBrief) => {
+    const aligned = ctx.companyObjectives.filter((objective) =>
+      current.alignedTo.includes(objective.id)
+    );
+    const derived = current.focuses.length > 0 ? current.focuses : focusesFromObjectives(aligned);
+    const next = mergeBriefUpdate(current, { focuses: derived, alignmentAsked: true });
+    setBrief(next);
+    continueAfter(next, "alignment");
+  };
+
+  /** Sigue con lo que falte tras contestar `answered`, o genera si no falta nada. */
+  const continueAfter = (current: ParsedBrief, answered: CriterionId) => {
+    const remaining = missingCriteria(current, ctx).filter((c) => c !== answered);
+    if (remaining.length === 0) {
+      sendAiText("¡Perfecto! Tengo todo lo que necesito. Dame un momento…");
+      setTimeout(() => void startGeneration(current), 900);
+    } else {
+      setTimeout(() => askNextCriterion(remaining), 400);
+    }
   };
 
   /* ---- Preguntar criterio faltante ---- */
@@ -361,11 +539,7 @@ export function AiObjectiveChatPanel({
     if (missing.length === 0) return;
     const next = missing[0];
     setPendingCriteria(missing);
-
-    setTimeout(() => {
-      addAiChips(CLARIFICATION_QUESTIONS[next], CLARIFICATION_CHIPS[next]);
-      inputRef.current?.focus();
-    }, 500);
+    sendAiChips(criterionQuestion(next, ctx, brief), criterionChips(next, ctx, brief));
   };
 
   /* ---- Procesar mensaje del usuario ---- */
@@ -377,7 +551,20 @@ export function AiObjectiveChatPanel({
     addUserText(trimmed);
     setInputValue("");
 
-
+    // Decirle algo a la IA mientras revisa la propuesta es un pedido de
+    // cambio dicho de corrido —"hazlos más agresivos"—, no un ciclo nuevo:
+    // se lee como la instrucción que hoy solo aceptaba el chip "Modificar",
+    // sin obligar a pasar por su menú primero.
+    if (phase === "reviewing") {
+      if (insertedIds.length > 0) {
+        onRemoveObjectives?.(insertedIds);
+        setInsertedIds([]);
+      }
+      setPhase("chatting");
+      setPendingCriteria([]);
+      handleInitialMessage(trimmed);
+      return;
+    }
 
     // Si hay criterios pendientes, intentar parsear respuesta
     if (pendingCriteria.length > 0) {
@@ -394,35 +581,58 @@ export function AiObjectiveChatPanel({
     // Si es modo single, forzar count=1
     if (mode === "single") parsed.count = 1;
 
-    setBrief(parsed);
+    // Se fusiona con lo que ya se sabía en vez de reemplazarlo: un mensaje
+    // posterior —"hazlos más exigentes" durante la revisión, o una segunda
+    // frase de contexto— habla de una sola cosa, y machacar el resto del
+    // brief con lo que ese mensaje no menciona sería preguntar de nuevo algo
+    // que el autor ya había contestado.
+    const updatedBrief: ParsedBrief = {
+      ...brief,
+      count: parsed.count ?? brief.count,
+      focuses:
+        parsed.focuses.length > 0
+          ? [...brief.focuses, ...parsed.focuses.filter((focus) => !brief.focuses.includes(focus))]
+          : brief.focuses,
+      ambition: parsed.ambition ?? brief.ambition,
+      // El contexto es la descripción original del ciclo; una vez contada,
+      // un mensaje posterior no la reemplaza.
+      context: brief.context.trim() === "" ? parsed.context : brief.context,
+    };
 
-    const missing = getMissingCriteria(parsed);
+    setBrief(updatedBrief);
+
+    const missing = missingCriteria(updatedBrief, ctx);
 
     if (missing.length === 0) {
       // Todo completo, generar
-      addAiText("¡Perfecto! Tengo todo lo que necesito. Déjame preparar los objetivos…");
-      setTimeout(() => void startGeneration(parsed), 600);
+      sendAiText("¡Perfecto! Tengo todo lo que necesito. Dame un momento…");
+      setTimeout(() => void startGeneration(updatedBrief), 900);
     } else {
       // Reconocer lo que entendimos
       const understood: string[] = [];
-      if (parsed.focuses.length > 0) {
-        understood.push(`frentes: ${parsed.focuses.map(focusLabel).join(", ")}`);
+      if (updatedBrief.focuses.length > 0) {
+        // "Frentes" es la palabra del ciclo de la empresa; para un grupo o una
+        // persona la misma lista son los temas en los que trabaja.
+        const noun = scope === "empresa" ? "frentes" : "temas";
+        understood.push(`${noun}: ${updatedBrief.focuses.map(focusLabel).join(", ")}`);
       }
-      if (parsed.count !== null) {
-        understood.push(`${parsed.count} objetivo${parsed.count !== 1 ? "s" : ""}`);
+      if (updatedBrief.count !== null) {
+        // El plural lo pone el modelo: "Indicador" → "Indicadores", no
+        // "Indicadors", que es lo que salía de pegarle una ese al singular.
+        const vocab = chatVocab(ctx);
+        const noun = updatedBrief.count === 1 ? vocab.objective : vocab.objectives;
+        understood.push(`${updatedBrief.count} ${noun.toLowerCase()}`);
       }
-      if (parsed.ambition !== null) {
-        understood.push(`nivel ${AMBITION_META[parsed.ambition].label.toLowerCase()}`);
+      if (updatedBrief.ambition !== null) {
+        understood.push(`nivel ${AMBITION_META[updatedBrief.ambition].label.toLowerCase()}`);
       }
 
       const intro = understood.length > 0
-        ? `Entendido: ${understood.join(" · ")}. Solo me falta algo más:`
-        : "¡Gracias! Para armar los objetivos necesito saber algo más:";
+        ? `Genial, ya tengo ${understood.join(" · ")}. Me falta una cosa más:`
+        : "¡Gracias! Para que los objetivos queden bien necesito un par de cosas más:";
 
-      setTimeout(() => {
-        addAiText(intro);
-        setTimeout(() => askNextCriterion(missing), 400);
-      }, 500);
+      sendAiText(intro);
+      setTimeout(() => askNextCriterion(missing), 950);
     }
   };
 
@@ -430,33 +640,97 @@ export function AiObjectiveChatPanel({
     const currentCriterion = pendingCriteria[0];
     let updatedBrief = { ...brief };
 
-    if (currentCriterion === "focuses") {
-      const lower = text.toLowerCase().trim();
-      if (lower === "seguir" || lower === "seguir con estos" || lower === "continuar" || lower === "listo") {
-        const remaining = getMissingCriteria(brief).filter((c) => c !== "focuses");
-        if (remaining.length === 0) {
-          addAiText("¡Perfecto! Tengo todo lo que necesito. Déjame preparar los objetivos…");
-          setTimeout(() => void startGeneration(brief), 600);
-        } else {
-          setTimeout(() => askNextCriterion(remaining), 500);
-        }
+    if (currentCriterion === "alignment") {
+      if (text.trim() === NO_ALIGNMENT_VALUE || isContinueWord(text)) {
+        finishAlignment(mergeBriefUpdate(updatedBrief, {}));
         return;
       }
 
-      // Intentar parsear como focus
-      const parsed = parseBriefFromMessage(text);
-      if (parsed.focuses.length > 0) {
-        updatedBrief = mergeBriefUpdate(updatedBrief, { focuses: [...updatedBrief.focuses, ...parsed.focuses] });
-      } else {
-        // Tratar como focus custom
-        updatedBrief = mergeBriefUpdate(updatedBrief, { focuses: [...updatedBrief.focuses, text.trim()] });
+      // Escrito a mano: se busca el objetivo de la empresa por su título. Lo
+      // que no coincide con ninguno no se descarta, se guarda como contexto —
+      // puede ser el nombre interno de una iniciativa que la IA sí puede leer.
+      const match = ctx.companyObjectives.find((objective) =>
+        objective.title.toLowerCase().includes(text.trim().toLowerCase())
+      );
+      if (match === undefined) {
+        updatedBrief = mergeBriefUpdate(updatedBrief, {
+          notes: [updatedBrief.notes, text.trim()].filter(Boolean).join(". "),
+        });
+        setBrief(updatedBrief);
+        finishAlignment(updatedBrief);
+        return;
       }
-    } else if (currentCriterion === "count") {
+
+      const picked = updatedBrief.alignedTo.includes(match.id)
+        ? updatedBrief.alignedTo
+        : [...updatedBrief.alignedTo, match.id];
+      updatedBrief = mergeBriefUpdate(updatedBrief, { alignedTo: picked });
+      setBrief(updatedBrief);
+      askMoreAlignment(picked);
+      return;
+    }
+
+    if (currentCriterion === "lever") {
+      const skipped = text.trim() === SKIP_LEVER_VALUE;
+      updatedBrief = mergeBriefUpdate(updatedBrief, {
+        lever: skipped ? "" : text.trim(),
+        leverAsked: true,
+      });
+      setBrief(updatedBrief);
+      continueAfter(updatedBrief, "lever");
+      return;
+    }
+
+    if (currentCriterion === "children") {
+      const skipped = text.trim() === NO_CHILDREN_VALUE;
+      const parsedCount = parseInt(text.replace(/\D/g, ""), 10);
+      const count = skipped ? 0 : Number.isNaN(parsedCount) ? null : Math.min(5, parsedCount);
+
+      if (count === null) {
+        // Un "sí" suelto vale: la pregunta ya dijo de qué tamaño es el plan.
+        const said = text.trim().toLowerCase();
+        const agreed = said.startsWith("s") || said.includes("dale") || said.includes("ok");
+        if (!agreed) {
+          sendAiChips(criterionQuestion("children", ctx, updatedBrief), criterionChips("children", ctx, updatedBrief));
+          return;
+        }
+      }
+
+      updatedBrief = mergeBriefUpdate(updatedBrief, {
+        childrenCount: count ?? (ctx.rules.children === "results" ? 3 : 2),
+        childrenAsked: true,
+      });
+      setBrief(updatedBrief);
+      continueAfter(updatedBrief, "children");
+      return;
+    }
+
+    if (currentCriterion === "focuses") {
+      if (isContinueWord(text)) {
+        finishFocuses(brief);
+        return;
+      }
+
+      const parsed = parseBriefFromMessage(text);
+      const added = parsed.focuses.length > 0 ? parsed.focuses : [text.trim()];
+      const newFocuses = [
+        ...updatedBrief.focuses,
+        ...added.filter((focus) => !updatedBrief.focuses.includes(focus)),
+      ];
+      updatedBrief = mergeBriefUpdate(updatedBrief, { focuses: newFocuses });
+      setBrief(updatedBrief);
+      askMoreFocuses(newFocuses, added.map(focusLabel).join(", "));
+      return;
+    }
+
+    if (currentCriterion === "count") {
       const num = parseInt(text.replace(/\D/g, ""), 10);
       if (!isNaN(num) && num >= 1 && num <= maxCount) {
         updatedBrief = mergeBriefUpdate(updatedBrief, { count: num });
       } else {
-        addAiText(`Necesito un número entre 1 y ${maxCount}. ¿Cuántos objetivos?`);
+        sendAiText(
+          `Necesito un número entre 1 y ${maxCount}. ¿Cuántos ${chatVocab(ctx).objectives.toLowerCase()}?`
+        );
         return;
       }
     } else if (currentCriterion === "ambition") {
@@ -472,26 +746,27 @@ export function AiObjectiveChatPanel({
         if (match) {
           updatedBrief = mergeBriefUpdate(updatedBrief, { ambition: match });
         } else {
-          addAiChips(
+          sendAiChips(
             "No logré identificar el nivel. Elige una de estas opciones:",
-            AMBITION_CHIPS
+            criterionChips("ambition", ctx, updatedBrief)
           );
           return;
         }
       }
+    } else if (currentCriterion === "baseline") {
+      // Saltarla no es no contestarla: el chip de salto también cuenta como
+      // "ya se preguntó", igual que un "no" cuenta como respuesta al norte
+      // del ciclo. Cualquier otra frase —incluida la escrita a mano— se
+      // guarda tal cual en las notas, que es lo que después lee el generador.
+      const skipped = text.trim() === SKIP_BASELINE_VALUE;
+      updatedBrief = mergeBriefUpdate(updatedBrief, {
+        notes: skipped ? "" : text.trim(),
+        baselineAsked: true,
+      });
     }
 
     setBrief(updatedBrief);
-    const remaining = getMissingCriteria(updatedBrief).filter(
-      (c) => c !== currentCriterion
-    );
-
-    if (remaining.length === 0) {
-      addAiText("¡Perfecto! Tengo todo lo que necesito. Déjame preparar los objetivos…");
-      setTimeout(() => void startGeneration(updatedBrief), 600);
-    } else {
-      setTimeout(() => askNextCriterion(remaining), 500);
-    }
+    continueAfter(updatedBrief, currentCriterion);
   };
 
 
@@ -509,8 +784,8 @@ export function AiObjectiveChatPanel({
       onRemoveObjectives?.(insertedIds);
       setInsertedIds([]);
     }
-    addAiText("Voy a preparar una nueva propuesta con los mismos criterios…");
-    setTimeout(() => void startGeneration(brief), 600);
+    sendAiText("Voy a preparar una nueva propuesta con los mismos criterios…");
+    setTimeout(() => void startGeneration(brief), 900);
   };
 
   const handleModify = () => {
@@ -520,12 +795,12 @@ export function AiObjectiveChatPanel({
     }
     setPhase("chatting");
     setPendingCriteria([]);
-    addAiChips(
-      "¿Qué quieres cambiar? Puedes decírmelo con tus palabras o elegir:",
+    sendAiChips(
+      "¿Qué quieres cambiar?",
       [
-        { label: "Más exigentes", value: "Quiero que las metas sean más exigentes" },
-        { label: "Más realistas", value: "Quiero que las metas sean más realistas" },
-        { label: "Cambiar frentes", value: "Quiero cambiar los frentes de los objetivos" },
+        { label: "Metas más exigentes", value: "Quiero que las metas sean más exigentes" },
+        { label: "Metas más realistas", value: "Quiero que las metas sean más realistas" },
+        { label: "Cambiar los frentes", value: "Quiero cambiar los frentes de los objetivos" },
         { label: "Más objetivos", value: "Quiero más objetivos" },
         { label: "Menos objetivos", value: "Quiero menos objetivos" },
       ]
@@ -537,7 +812,7 @@ export function AiObjectiveChatPanel({
       onRemoveObjectives?.(insertedIds);
       setInsertedIds([]);
     }
-    addAiText("Descartados. Si cambias de idea, puedes volver a abrir el chat. 👋");
+    sendAiText("Descartados. Si cambias de idea, puedes volver a abrir el chat. 👋");
     setTimeout(() => onClose(), 1200);
   };
 
@@ -558,15 +833,27 @@ export function AiObjectiveChatPanel({
     if (pendingCriteria.length > 0) {
       const current = pendingCriteria[0];
 
-      if (chip.value === "__continue__") {
+      // "Seguir con estos" cierra la ronda que esté abierta: la de frentes o
+      // la del norte, que son las dos que admiten varias respuestas.
+      if (chip.value === CONTINUE_VALUE) {
         addUserText("Seguir con estos");
-        const remaining = getMissingCriteria(brief).filter((c) => c !== "focuses");
-        if (remaining.length === 0) {
-          addAiText("¡Perfecto! Tengo todo lo que necesito. Déjame preparar los objetivos…");
-          setTimeout(() => void startGeneration(brief), 600);
-        } else {
-          setTimeout(() => askNextCriterion(remaining), 500);
+        if (current === "alignment") finishAlignment(brief);
+        else finishFocuses(brief);
+        return;
+      }
+
+      if (current === "alignment") {
+        addUserText(chip.label);
+        if (chip.value === NO_ALIGNMENT_VALUE) {
+          finishAlignment(brief);
+          return;
         }
+        const picked = brief.alignedTo.includes(chip.value)
+          ? brief.alignedTo
+          : [...brief.alignedTo, chip.value];
+        const updated = mergeBriefUpdate(brief, { alignedTo: picked });
+        setBrief(updated);
+        askMoreAlignment(picked);
         return;
       }
 
@@ -578,21 +865,12 @@ export function AiObjectiveChatPanel({
         }
         const updated = mergeBriefUpdate(brief, { focuses: newFocuses });
         setBrief(updated);
-
-        // Dar chance de elegir más o avanzar
-        setTimeout(() => {
-          addAiChips(
-            `Frente "${chip.label}" añadido. ¿Quieres agregar otro frente o seguimos?`,
-            [
-              ...FOCUS_CHIPS.filter((c) => !newFocuses.includes(c.value)),
-              { label: "✓ Seguir con estos", value: "__continue__" },
-            ]
-          );
-        }, 300);
+        askMoreFocuses(newFocuses, chip.label);
         return;
       }
 
-      // Count o ambition
+      // Count, ambición, hijos, palanca o punto de partida: una respuesta
+      // directa, sin ramas propias.
       addUserText(chip.label);
       handleCriterionAnswer(chip.value);
       return;
@@ -601,6 +879,14 @@ export function AiObjectiveChatPanel({
     // Sugerencia inicial
     handleUserMessage(chip.value);
   };
+
+  /* ---- Opciones vivas ---- */
+
+  /** Solo la última pregunta espera respuesta: una vez contestada, el hilo
+   *  guarda el enunciado y lo elegido, y el panel se vacía. */
+  const lastMessage = messages[messages.length - 1];
+  const activeChips =
+    lastMessage?.kind === "chips" && phase !== "generating" ? lastMessage.chips : null;
 
   /* ---- Submit ---- */
 
@@ -650,92 +936,67 @@ export function AiObjectiveChatPanel({
         className="flex-1 min-h-0 overflow-y-auto px-4 py-5 space-y-4"
       >
         {messages.map((msg) => (
-          <MessageBubble
-            key={msg.id}
-            message={msg}
-            onChipClick={handleChipClick}
-          />
+          <MessageBubble key={msg.id} message={msg} />
         ))}
       </div>
 
-      {/* Input / Actions */}
+      {/* Opciones + input: la pregunta viva se contesta aquí abajo, eligiendo
+          una fila o escribiendo en el mismo cuadro. Revisando la propuesta el
+          cuadro sigue disponible para pedir un cambio de corrido ("hazlos más
+          agresivos") sin pasar por el menú. */}
       <div className="shrink-0 px-6 pb-6 pt-2">
-        {phase === "reviewing" ? (
-          <div className="flex flex-col gap-2">
-            <button
-              onClick={handleKeep}
-              className="flex h-11 w-full items-center justify-center gap-1.5 rounded-xl text-[13px] font-bold text-white transition-all hover:brightness-110 active:scale-[0.98]"
-              style={{ background: AI_GRADIENT }}
-            >
-              <Check className="size-4" strokeWidth={2.4} />
-              Conservar todos
-            </button>
-            <div className="flex gap-2">
-              <button
-                onClick={handleRegenerate}
-                className="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-xl border border-border bg-surface text-[12px] font-semibold text-text-secondary transition-colors hover:border-primary/40 hover:text-text-primary active:scale-[0.98]"
-              >
-                <RefreshCw className="size-3.5" strokeWidth={2.2} />
-                Otra propuesta
-              </button>
-              <button
-                onClick={handleModify}
-                className="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-xl border border-border bg-surface text-[12px] font-semibold text-text-secondary transition-colors hover:border-primary/40 hover:text-text-primary active:scale-[0.98]"
-              >
-                <SlidersHorizontal className="size-3.5" strokeWidth={2.2} />
-                Modificar
-              </button>
-            </div>
-            <button
-              onClick={handleDiscard}
-              className="flex h-10 w-full items-center justify-center gap-1.5 rounded-xl border border-destructive/30 bg-destructive/5 text-[12px] font-semibold text-destructive transition-colors hover:border-destructive/50 hover:bg-destructive/15 active:scale-[0.98]"
-            >
-              <Trash2 className="size-3.5" strokeWidth={2.2} />
-              Descartar
-            </button>
-          </div>
-        ) : (
-          <div className="group relative rounded-[22px] bg-surface p-4 z-0 shadow-card transition-shadow focus-within:shadow-[0_0_20px_rgba(45,92,247,0.1)]">
-            <MovingBorderBeam
-              duration={6000}
-              borderWidth={1.5}
-              rx={22}
-              ry={22}
-              colorFrom="hsl(var(--ai-gradient-start))"
-              colorTo="hsl(var(--ai-gradient-end))"
+        {activeChips && (
+          <div className="mb-2">
+            <OptionsPanel
+              chips={activeChips}
+              onChipClick={handleChipClick}
+              onWriteSubmit={handleUserMessage}
             />
-            <textarea
-              ref={inputRef}
-              rows={2}
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Escribe tu mensaje…"
-              disabled={phase === "generating"}
-              className="relative z-10 min-h-12 w-full resize-none bg-transparent text-[13px] leading-normal text-text-primary outline-none placeholder:text-text-muted disabled:opacity-50"
-            />
-            <div className="relative z-10 mt-2 flex items-center justify-between">
-              <button
-                className="flex h-10 w-10 items-center justify-center rounded-full border border-border/70 bg-surface text-text-secondary transition-colors hover:bg-background disabled:opacity-50"
-                title="Agregar contexto"
-                aria-label="Agregar contexto"
-                disabled={phase === "generating"}
-              >
-                <Plus className="h-4 w-4" strokeWidth={2} />
-              </button>
-              <button
-                onClick={handleSubmit}
-                disabled={!inputValue.trim() || phase === "generating"}
-                className="flex h-10 w-10 items-center justify-center rounded-full text-white transition-all hover:-translate-y-0.5 hover:brightness-110 disabled:opacity-50 disabled:hover:translate-y-0"
-                style={{ background: AI_GRADIENT }}
-                title="Enviar mensaje"
-                aria-label="Enviar mensaje"
-              >
-                <ArrowUp className="h-4 w-4" strokeWidth={2.5} />
-              </button>
-            </div>
           </div>
         )}
+
+        <div className="group relative rounded-[22px] bg-surface p-4 z-0 shadow-card transition-shadow focus-within:shadow-[0_0_20px_rgba(45,92,247,0.1)]">
+          <MovingBorderBeam
+            duration={6000}
+            borderWidth={1.5}
+            rx={22}
+            ry={22}
+            colorFrom="hsl(var(--ai-gradient-start))"
+            colorTo="hsl(var(--ai-gradient-end))"
+          />
+          <textarea
+            ref={inputRef}
+            rows={2}
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={
+              activeChips ? "Elige una opción o escribe tu respuesta…" : "Escribe tu mensaje…"
+            }
+            disabled={phase === "generating"}
+            className="relative z-10 min-h-12 w-full resize-none bg-transparent text-[13px] leading-normal text-text-primary outline-none placeholder:text-text-muted disabled:opacity-50"
+          />
+          <div className="relative z-10 mt-2 flex items-center justify-between">
+            <button
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-border/70 bg-surface text-text-secondary transition-colors hover:bg-background disabled:opacity-50"
+              title="Agregar contexto"
+              aria-label="Agregar contexto"
+              disabled={phase === "generating"}
+            >
+              <Plus className="h-4 w-4" strokeWidth={2} />
+            </button>
+            <button
+              onClick={handleSubmit}
+              disabled={!inputValue.trim() || phase === "generating"}
+              className="flex h-10 w-10 items-center justify-center rounded-full text-white transition-all hover:-translate-y-0.5 hover:brightness-110 disabled:opacity-50 disabled:hover:translate-y-0"
+              style={{ background: AI_GRADIENT }}
+              title="Enviar mensaje"
+              aria-label="Enviar mensaje"
+            >
+              <ArrowUp className="h-4 w-4" strokeWidth={2.5} />
+            </button>
+          </div>
+        </div>
         <p className="mt-3 text-center text-[11px] text-text-muted">
           Los objetivos generados son una propuesta. Revísalos y ajústalos.
         </p>
@@ -748,13 +1009,7 @@ export function AiObjectiveChatPanel({
  * Burbuja de mensaje
  * ------------------------------------------------------------------ */
 
-function MessageBubble({
-  message,
-  onChipClick,
-}: {
-  message: ChatMessage;
-  onChipClick: (chip: ChatChip) => void;
-}) {
+function MessageBubble({ message }: { message: ChatMessage }) {
   const isAi = message.role === "ai";
 
   if (message.kind === "typing") {
@@ -788,13 +1043,9 @@ function MessageBubble({
     >
       {isAi ? <AiBubbleAvatar /> : <UserBubbleAvatar />}
 
-      <div
-        className={cn(
-          "flex max-w-[85%] flex-col gap-2",
-          !isAi && "items-end"
-        )}
-      >
-        {/* Texto */}
+      {/* Solo el texto: las opciones de la pregunta viva se contestan desde el
+          panel anclado al campo de escribir, no dentro del hilo. */}
+      <div className={cn("flex max-w-[85%] flex-col gap-2", !isAi && "items-end")}>
         {"text" in message && message.text && (
           <div
             className={cn(
@@ -807,24 +1058,155 @@ function MessageBubble({
             {message.text}
           </div>
         )}
-
-        {/* Chips */}
-        {message.kind === "chips" && (
-          <div className="flex flex-wrap gap-1.5">
-            {message.chips.map((chip) => (
-              <button
-                key={chip.value}
-                type="button"
-                onClick={() => onChipClick(chip)}
-                className="h-8 rounded-full border border-border/70 bg-surface px-3.5 text-[11.5px] font-semibold text-text-secondary transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:text-text-primary hover:shadow-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 active:scale-[0.97]"
-              >
-                {chip.label}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
     </motion.div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Panel de opciones — vive sobre el campo de escribir
+ * ------------------------------------------------------------------ */
+
+/**
+ * Las respuestas posibles a la pregunta viva, como filas numeradas encima del
+ * cuadro de texto: elegir y escribir son la misma acción, así que las dos
+ * viven en el mismo sitio en vez de obligar a subir la vista al hilo. El
+ * número queda a la derecha de cada fila, como el orden en que se leen —
+ * primero qué es la opción, al final cuál tecla la marca.
+ */
+function OptionsPanel({
+  chips,
+  onChipClick,
+  onWriteSubmit,
+}: {
+  chips: readonly ChatChip[];
+  onChipClick: (chip: ChatChip) => void;
+  onWriteSubmit: (text: string) => void;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+      className="max-h-[42vh] overflow-y-auto overscroll-contain rounded-2xl border border-border/50 bg-surface shadow-card"
+    >
+      {chips.map((chip, index) =>
+        chip.value === WRITE_OWN_VALUE ? (
+          <WriteOwnRow key={chip.value} index={index} chip={chip} onSubmit={onWriteSubmit} />
+        ) : (
+          <OptionRow key={chip.value} index={index} chip={chip} onClick={() => onChipClick(chip)} />
+        )
+      )}
+    </motion.div>
+  );
+}
+
+function OptionRow({
+  index,
+  chip,
+  onClick,
+}: {
+  index: number;
+  chip: ChatChip;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "flex w-full items-start gap-3 border-t border-border/40 px-4 py-3 text-left transition-colors first:border-t-0 focus-visible:outline-none focus-visible:bg-background",
+        chip.tone === "danger" ? "hover:bg-destructive/5" : "hover:bg-background"
+      )}
+    >
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span
+          className={cn(
+            "text-[12.5px] font-semibold leading-snug",
+            chip.tone === "danger" ? "text-destructive" : "text-text-primary"
+          )}
+        >
+          {chip.label}
+        </span>
+        {chip.description && (
+          <span className="text-[11.5px] leading-relaxed text-text-secondary">
+            {chip.description}
+          </span>
+        )}
+      </span>
+      <span
+        style={chip.tone === "primary" ? { background: AI_GRADIENT } : undefined}
+        className={cn(
+          "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[10px] font-semibold tabular-nums",
+          chip.tone === "primary" && "text-white",
+          chip.tone === "danger" &&
+            "border border-destructive/30 bg-destructive/5 text-destructive",
+          !chip.tone && "border border-border/70 bg-background text-text-muted"
+        )}
+      >
+        {index + 1}
+      </span>
+    </button>
+  );
+}
+
+/** La fila "Otro": en vez de un botón que contesta de una, trae su propio
+ *  campo — la opción y el cómo escribirla viven en el mismo renglón, sin
+ *  mandar la vista al cuadro de texto de más abajo. */
+function WriteOwnRow({
+  index,
+  chip,
+  onSubmit,
+}: {
+  index: number;
+  chip: ChatChip;
+  onSubmit: (text: string) => void;
+}) {
+  const [value, setValue] = React.useState("");
+
+  const submit = () => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    onSubmit(trimmed);
+    setValue("");
+  };
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-border/40 px-4 py-3 first:border-t-0">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[12.5px] font-semibold leading-snug text-text-primary">
+          {chip.label}
+        </span>
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background text-[10px] font-semibold tabular-nums text-text-muted">
+          {index + 1}
+        </span>
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              submit();
+            }
+          }}
+          placeholder={chip.placeholder ?? "Escribe tu propia respuesta aquí"}
+          className="h-9 min-w-0 flex-1 rounded-lg border border-border/60 bg-background px-3 text-[12.5px] text-text-primary outline-none placeholder:text-text-muted focus:border-primary/40"
+        />
+        <button
+          type="button"
+          onClick={submit}
+          disabled={!value.trim()}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white transition-opacity disabled:opacity-40"
+          style={{ background: AI_GRADIENT }}
+          aria-label="Enviar"
+        >
+          <ArrowUp className="h-3.5 w-3.5" strokeWidth={2.5} />
+        </button>
+      </div>
+    </div>
   );
 }
 

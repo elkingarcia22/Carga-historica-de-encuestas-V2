@@ -8,6 +8,7 @@ import {
   SheetHeader,
   SheetTitle,
   SheetTrigger,
+  useBodyScrollLock,
 } from "@/components/ui/sheet"
 
 export interface DrawerShellProps {
@@ -55,6 +56,17 @@ export interface DrawerShellProps {
   /** Recorta el velo para dejar a la vista —y clicable— lo que convive con el
    *  drawer, como el panel del Agente IA. */
   overlayClassName?: string
+  /**
+   * Estilo en línea del cajón y de su velo.
+   *
+   * Existe para el movimiento: un drawer que se corre para hacerle sitio a
+   * otra cosa tiene que ir con la misma curva y la misma duración que ella, y
+   * las clases de Tailwind no pueden garantizarlo aquí —la animación de
+   * entrada del `Sheet` trae su propia `duration-500` con una variante que
+   * pesa más—. En línea gana siempre y el número se lee donde se decide.
+   */
+  contentStyle?: React.CSSProperties
+  overlayStyle?: React.CSSProperties
 }
 
 const sideSizeClasses = {
@@ -110,8 +122,14 @@ export function DrawerShell({
   onInteractOutside,
   modal = true,
   overlayClassName,
+  contentStyle,
+  overlayStyle,
 }: DrawerShellProps) {
   const sizeClass = sideSizeClasses[side][size]
+
+  // Un drawer no modal tapa la página igual que uno modal, pero Radix ya no le
+  // congela el fondo, así que lo pide por su cuenta mientras está abierto.
+  useBodyScrollLock(open === true && !modal)
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange} modal={modal}>
@@ -121,7 +139,9 @@ export function DrawerShell({
         className={cn(sizeClass, className)}
         showCloseButton={showCloseButton}
         modal={modal}
+        style={contentStyle}
         overlayClassName={overlayClassName}
+        overlayStyle={overlayStyle}
         aria-describedby={undefined}
         onInteractOutside={onInteractOutside}
       >

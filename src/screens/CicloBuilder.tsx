@@ -37,14 +37,12 @@ import {
   TOTAL_WEIGHT,
   totalWeight,
   setsOfKind,
-  DEFAULT_CICLO_RESULTS_POLICY,
   type AiComposerMode,
   type AiReviewActions,
   type AssignmentDrawerRequest,
   type AssignmentSelection,
   type CicloBuilderAssignmentSeed,
   type CicloDraft,
-  type CicloResultsPolicy,
   type CicloStepId,
   type Objective,
   type ObjectiveSet,
@@ -113,6 +111,8 @@ export const createBlankCicloDraft = (): CicloDraft => {
     participants: { ...DEFAULT_PARTICIPANTS, mode: "groups", groupSegmentBy: "leader" },
     useCompanyObjectives: true,
     companyObjectives: [],
+    remindersEnabled: false,
+    reminderFrequency: "weekly",
     // Para leader: group activo, individual inactivo (lo puede encender en el tab).
     // Para collaborator: individual activo, group inactivo.
     // Para HR: ambos inactivos hasta que los encienda.
@@ -120,7 +120,6 @@ export const createBlankCicloDraft = (): CicloDraft => {
     useGroupObjectives: true,
     useIndividualObjectives: false,
     assignment: { groupSegmentBy: "area", groupsAutoInclude: false },
-    resultsPolicy: DEFAULT_CICLO_RESULTS_POLICY,
     objectiveSets: [],
     _id: `draft-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   };
@@ -445,7 +444,16 @@ export function CicloBuilder({
     { expand = true }: { expand?: boolean } = {}
   ) => {
     if (incoming.length === 0) return;
-    patchDraft({ companyObjectives: [...draft.companyObjectives, ...incoming] });
+    // El chat de IA agrega esta tanda varios segundos después del clic que la
+    // pidió —lo que dura "generando"—, así que para entonces `draft` puede
+    // llevar rato desactualizado (por ejemplo, si esa misma tanda reemplaza a
+    // una anterior: "Otra propuesta" primero la quita). Leer `draft` aquí
+    // fuera del updater usaría esa foto vieja y resucitaría lo que ya se
+    // había quitado; `setDraft` con función sí lee el estado real al aplicarse.
+    setDraft((current) => ({
+      ...current,
+      companyObjectives: [...current.companyObjectives, ...incoming],
+    }));
     setExpandedObjectiveIds(expand ? new Set([incoming[0].id]) : new Set());
   };
 
@@ -777,7 +785,14 @@ export function CicloBuilder({
             activeTab={activeObjectiveTab}
             onActiveTabChange={setActiveObjectiveTab}
             levelsDecidedUpstream={isParametrizado}
-            onGoToSetup={() => handleSelectStep("general")}
+            onGoToSetup={() => {
+              // El nivel (grupos, individual o mixto) se decide dentro del
+              // bloque de Gobierno, no en el primero de la parametrización:
+              // "Cambiar" tiene que abrir ahí directo, no dejar al autor
+              // buscando entre los otros tres bloques.
+              setOpenSetupBlock("governance");
+              handleSelectStep("general");
+            }}
             editorProps={{
               groupSets,
               individualSets,

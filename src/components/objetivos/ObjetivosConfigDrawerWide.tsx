@@ -25,7 +25,7 @@ import {
   RangeRow,
   type ConfigTab,
 } from "./objetivosConfigParts";
-import { ESTADOS_FIJOS_OBJETIVO } from "./objetivosConfigStore";
+import { aplicaEnDe } from "./objetivosConfigStore";
 import { MirroredNivelesNotice, MirrorNivelesToggle } from "./NivelesEspejo";
 import {
   COLOR_VARIANTS,
@@ -99,6 +99,7 @@ export function ObjetivosConfigDrawerWide({
     switchTab,
     hasSwitchedTab,
     estadosEditables,
+    estadosFijos,
     estadoNegativo,
     niveles,
     allowNegativeResults,
@@ -210,11 +211,11 @@ export function ObjetivosConfigDrawerWide({
                 tone="brand"
                 title="Estados fijos del flujo"
                 hint="Los define el flujo por el que pasa un objetivo, así que no se editan ni se eliminan."
-                badge={`${ESTADOS_FIJOS_OBJETIVO.length} estados`}
+                badge={`${estadosFijos.length} estados`}
                 collapsible
               >
                 <div className="flex flex-col gap-2 rounded-xl border border-border/60 bg-background p-2">
-                  {ESTADOS_FIJOS_OBJETIVO.map((estado) => (
+                  {estadosFijos.map((estado) => (
                     <LockedStateRow
                       key={estado.id}
                       name={estado.nombre}
@@ -222,6 +223,11 @@ export function ObjetivosConfigDrawerWide({
                       colorHex={estado.colorHex}
                       range={estado.rango}
                       rangeLabel={estado.rangoLabel}
+                      lockReason={
+                        estado.id === "en-progreso" && estado.rango
+                          ? `Su rango no se edita: llega hasta justo antes de la primera banda que aplica en curso (hoy, ${estado.rango.max + 1} %). Muévela abajo y este rango la sigue.`
+                          : undefined
+                      }
                     />
                   ))}
                 </div>
@@ -244,7 +250,6 @@ export function ObjetivosConfigDrawerWide({
               >
                 {allowNegativeResults && estadoNegativo && (
                   <RangeRow
-                    layout="inline"
                     index={1}
                     nameLabel="Nombre del estado"
                     namePlaceholder="Nombre del estado..."
@@ -268,6 +273,10 @@ export function ObjetivosConfigDrawerWide({
                         colorHex: color.hex,
                       });
                     }}
+                    aplicaEn={aplicaEnDe(estadoNegativo)}
+                    onAplicaEnChange={(aplicaEn) =>
+                      handleUpdateEstado(estadoNegativo.id, { aplicaEn })
+                    }
                     allowNegative={allowNegativeResults}
                     onDelete={() => {}}
                     deleteDisabledReason="Apaga el permiso de arriba para quitarla."
@@ -278,8 +287,8 @@ export function ObjetivosConfigDrawerWide({
               <DrawerSection
                 icon={Target}
                 tone="brand"
-                title="Estados de cumplimiento"
-                hint="El nombre, el rango y el color de cada banda de cumplimiento."
+                title="Estados de los objetivos"
+                hint="El nombre, el rango, el color y en qué momento del ciclo puede aparecer cada banda."
                 badge={`${estadosEditables.length} de ${MAX_ESTADOS}`}
                 stickyHeader
                 action={
@@ -299,7 +308,9 @@ export function ObjetivosConfigDrawerWide({
                   {estadosEditables.map((est, index) => (
                     <RangeRow
                       key={est.id}
-                      layout="inline"
+                      // Apilada y no en línea: con "Aplica" ya son cuatro
+                      // controles, y en una sola línea el nombre —lo único que
+                      // se lee de un vistazo— se quedaba sin ancho.
                       index={index + 1}
                       nameLabel="Nombre del estado"
                       namePlaceholder="Nombre del estado..."
@@ -323,6 +334,8 @@ export function ObjetivosConfigDrawerWide({
                           colorHex: color.hex,
                         });
                       }}
+                      aplicaEn={aplicaEnDe(est)}
+                      onAplicaEnChange={(aplicaEn) => handleUpdateEstado(est.id, { aplicaEn })}
                       allowNegative={allowNegativeResults}
                       onDelete={() => handleDeleteEstado(est.id)}
                       deleteDisabledReason={

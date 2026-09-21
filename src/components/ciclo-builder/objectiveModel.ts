@@ -338,6 +338,32 @@ export function objectiveModelVocab(
   };
 }
 
+/**
+ * Cómo se llama el plan opcional de un modelo que no cuelga nada que mida.
+ *
+ * KPI sigue siendo "un indicador y nada debajo": estas tareas no lo miden ni
+ * mueven su avance, solo dejan anotado qué hay que hacer para sostenerlo. Por
+ * eso llevan nombre propio y no heredan el de las acciones clave, que en los
+ * demás modelos sí pueden llegar a medir el objetivo.
+ */
+export const FOLLOW_UP_TASKS_VOCAB: Pick<
+  ObjectiveModelVocab,
+  "children" | "child" | "childrenGender"
+> = {
+  children: "Tareas de seguimiento",
+  child: "Tarea de seguimiento",
+  childrenGender: "f",
+};
+
+/** El vocabulario de lo que cuelga, contando ese plan opcional. */
+export function objectiveChildrenVocab(
+  model: ObjectiveModelId | null,
+  rules: ObjectiveModelRules
+): ObjectiveModelVocab {
+  const base = objectiveModelVocab(model, rules);
+  return rules.children === "none" ? { ...base, ...FOLLOW_UP_TASKS_VOCAB } : base;
+}
+
 /** Las reglas de un preset, o `null` para personalizado (que conserva las suyas). */
 export function objectiveModelPreset(model: ObjectiveModelId): ObjectiveModelRules | null {
   return model === "custom" ? null : OBJECTIVE_MODEL_PRESETS[model];
@@ -622,12 +648,6 @@ export function objectiveModelRuleSentences(
     );
   } else {
     sentences.push("No usa objetivos de la empresa: el ciclo se sostiene con lo que se asigna.");
-  }
-
-  if (rules.cadence !== "free") {
-    sentences.push(
-      `Recuerda actualizar el avance cada ${rules.cadence === "weekly" ? "semana" : "mes"}.`
-    );
   }
 
   if (rules.dueDatePerObjective) {

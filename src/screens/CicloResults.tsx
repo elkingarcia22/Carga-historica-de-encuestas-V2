@@ -1,3 +1,4 @@
+import { GruposTab } from "@/components/ciclo-results/GruposTab";
 import * as React from "react";
 import { toast } from "sonner";
 import { BarChart3, ListTree, Sparkles, Trophy, Users } from "lucide-react";
@@ -544,7 +545,7 @@ export function CicloResults({
    * borraría el plano que acababa de armar.
    */
   const [colaboradoresView, setColaboradoresView] =
-    React.useState<ColaboradoresView>("detalle");
+    React.useState<ColaboradoresView>("persona");
   const [alignmentLevel, setAlignmentLevel] = React.useState<AlignmentLevel>("objetivos");
   const [alignmentPositions, setAlignmentPositions] = React.useState<NodePositions>({});
   // El "Ver por" de la barra: con qué se agrupan el ranking y el cuadro. Es
@@ -881,7 +882,7 @@ export function CicloResults({
             />
           )}
 
-          {tab === "colaboradores" && colaboradoresView === "detalle" && (
+          {tab === "colaboradores" && colaboradoresView === "persona" && (
             <ColaboradoresTab
               results={viewResults}
               baseResults={results}
@@ -891,6 +892,18 @@ export function CicloResults({
               selectedIds={selectedIds}
               onSelectionChange={setSelectedIds}
               onOpenPerson={setOpenPersonId}
+              globalChips={globalChips}
+              viewSwitch={colaboradoresSwitch}
+            />
+          )}
+
+          {tab === "colaboradores" && colaboradoresView === "grupos" && (
+            <GruposTab
+              results={viewResults}
+              baseResults={results}
+              filters={filters}
+              breakdown={breakdown}
+              onBreakdownChange={setBreakdown}
               globalChips={globalChips}
               viewSwitch={colaboradoresSwitch}
             />

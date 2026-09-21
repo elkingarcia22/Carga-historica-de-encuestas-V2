@@ -3,6 +3,7 @@ import { ArrowLeft, Check, Library, Plus, Scale, Sparkles, Target, X } from "luc
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { DrawerShell } from "@/components/overlays";
+import { agentPanelShift } from "@/components/ai/agentPanelMotion";
 import { DrawerActionRail, DrawerRailButton } from "@/components/action-rail";
 import { AiAgentDrawer } from "@/components/ai/AiAgentDrawer";
 import { AiAnalyzingState } from "@/components/ai-interaction/AiAnalyzingState";
@@ -107,6 +108,9 @@ export function CreatePersonObjectivesDrawer({
   } | null>(null);
 
   const single = rows.length === 1 ? rows[0] : null;
+
+  /** Lo que el cajón se corre para dejarle sitio al panel, y cómo. */
+  const agentShift = agentPanelShift(isComposerOpen);
 
   /*
    * El hueco que de verdad hay.
@@ -396,23 +400,23 @@ export function CreatePersonObjectivesDrawer({
       // drawer distinto, abierto solo para escribir objetivos.
       className={cn(
         "!w-[min(1280px,96vw)] !top-0 !bottom-0 !h-dvh !rounded-none sm:!rounded-l-2xl !border-y-0",
-        "transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]",
-        isComposerOpen
-          // 448 px = el panel (416) más el aire que deja ver que la app sigue
-          // detrás, para que el cajón no se coma la pantalla entera.
-          ? "!max-w-[calc(100vw_-_448px)] !right-[416px] !border-r !border-border/60"
-          : "!max-w-[min(1280px,96vw)] !right-0 !border-r-0"
+        isComposerOpen ? "!border-r !border-border/60" : "!border-r-0"
       )}
+      // Cuánto se corre y con qué curva, en línea y compartido con el panel:
+      // ver `agentPanelMotion`.
+      contentStyle={agentShift.content}
+      overlayStyle={agentShift.overlay}
       /*
-       * Con el Agente IA abierto el drawer deja de ser modal: el panel vive
-       * en la concha de la app, fuera del portal, y un diálogo modal apaga
-       * los eventos de puntero de todo lo que no sea él —el chat quedaría
-       * dibujado pero muerto—. El velo no se va con la modalidad: se recorta
-       * justo donde empieza el panel, así que lo de atrás sigue tapado y solo
-       * se puede tocar aquello con lo que el drawer está conversando.
+       * Nunca modal: el panel del Agente IA vive en la concha de la app, fuera
+       * del portal, y un diálogo modal apaga los eventos de puntero de todo lo
+       * que no sea él —el chat quedaría dibujado pero muerto—. Tampoco se
+       * enciende y apaga sobre la marcha: Radix monta un componente distinto
+       * por modalidad, así que cambiarla reconstruye el cajón y lo hace entrar
+       * de nuevo desde la derecha. El velo no se va con la modalidad: se
+       * recorta justo donde empieza el panel, así que lo de atrás sigue tapado
+       * y solo se puede tocar aquello con lo que el drawer está conversando.
        */
-      modal={!isComposerOpen}
-      overlayClassName={isComposerOpen ? "right-[416px]" : undefined}
+      modal={false}
       onInteractOutside={(event) => {
         // El panel del Agente IA es hermano del drawer, no hijo: un clic ahí
         // cuenta como "fuera" y cerraría lo que se está armando.
@@ -566,6 +570,9 @@ export function CreatePersonObjectivesDrawer({
             onRemoveObjectives: removeMany,
             maxCount: Math.max(1, MAX_AI_OBJECTIVES - draft.length),
             scopeLabel: single ? `de ${single.collaborator.name}` : "de los colaboradores",
+            scope: "colaborador",
+            audienceLabel: single ? single.collaborator.name : "los colaboradores",
+            companyObjectives,
             onWorkingStateChange: (isWorking, progress, caption, detail) => {
               setWorkingState(isWorking ? { progress, caption, detail } : null);
             },

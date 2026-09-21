@@ -3,16 +3,12 @@ import {
   createBlankBrief,
   FOCUS_ORDER,
   FOCUS_META,
-  type ObjectiveFocus,
   type BriefFocus,
-  AMBITION_ORDER,
   MIN_AI_OBJECTIVES,
   MAX_AI_OBJECTIVES,
 } from "./aiObjectiveBrief";
 import type { AmbitionLevel } from "./aiObjectiveGenerator";
-
-/** Which criteria the chat still needs to ask about. */
-export type CriterionId = "focuses" | "count" | "ambition";
+import type { Objective } from "./cicloBuilderTypes";
 
 /** What the parser managed to extract from the user's message. */
 export interface ParsedBrief {
@@ -21,6 +17,30 @@ export interface ParsedBrief {
   ambition: AmbitionLevel | null;
   context: string;
   notes: string;
+  /**
+   * Si ya se preguntó por el punto de partida y las restricciones —
+   * independiente de si contestó algo o lo saltó. `notes` vacío no alcanza
+   * para distinguir "todavía no se preguntó" de "no tenía nada que agregar",
+   * la misma razón por la que el norte y los recordatorios del ciclo llevan
+   * su propio `*Picked` en vez de leer el valor a secas.
+   */
+  baselineAsked: boolean;
+  /**
+   * Los objetivos de la empresa de los que cuelga esta tanda. Solo se llena
+   * fuera del norte: los objetivos de la empresa no cuelgan de nada.
+   */
+  alignedTo: readonly string[];
+  alignmentAsked: boolean;
+  /** Lo que el grupo o la persona controla de verdad, en sus palabras. */
+  lever: string;
+  leverAsked: boolean;
+  /**
+   * Cuántos resultados clave, acciones, tareas o hitos cuelgan de cada
+   * objetivo. `0` es una respuesta —"ninguno"— y `null` es "todavía no se
+   * preguntó", que es la misma distinción que hace `baselineAsked`.
+   */
+  childrenCount: number | null;
+  childrenAsked: boolean;
 }
 
 const normalize = (text: string): string => {
@@ -42,7 +62,7 @@ const normalize = (text: string): string => {
  */
 export function parseBriefFromMessage(text: string): ParsedBrief {
   const normText = normalize(text);
-  
+
   // Count detection
   let count: number | null = null;
   const countRegexes = [
@@ -62,25 +82,70 @@ export function parseBriefFromMessage(text: string): ParsedBrief {
     }
   }
 
-  // Focus detection
+  const focuses = detectFocuses(normText);
+
+  // Ambition detection. Los plurales cuentan igual que el singular —
+  // "objetivos retadores" es tan válido como "un objetivo retador"— así que
+  // el sufijo va opcional en vez de exigir un límite de palabra justo
+  // después de la raíz.
+  let ambition: AmbitionLevel | null = null;
+  if (normText.match(/\b(agresivos?|muy exigentes?|de ruptura|stretch)\b/)) {
+    ambition = "agresivo";
+  } else if (
+    normText.match(/\b(retador(?:es)?|ambiciosos?)\b/) ||
+    (normText.includes("exigente") && !normText.includes("muy exigente"))
+  ) {
+    ambition = "retador";
+  } else if (normText.match(/\b(conservador(?:es)?|facil(?:es)?|realistas?|alcanzables?|seguros?)\b/)) {
+    ambition = "conservador";
+  }
+
+  return {
+    count,
+    focuses,
+    ambition,
+    context: text.trim(),
+    notes: "",
+    // Parsear un mensaje nunca "pregunta" nada — eso lo decide el flujo del
+    // chat, que conserva su propio `baselineAsked` al fusionar esta lectura
+    // con lo que ya sabía.
+    baselineAsked: false,
+    alignedTo: [],
+    alignmentAsked: false,
+    lever: "",
+    leverAsked: false,
+    childrenCount: null,
+    childrenAsked: false,
+  };
+}
+
+/** Un brief vacío: lo que sabe el chat antes del primer mensaje. */
+export const createEmptyBrief = (count: number | null = null): ParsedBrief => ({
+  count,
+  focuses: [],
+  ambition: null,
+  context: "",
+  notes: "",
+  baselineAsked: false,
+  alignedTo: [],
+  alignmentAsked: false,
+  lever: "",
+  leverAsked: false,
+  childrenCount: null,
+  childrenAsked: false,
+});
+
+/** Qué frentes menciona un texto, con la misma lectura que un mensaje. */
+function detectFocuses(normText: string): BriefFocus[] {
   const focuses: BriefFocus[] = [];
   for (const focus of FOCUS_ORDER) {
     const meta = FOCUS_META[focus];
     const labelTokens = normalize(meta.label).match(/[a-z0-9]+/g) || [];
     const taglineTokens = normalize(meta.tagline).match(/[a-z0-9]+/g) || [];
-    
-    // Check if label or tagline words are in normText
-    const keywords = [...labelTokens, ...taglineTokens].filter(w => w.length > 3);
-    
-    let hasMatch = false;
-    for (const kw of keywords) {
-      if (normText.includes(kw)) {
-        hasMatch = true;
-        break;
-      }
-    }
-    
-    // Mappings mentioned in the prompt
+    const keywords = [...labelTokens, ...taglineTokens].filter((w) => w.length > 3);
+
+    let hasMatch = keywords.some((kw) => normText.includes(kw));
+
     if (
       (focus === "crecimiento" && normText.includes("ventas")) ||
       (focus === "rentabilidad" && normText.includes("costos")) ||
@@ -92,42 +157,25 @@ export function parseBriefFromMessage(text: string): ParsedBrief {
       hasMatch = true;
     }
 
-    if (hasMatch) {
-      focuses.push(focus);
-    }
+    if (hasMatch) focuses.push(focus);
   }
-
-  // Ambition detection
-  let ambition: AmbitionLevel | null = null;
-  if (normText.match(/\b(agresivo|muy exigente|de ruptura|stretch)\b/)) {
-    ambition = "agresivo";
-  } else if (normText.match(/\b(retador|ambicioso)\b/) || (normText.includes("exigente") && !normText.includes("muy exigente"))) {
-    ambition = "retador";
-  } else if (normText.match(/\b(conservador|facil|realista|alcanzable|seguro)\b/)) {
-    ambition = "conservador";
-  }
-
-  return {
-    count,
-    focuses,
-    ambition,
-    context: text.trim(),
-    notes: "",
-  };
+  return focuses;
 }
 
 /**
- * Returns the criteria that are still missing from the brief, in the order
- * they should be asked: focuses → count → ambition.
+ * Los frentes que ya están en juego según los objetivos de la empresa
+ * elegidos.
  *
- * Context is never "missing" because the user's initial message IS the context.
+ * Es lo que evita la pregunta de más: quien ya dijo que su grupo apunta al
+ * objetivo de retención de clientes ya dijo en qué frente juega, y volvérselo
+ * a preguntar convierte el norte en decoración. Si ninguno de los títulos deja
+ * leer un frente, la lista vuelve vacía y el chat sí pregunta.
  */
-export function getMissingCriteria(brief: ParsedBrief): CriterionId[] {
-  const missing: CriterionId[] = [];
-  if (brief.focuses.length === 0) missing.push("focuses");
-  if (brief.count === null) missing.push("count");
-  if (brief.ambition === null) missing.push("ambition");
-  return missing;
+export function focusesFromObjectives(objectives: readonly Objective[]): BriefFocus[] {
+  const text = objectives
+    .map((objective) => `${objective.title} ${objective.description}`)
+    .join(" ");
+  return text.trim() === "" ? [] : detectFocuses(normalize(text));
 }
 
 /**
@@ -154,6 +202,8 @@ export function toAiObjectiveBrief(parsed: ParsedBrief): AiObjectiveBrief {
     focuses: parsed.focuses,
     ambition: parsed.ambition,
     context: parsed.context,
-    notes: parsed.notes,
+    // La palanca entra como nota y no como contexto: es lo que el grupo
+    // controla, así que orienta qué se mide sin llegar a titular un objetivo.
+    notes: [parsed.notes, parsed.lever].map((part) => part.trim()).filter(Boolean).join(". "),
   };
 }

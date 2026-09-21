@@ -217,6 +217,7 @@ export function ResultsGlobalFilters({
   filterScope,
   segmentationAfterSearch = false,
   searchSlot,
+  excludeBreakdowns = [],
 }: {
   results: CicloResults;
   state: ResultsFiltersState;
@@ -246,6 +247,7 @@ export function ResultsGlobalFilters({
   /** El buscador de la pestaña, si tiene uno — se sienta justo a la
    *  izquierda de "Filtros", que es donde se lee último antes de recortar. */
   searchSlot?: React.ReactNode;
+  excludeBreakdowns?: BreakdownKey[];
 }) {
   const demographics = useDemographicGroups(results);
   const allCicloGroups = useCicloGroups(results);
@@ -266,7 +268,7 @@ export function ResultsGlobalFilters({
               <SelectValue className="truncate text-text-primary" />
             </SelectTrigger>
             <SelectContent position="popper">
-              {BREAKDOWN_ORDER.map((key) => (
+              {BREAKDOWN_ORDER.filter((k) => !excludeBreakdowns.includes(k)).map((key) => (
                 <SelectItem key={key} value={key} className="text-[13px]">
                   {BREAKDOWN_META[key].label}
                 </SelectItem>

@@ -1,16 +1,17 @@
 import * as React from "react";
 import {
   ArrowRight,
+  Bell,
   Building2,
   CalendarRange,
   Check,
   CheckIcon,
   CircleSlash,
-  Lightbulb,
   Lock,
   Route,
   ShieldCheck,
   Target,
+  User,
   Users2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -23,9 +24,12 @@ import {
   CICLO_PERIOD_MONTHS,
   MAX_CICLO_DESCRIPTION_LENGTH,
   PARTICIPANT_MODES_BY_CREATOR,
+  REMINDER_FREQUENCY_LABELS,
+  REMINDER_FREQUENCY_ORDER,
   type CicloDraft,
   type CicloObjectiveCreator,
   type CicloPeriod,
+  type ReminderFrequency,
 } from "./cicloBuilderTypes";
 import { addMonths, formatSingleDate, parseISODate, toISODate } from "./cicloDates";
 import {
@@ -93,7 +97,7 @@ const REVEAL_DELAY_MS = 280;
  * `REVEAL_DELAY_MS`: tiene que sobrevivir una pausa normal entre palabras
  * mientras se compone un nombre, no solo entre teclas sueltas.
  */
-const NAME_IDLE_DELAY_MS = 1400;
+const NAME_IDLE_DELAY_MS = 900;
 
 const PERIOD_DAYS: Readonly<Record<CicloPeriod, string>> = {
   mes: "30 días",
@@ -127,11 +131,28 @@ const BLOCK_HINTS: Readonly<Record<SetupBlockId, string>> = {
   permissions: "Qué puede hacer cada rol dentro del ciclo.",
 };
 
-/** Cuántos bloques están contestados, contando desde el primero sin saltar. */
-function countAnswered(draft: CicloDraft): number {
+/**
+ * Cuántos bloques están contestados, contando desde el primero sin saltar.
+ *
+ * `setupBlockIssue` solo mira lo que el borrador puede contar por su cuenta.
+ * Ni el norte, ni los recordatorios, ni el nivel de RH lo logran solos —sus
+ * campos nacen con un valor real, no vacío, así que no distinguen "todavía
+ * no se preguntó" de "ya contestó"— y viven como estado del editor
+ * (`companyPicked`, `remindersPicked`, `levelPicked`). `methodologyPending` y
+ * `governancePending` son esa parte extra: sin ellas, elegir modelo o
+ * gobierno bastaría para dar el bloque por terminado con la pregunta
+ * siguiente todavía sin contestar, y como el bloque de después nunca tiene
+ * nada pendiente por su cuenta, los dos se leerían como contestados a la vez
+ * y el acordeón saltaría de uno al otro sin dejar ver la pregunta.
+ */
+function countAnswered(
+  draft: CicloDraft,
+  methodologyPending: boolean,
+  governancePending: boolean
+): number {
   if (setupBlockIssue("identity", draft) !== null) return 0;
-  if (setupBlockIssue("methodology", draft) !== null) return 1;
-  if (draft.objectiveCreator === null) return 2;
+  if (setupBlockIssue("methodology", draft) !== null || methodologyPending) return 1;
+  if (draft.objectiveCreator === null || governancePending) return 2;
   if (setupBlockIssue("permissions", draft) !== null) return 3;
   return 4;
 }
@@ -171,6 +192,7 @@ export function CicloSetupEditor({
 }: CicloSetupEditorProps) {
   const sectionRef = React.useRef<HTMLElement>(null);
   const companyQuestionRef = React.useRef<HTMLDivElement>(null);
+  const remindersQuestionRef = React.useRef<HTMLDivElement>(null);
 
   // La foto del borrador al abrir, tomada una sola vez: si ya venía
   // contestado —se está editando, o se vuelve a este paso— no hay nada que
@@ -181,7 +203,56 @@ export function CicloSetupEditor({
   // volver a la misma decisión, no al principio del acordeón.
   const [resumedBlock] = React.useState(() => initialOpenBlock);
 
-  const answered = countAnswered(draft);
+  /**
+   * Que el autor haya contestado si quiere norte, no que el borrador traiga
+   * un valor. `useCompanyObjectives` nunca es nulo —nace en `true`—, así que
+   * por sí solo no distingue "todavía no se preguntó" de "ya contestó";
+   * misma razón por la que el gobierno lleva su propio `creatorPicked`.
+   */
+  const [companyPicked, setCompanyPicked] = React.useState(arrivedAnswered);
+  /** Lo mismo, para si quiere recordatorios automáticos — ver `remindersQuestionRef`. */
+  const [remindersPicked, setRemindersPicked] = React.useState(arrivedAnswered);
+  /** Y para la frecuencia, la tercera pregunta que solo existe cuando la
+   *  segunda se contestó con "sí": elegirla no puede quedar leída como "cada
+   *  semana" por defecto sin que nadie la haya tocado. */
+  const [frequencyPicked, setFrequencyPicked] = React.useState(arrivedAnswered);
+
+  /**
+   * El bloque todavía tiene una pregunta abierta: el modelo dejó el norte a
+   * criterio del autor y nadie lo ha contestado.
+   */
+  const isCompanyQuestionPending =
+    draft.objectiveModel !== null &&
+    draft.modelRules.companyObjectives === "optional" &&
+    !companyPicked;
+  /** La otra pregunta que el bloque no puede dejar sin contestar: si el
+   *  ciclo va a recordarle a la gente que reporte, sin importar el modelo —
+   *  y, si contestó que sí, la frecuencia que todavía le sigue. "No" no deja
+   *  nada más pendiente; "sí" sí, hasta que también se elija cada cuánto. */
+  const isRemindersQuestionPending =
+    draft.objectiveModel !== null &&
+    (!remindersPicked || (draft.remindersEnabled && !frequencyPicked));
+
+  /**
+   * "Gobierno" tiene la misma trampa que el norte: RH arranca con los dos
+   * niveles marcados (`levelsForCreator`, en `cicloSetup.ts`) para que Mixto
+   * sea una respuesta válida de una, no un vacío — pero eso significa que
+   * `assignmentLevel` ya no es `null` apenas se elige RH, aunque nadie haya
+   * tocado "¿Cómo se van a crear los objetivos?" todavía. Sin `levelPicked`,
+   * el bloque se daría por contestado en el mismo clic que lo abre, y como
+   * "Permisos" nunca tiene nada pendiente (`setupBlockIssue` siempre
+   * devuelve null ahí), los dos se leerían como contestados a la vez: el
+   * acordeón cerraría Gobierno y abriría Permisos de un salto, sin que la
+   * pregunta del nivel llegara a verse.
+   */
+  const [levelPicked, setLevelPicked] = React.useState(arrivedAnswered);
+  const isLevelQuestionPending = creatorAssignsObjectives(draft.objectiveCreator) && !levelPicked;
+
+  const answered = countAnswered(
+    draft,
+    isCompanyQuestionPending || isRemindersQuestionPending,
+    isLevelQuestionPending
+  );
 
   const [revealedByAnswers, setRevealedByAnswers] = React.useState(() => {
     if (arrivedAnswered) return SETUP_BLOCK_ORDER.length;
@@ -243,9 +314,11 @@ export function CicloSetupEditor({
     }
   }, [openBlock]);
 
-  // Lo mismo para la pregunta del norte, que el efecto de revelado consulta
-  // sin depender de ella: se declara más abajo, junto al resto de metodología.
+  // Lo mismo para la pregunta del norte y la de recordatorios, que el efecto
+  // de revelado consulta sin depender de ellas: se declaran más abajo, junto
+  // al resto de metodología.
   const companyQuestionPendingRef = React.useRef(false);
+  const remindersQuestionPendingRef = React.useRef(false);
 
   const previousRevealed = React.useRef(revealed);
   React.useEffect(() => {
@@ -266,10 +339,15 @@ export function CicloSetupEditor({
     // esté listo, con un clic.
     if (openBlockRef.current === "identity") return;
 
-    // Y "Metodología" tampoco, mientras el modelo elegido deje el norte a
-    // criterio del autor y esa pregunta siga sin contestar: elegir modelo no
-    // termina el bloque cuando el modelo abre una pregunta más.
-    if (openBlockRef.current === "methodology" && companyQuestionPendingRef.current) return;
+    // Y "Metodología" tampoco, mientras quede una de sus dos preguntas sin
+    // contestar —el norte, cuando el modelo lo deja a criterio del autor, y
+    // los recordatorios, siempre—: elegir modelo no termina el bloque cuando
+    // todavía hay algo que preguntarle.
+    if (
+      openBlockRef.current === "methodology" &&
+      (companyQuestionPendingRef.current || remindersQuestionPendingRef.current)
+    )
+      return;
 
     setOpenBlock(opened[opened.length - 1]);
   }, [revealed, draft.objectiveCreator]);
@@ -431,14 +509,6 @@ export function CicloSetupEditor({
 
   // ── Metodología ──────────────────────────────────────────────────────────
 
-  /**
-   * Que el autor haya contestado si quiere norte, no que el borrador traiga
-   * un valor. `useCompanyObjectives` nunca es nulo —nace en `true`—, así que
-   * por sí solo no distingue "todavía no se preguntó" de "ya contestó";
-   * misma razón por la que el gobierno lleva su propio `creatorPicked`.
-   */
-  const [companyPicked, setCompanyPicked] = React.useState(arrivedAnswered);
-
   const handleModelPick = (model: ObjectiveModelId) => {
     // Personalizado parte de las reglas que ya tenía el ciclo: es "lo mío",
     // no "desde cero". Un preset trae las suyas.
@@ -450,18 +520,20 @@ export function CicloSetupEditor({
     // criterio del autor, nunca impuesta por un modelo que ya no es el suyo.
     const rules: ObjectiveModelRules =
       model === "custom" ? { ...inherited, companyObjectives: "optional" } : inherited;
-    // Modelo nuevo, regla nueva sobre el norte: lo que se hubiera contestado
-    // antes era sobre otro modelo.
+    // Modelo nuevo, preguntas nuevas: lo que se hubiera contestado antes era
+    // sobre otro modelo. A diferencia del norte, los recordatorios no
+    // dependen de ninguna regla del modelo — siempre quedan por preguntar —
+    // así que elegir modelo nunca adelanta el paso por sí solo: eso lo
+    // decide contestar esa pregunta, no elegir modelo.
     setCompanyPicked(false);
+    setRemindersPicked(false);
+    setFrequencyPicked(false);
     setHoveredModel(null); // Clear stuck hover states on touch devices
     onChange({
       objectiveModel: model,
       modelRules: rules,
       useCompanyObjectives: companyFlagFor(rules, draft.useCompanyObjectives),
     });
-    if (rules.companyObjectives !== "optional") {
-      setOpenBlock((current) => (current === "methodology" ? "governance" : current));
-    }
   };
 
   const model = draft.objectiveModel;
@@ -490,13 +562,6 @@ export function CicloSetupEditor({
     objectiveModelVocab(previewModel, previewRules)
   );
 
-  /**
-   * El bloque todavía tiene una pregunta abierta: el modelo dejó el norte a
-   * criterio del autor y nadie lo ha contestado.
-   */
-  const isCompanyQuestionPending =
-    model !== null && draft.modelRules.companyObjectives === "optional" && !companyPicked;
-
   React.useEffect(() => {
     companyQuestionPendingRef.current = isCompanyQuestionPending;
     if (isCompanyQuestionPending) {
@@ -507,11 +572,50 @@ export function CicloSetupEditor({
     }
   }, [isCompanyQuestionPending]);
 
-  /** Contestar el norte es lo último del bloque: ahí sí cede el paso. */
+  React.useEffect(() => {
+    remindersQuestionPendingRef.current = isRemindersQuestionPending;
+    // Si las dos preguntas están pendientes, la del norte ya se encargó de
+    // llevar la vista hasta ahí — llevarla otra vez a recordatorios la
+    // dejaría peleando consigo misma.
+    if (isRemindersQuestionPending && !isCompanyQuestionPending) {
+      const timer = setTimeout(() => {
+        remindersQuestionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 90);
+      return () => clearTimeout(timer);
+    }
+  }, [isRemindersQuestionPending, isCompanyQuestionPending]);
+
+  /** Contestar el norte cede el paso solo si no queda la otra pregunta pendiente. */
   const answerCompanyQuestion = (useCompanyObjectives: boolean) => {
     setCompanyPicked(true);
     onChange({ useCompanyObjectives });
-    setOpenBlock((current) => (current === "methodology" ? "governance" : current));
+    if (!isRemindersQuestionPending) {
+      setOpenBlock((current) => (current === "methodology" ? "governance" : current));
+    }
+  };
+
+  /**
+   * Misma idea, del otro lado: recordatorios cede el paso solo si el norte
+   * —cuando aplica— ya quedó contestado. Pero "sí, automatizarlos" no cierra
+   * el bloque todavía: deja la frecuencia pendiente, y esa se contesta aparte
+   * en `answerFrequencyQuestion`. Solo "no" no tiene nada más que preguntar.
+   */
+  const answerRemindersQuestion = (remindersEnabled: boolean) => {
+    setRemindersPicked(true);
+    onChange({ remindersEnabled });
+    const stillNeedsFrequency = remindersEnabled && !frequencyPicked;
+    if (!isCompanyQuestionPending && !stillNeedsFrequency) {
+      setOpenBlock((current) => (current === "methodology" ? "governance" : current));
+    }
+  };
+
+  /** La frecuencia, última pregunta de "Metodología" cuando hay recordatorios. */
+  const answerFrequencyQuestion = (frequency: ReminderFrequency) => {
+    setFrequencyPicked(true);
+    onChange({ reminderFrequency: frequency });
+    if (!isCompanyQuestionPending) {
+      setOpenBlock((current) => (current === "methodology" ? "governance" : current));
+    }
   };
 
   /** Se pasa por encima de una tarjeta que sí tiene reglas que adelantar. */
@@ -546,6 +650,10 @@ export function CicloSetupEditor({
       Object.assign(patch, levelsForCreator(creator));
     }
     setCreatorPicked(true);
+    // RH es el único gobierno con una pregunta propia después de esta —ver
+    // `isLevelQuestionPending`—, así que cada vez que se elige vuelve a
+    // marcarse sin contestar; para los demás no hay nada que esperar.
+    setLevelPicked(!creatorAssignsObjectives(creator));
     onChange(patch);
 
   };
@@ -572,7 +680,9 @@ export function CicloSetupEditor({
   const isRevealed = (block: SetupBlockId) => SETUP_BLOCK_ORDER.indexOf(block) < revealed;
   const isOpen = (block: SetupBlockId) => openBlock === block;
   const isAnswered = (block: SetupBlockId) =>
-    block === "governance" ? draft.objectiveCreator !== null : setupBlockIssue(block, draft) === null;
+    block === "governance"
+      ? draft.objectiveCreator !== null && !isLevelQuestionPending
+      : setupBlockIssue(block, draft) === null;
   const summaryOf = (block: SetupBlockId) =>
     block === "governance" && draft.objectiveCreator === null ? null : setupBlockSummary(block, draft);
   const blockHasError = (block: SetupBlockId) =>
@@ -843,29 +953,6 @@ export function CicloSetupEditor({
                   ))}
                 </ul>
               </div>
-
-              {/* El ejemplo es lo que de verdad resuelve "¿y esto en qué se
-                  traduce?". Personalizado no lo lleva: su ejemplo habla del
-                  modelo, no de un objetivo escrito con él. */}
-              {previewModel !== "custom" ? (
-                <figure className="flex flex-col gap-1 border-t border-border/50 bg-surface-muted/30 px-4 py-3">
-                  <figcaption className="flex items-center gap-1.5 text-[11.5px] font-semibold text-text-secondary">
-                    <Lightbulb className="size-3.5" strokeWidth={2.2} />
-                    Un objetivo escrito así
-                  </figcaption>
-                  <p
-                    className="border-l-2 pl-3 text-[12.5px] italic leading-relaxed text-text-primary"
-                    style={previewMeta.tone ? toneBorder(previewMeta.tone, 100) : undefined}
-                  >
-                    {previewMeta.example}
-                  </p>
-                </figure>
-              ) : (
-                <p className="border-t border-border/50 bg-surface-muted/30 px-4 py-2.5 text-[12px] leading-relaxed text-text-secondary">
-                  Por ahora hereda las reglas del último modelo que tuvo el ciclo. Ajustarlas una
-                  a una llega más adelante.
-                </p>
-              )}
             </div>
           )}
 
@@ -891,24 +978,120 @@ export function CicloSetupEditor({
                 <div
                   role="radiogroup"
                   aria-label="Objetivos de la empresa"
-                  className="mt-3 grid gap-2.5 sm:grid-cols-2"
+                  className="mt-3 flex flex-wrap gap-2"
                 >
                   <ObjectiveOptionCard
                     icon={Building2}
                     label="Sí, con un norte"
-                    tagline="Se añade el paso para escribirlos y alinear lo demás a ellos"
+                    tagline="Se añade el paso para escribirlos"
+                    size="compact"
                     isSelected={companyPicked && draft.useCompanyObjectives}
                     onClick={() => answerCompanyQuestion(true)}
-                    className="min-h-[84px] p-3"
+                    className="min-h-[64px] flex-1 basis-0"
                   />
                   <ObjectiveOptionCard
                     icon={CircleSlash}
                     label="No, sin norte"
-                    tagline="El ciclo se sostiene solo con los objetivos que se asignen"
+                    tagline="Solo con lo que se asigne"
+                    size="compact"
                     isSelected={companyPicked && !draft.useCompanyObjectives}
                     onClick={() => answerCompanyQuestion(false)}
-                    className="min-h-[84px] p-3"
+                    className="min-h-[64px] flex-1 basis-0"
                   />
+                </div>
+              </Field>
+            </div>
+          )}
+
+          {/* Debajo de la pregunta del norte, no antes: primero se decide
+              qué lleva el ciclo, después cómo se le insiste a la gente que
+              lo actualice. Cuando el modelo sí deja el norte a criterio del
+              autor, esta pregunta espera a que esa se conteste —dos
+              preguntas a la vez es ruido, no ahorro— y solo entonces aparece
+              debajo; con un modelo que ya trae el norte resuelto (o
+              apagado) no hay nada que esperar, así que aparece apenas se
+              elige el modelo. Pregunta obligatoria como la del norte, y por
+              lo mismo: un sí/no fuerza la respuesta donde un switch —ya
+              "contestado" en false desde que nace el borrador— no distingue
+              "no, gracias" de "todavía no lo pensé".
+
+              Sí/No y la frecuencia se reparten la fila mitad y mitad, siempre
+              —no solo cuando la frecuencia ya tiene algo que mostrar—: las
+              tarjetas nunca ocupan más de la mitad, para que elegir "sí" no
+              las corra ni les cambie el ancho. El lado de la frecuencia
+              reserva su mitad desde el principio, vacío hasta que hay
+              recordatorios que preguntarle cada cuánto. */}
+          {model !== null &&
+            (draft.modelRules.companyObjectives !== "optional" || companyPicked) && (
+            <div className="mt-5" ref={remindersQuestionRef}>
+              <Field
+                label="¿Quieres automatizar el envío de recordatorios?"
+                required
+                hint="Les avisa a los participantes que actualicen su avance."
+              >
+                <div className="mt-3 flex flex-wrap items-stretch gap-6">
+                  <div
+                    role="radiogroup"
+                    aria-label="Automatizar recordatorios"
+                    className="flex min-w-[260px] flex-1 basis-0 flex-wrap gap-2"
+                  >
+                    <ObjectiveOptionCard
+                      icon={Bell}
+                      label="Sí, automatizarlos"
+                      tagline="Elige la frecuencia al lado"
+                      size="compact"
+                      isSelected={remindersPicked && draft.remindersEnabled}
+                      onClick={() => answerRemindersQuestion(true)}
+                      className="min-h-[64px] flex-1 basis-0"
+                    />
+                    <ObjectiveOptionCard
+                      icon={CircleSlash}
+                      label="No, por ahora"
+                      tagline="Sin avisos automáticos"
+                      size="compact"
+                      isSelected={remindersPicked && !draft.remindersEnabled}
+                      onClick={() => answerRemindersQuestion(false)}
+                      className="min-h-[64px] flex-1 basis-0"
+                    />
+                  </div>
+
+                  <div className="flex min-w-[260px] flex-1 basis-0 flex-wrap items-center gap-3">
+                    {remindersPicked && draft.remindersEnabled && (
+                      <>
+                        <span className="shrink-0 text-[12px] font-semibold text-text-primary">
+                          ¿Cada cuánto? <span className="text-destructive">•</span>
+                        </span>
+                        <div
+                          role="radiogroup"
+                          aria-label="Frecuencia de los recordatorios"
+                          className="flex flex-wrap gap-2"
+                        >
+                          {REMINDER_FREQUENCY_ORDER.map((frequency) => {
+                            const isSelected =
+                              frequencyPicked && draft.reminderFrequency === frequency;
+                            return (
+                              <button
+                                key={frequency}
+                                type="button"
+                                role="radio"
+                                aria-checked={isSelected}
+                                onClick={() => answerFrequencyQuestion(frequency)}
+                                className={cn(
+                                  "flex h-9 items-center gap-1.5 rounded-full px-4 text-[12.5px] font-semibold transition-colors",
+                                  isSelected
+                                    ? "bg-primary text-primary-foreground"
+                                    : "bg-surface text-text-secondary ring-1 ring-inset ring-border hover:bg-surface-muted hover:text-text-primary"
+                                )}
+                              >
+                                {isSelected && <Check className="size-3" strokeWidth={3} />}
+                                {REMINDER_FREQUENCY_LABELS[frequency]}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
               </Field>
             </div>
@@ -964,7 +1147,10 @@ export function CicloSetupEditor({
                         label={meta.label}
                         tagline={meta.tagline}
                         isSelected={assignmentLevel === level}
-                        onClick={() => onChange(levelsForAssignment(level))}
+                        onClick={() => {
+                          setLevelPicked(true);
+                          onChange(levelsForAssignment(level));
+                        }}
                         className="min-h-[84px] p-3"
                       />
                     );
@@ -1018,25 +1204,55 @@ export function CicloSetupEditor({
       {/* ── 4. Permisos ────────────────────────────────────────────────── */}
       {isRevealed("permissions") && (
         <SetupBlock icon={ShieldCheck} {...blockProps("permissions")}>
-          <div className="flex flex-col gap-5">
-            <Field
-              label="Permisos de líderes"
-              hint="Qué puede hacer un líder con sus propios objetivos y con los de su equipo durante este ciclo."
-            >
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
-                <PermissionGroup title="Objetivos propios" permissions={PERMISOS_LIDER_PROPIOS} />
-                <PermissionGroup title="Objetivos del equipo" permissions={PERMISOS_LIDER_EQUIPO} />
-              </div>
-            </Field>
+          {/* Las tres tarjetas en una sola fila, no dos bloques apilados: así
+              se lee de un vistazo que "del líder" y "del equipo del líder"
+              son las dos caras del líder, y que el colaborador es un rol
+              aparte. Líder y colaborador van cada uno en su propia caja
+              —borde y fondo propios, no una sola caja con una línea en
+              medio— para que la frontera entre los dos roles se sienta como
+              lo que es: dos contenedores independientes, no una tarjeta
+              dividida. */}
+          <div className="flex flex-col gap-1">
+            <span className="text-[13px] font-semibold text-text-primary">
+              Permisos por rol
+            </span>
+            <span className="max-w-[80ch] text-[12px] leading-relaxed text-text-secondary">
+              Qué puede hacer cada rol con sus objetivos durante este ciclo.
+            </span>
+          </div>
 
-            <Field
-              label="Permisos de colaboradores"
-              hint="Qué puede hacer un colaborador con los objetivos que le pertenecen durante este ciclo."
-            >
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
-                <PermissionGroup title="Objetivos propios" permissions={PERMISOS_COLABORADOR} />
+          <div className="mt-3 flex flex-col gap-3 md:flex-row md:items-start">
+            <div className="flex flex-1 flex-col gap-2.5 rounded-xl border border-border/60 bg-surface-muted/40 p-3 md:basis-2/3">
+              <div className="flex items-center gap-1.5">
+                <Users2 className="size-3.5 shrink-0 text-text-secondary" strokeWidth={2.2} />
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                  Líder
+                </span>
+                <span className="text-[11px] font-medium normal-case text-text-muted">
+                  · sus objetivos y los de su equipo
+                </span>
               </div>
-            </Field>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <PermissionGroup title="Objetivos del líder" permissions={PERMISOS_LIDER_PROPIOS} />
+                <PermissionGroup
+                  title="Objetivos del equipo del líder"
+                  permissions={PERMISOS_LIDER_EQUIPO}
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-1 flex-col gap-2.5 rounded-xl border border-border/60 bg-surface-muted/40 p-3 md:basis-1/3">
+              <div className="flex items-center gap-1.5">
+                <User className="size-3.5 shrink-0 text-text-secondary" strokeWidth={2.2} />
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+                  Colaborador
+                </span>
+                <span className="text-[11px] font-medium normal-case text-text-muted">
+                  · sus objetivos propios
+                </span>
+              </div>
+              <PermissionGroup title="Objetivos individuales" permissions={PERMISOS_COLABORADOR} />
+            </div>
           </div>
         </SetupBlock>
       )}

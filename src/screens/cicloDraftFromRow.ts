@@ -18,7 +18,6 @@ import { DEFAULT_PARTICIPANTS } from "@/components/survey-builder";
 import { groupMemberIds } from "@/components/survey-builder/participants";
 import {
   OBJECTIVE_MODEL_PRESETS,
-  DEFAULT_CICLO_RESULTS_POLICY,
   type CicloDraft,
   type ObjectiveSet,
 } from "@/components/ciclo-builder";
@@ -97,10 +96,11 @@ export function cicloRowToDraft(row: CicloRow): CicloDraft {
     },
     useCompanyObjectives: setup.companyObjectives.length > 0,
     companyObjectives: setup.companyObjectives,
+    remindersEnabled: false,
+    reminderFrequency: "weekly",
     useGroupObjectives: groupSets.length > 0,
     useIndividualObjectives: individualSets.length > 0,
     assignment: { groupSegmentBy: setup.segmentBy, groupsAutoInclude: true },
-    resultsPolicy: DEFAULT_CICLO_RESULTS_POLICY,
     objectiveSets: sets,
     // Un ciclo terminado no se "retoma" en el paso donde alguien lo dejó: se
     // abre por el principio, que es desde donde se revisa lo que ya está —y

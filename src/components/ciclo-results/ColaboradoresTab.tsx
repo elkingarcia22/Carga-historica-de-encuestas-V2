@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Compass, Users } from "lucide-react";
+import { Compass, Users, FolderTree } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -645,7 +645,7 @@ export function ColaboradoresTab({
  * gente. Son la misma población leída por dos preguntas distintas, así que
  * comparten pestaña y filtros en vez de partirse en dos.
  */
-export type ColaboradoresView = "detalle" | "alineacion";
+export type ColaboradoresView = "persona" | "grupos" | "alineacion";
 
 export function ColaboradoresViewSwitch({
   value,
@@ -661,9 +661,13 @@ export function ColaboradoresViewSwitch({
       className="w-auto shrink-0"
     >
       <TabsList>
-        <TabsTrigger value="detalle">
+        <TabsTrigger value="persona">
           <Users className="h-3.5 w-3.5" />
-          Colaboradores
+          Por persona
+        </TabsTrigger>
+        <TabsTrigger value="grupos">
+          <FolderTree className="h-3.5 w-3.5" />
+          Grupos
         </TabsTrigger>
         <TabsTrigger value="alineacion">
           <Compass className="h-3.5 w-3.5" />

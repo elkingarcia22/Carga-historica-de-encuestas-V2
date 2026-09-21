@@ -69,6 +69,29 @@ const sideMotionClasses = {
   bottom: "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom data-[state=open]:duration-500 data-[state=closed]:duration-300 transition ease-in-out",
 } as const
 
+let bodyScrollLocks = 0
+
+/**
+ * Radix solo bloquea el scroll de fondo cuando el diálogo es modal. Un drawer
+ * no modal sigue siendo la única cosa con la que se está trabajando, así que
+ * el fondo tampoco debería poder moverse detrás del velo.
+ *
+ * Se lleva la cuenta de cuántos lo piden en vez de guardar y restaurar el
+ * valor de antes: quien se monte segundo guardaría el "hidden" del primero y
+ * lo dejaría puesto al irse, con la página de atrás trabada para siempre.
+ */
+export function useBodyScrollLock(active: boolean) {
+  React.useEffect(() => {
+    if (!active) return
+    bodyScrollLocks += 1
+    document.body.style.overflow = "hidden"
+    return () => {
+      bodyScrollLocks = Math.max(0, bodyScrollLocks - 1)
+      if (bodyScrollLocks === 0) document.body.style.overflow = ""
+    }
+  }, [active])
+}
+
 function SheetContent({
   className,
   children,
@@ -76,6 +99,7 @@ function SheetContent({
   showCloseButton = true,
   modal = true,
   overlayClassName,
+  overlayStyle,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left"
@@ -85,11 +109,13 @@ function SheetContent({
   /** Recorta el velo. Lo usa un panel que convive con algo fuera del drawer
    *  —el del Agente IA— para no taparlo. */
   overlayClassName?: string
+  /** Para que el recorte del velo se mueva con el cajón en vez de saltar. */
+  overlayStyle?: React.CSSProperties
 }) {
   return (
     <SheetPortal>
       {modal ? (
-        <SheetOverlay className={overlayClassName} />
+        <SheetOverlay className={overlayClassName} style={overlayStyle} />
       ) : (
         /* Radix no dibuja velo cuando el diálogo no es modal —su Overlay
            devuelve null—, así que lo ponemos nosotros. Sin él, el drawer
@@ -105,6 +131,7 @@ function SheetContent({
             "fixed inset-y-0 left-0 right-0 z-40 bg-black/10 supports-[backdrop-filter]:backdrop-blur-[2px] animate-overlay-in",
             overlayClassName
           )}
+          style={overlayStyle}
         />
       )}
       <SheetPrimitive.Content

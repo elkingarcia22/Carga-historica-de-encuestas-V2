@@ -1,8 +1,12 @@
+import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { CalendarDays, Flag, Hash, Plus, Sparkles, Trash2 } from "lucide-react";
+import { es } from "date-fns/locale";
 import { cn } from "@/lib/utils";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   KEY_ACTION_KIND_META,
   TOTAL_WEIGHT,
@@ -32,11 +36,15 @@ interface ObjectiveKeyActionsFieldProps {
    *  hablaba el constructor antes de que existieran los modelos. */
   vocab?: ObjectiveModelVocab;
   /**
-   * El modelo ya decidió que lo que cuelga mueve el avance —los resultados
-   * clave de OKR siempre lo hacen— así que el interruptor desaparece: no es
-   * una decisión del autor, es una regla del ciclo.
+   * Quién decide si lo que cuelga mueve el avance:
+   *
+   * - `locked-on`: lo decidió el modelo —los resultados clave de OKR siempre
+   *   miden— así que el interruptor desaparece.
+   * - `locked-off`: el modelo no cuelga nada que mida (KPI), así que esto es
+   *   un plan de seguimiento y el avance sigue saliendo de la cifra.
+   * - `choice`: lo decide el autor, que es el caso de las acciones clave.
    */
-  lockDriveProgress?: boolean;
+  progressMode?: "locked-on" | "locked-off" | "choice";
 }
 
 /**
@@ -58,7 +66,7 @@ export function ObjectiveKeyActionsField({
   onChange,
   showValidation,
   vocab = objectiveModelVocab(null, DEFAULT_OBJECTIVE_MODEL_RULES),
-  lockDriveProgress = false,
+  progressMode = "choice",
 }: ObjectiveKeyActionsFieldProps) {
   const total = keyActionsTotal(actions);
   const isExact = total === TOTAL_WEIGHT;
@@ -68,7 +76,12 @@ export function ObjectiveKeyActionsField({
   const child = (vocab.child ?? "Acción clave").toLowerCase();
   const children = (vocab.children ?? "Acciones clave").toLowerCase();
   const isMasculine = vocab.childrenGender === "m";
-  const drives = lockDriveProgress || driveProgress;
+  const drives =
+    progressMode === "locked-on"
+      ? true
+      : progressMode === "locked-off"
+        ? false
+        : driveProgress;
 
   const patchAction = (id: string, patch: Partial<KeyAction>) =>
     onChange({
@@ -79,7 +92,7 @@ export function ObjectiveKeyActionsField({
 
   const addAction = () => {
     const free = Math.max(0, TOTAL_WEIGHT - total);
-    onChange({ keyActions: [...actions, createKeyAction(driveProgress ? free : 0)] });
+    onChange({ keyActions: [...actions, createKeyAction(drives ? free : 0)] });
   };
 
   const removeAction = (id: string) =>
@@ -94,7 +107,7 @@ export function ObjectiveKeyActionsField({
 
   return (
     <div className="flex flex-col gap-3">
-      {!lockDriveProgress && (
+      {progressMode === "choice" && (
       <label className="flex w-fit cursor-pointer items-center gap-2 text-[12px] font-medium text-text-primary">
         <Switch
           checked={driveProgress}
@@ -124,7 +137,7 @@ export function ObjectiveKeyActionsField({
       <p className="max-w-[78ch] text-[12px] leading-relaxed text-text-secondary">
         {drives
           ? `${isMasculine ? "Cada uno" : "Cada una"} suma su aporte al avance del objetivo. Entre ${isMasculine ? "todos" : "todas"} deben cubrir el ${TOTAL_WEIGHT} %.`
-          : `${isMasculine ? "Los" : "Las"} ${children} son el plan de trabajo: se ven en el seguimiento, pero el avance lo sigue marcando la cifra del objetivo.`}
+          : `${isMasculine ? "Los" : "Las"} ${children} son el plan de trabajo: quedan a la vista del equipo, pero el avance lo sigue marcando la cifra del objetivo.`}
       </p>
 
       {actions.length > 0 && (
@@ -143,7 +156,7 @@ export function ObjectiveKeyActionsField({
                 <KeyActionRow
                   action={action}
                   position={index + 1}
-                  driveProgress={driveProgress}
+                  driveProgress={drives}
                   showValidation={showValidation}
                   onChange={(patch) => patchAction(action.id, patch)}
                   onRemove={() => removeAction(action.id)}
@@ -244,7 +257,7 @@ function KeyActionRow({
               type="button"
               onClick={onRemove}
               aria-label={`Eliminar acción ${position}`}
-              className="flex size-8 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/30"
+              className="flex size-8 shrink-0 items-center justify-center rounded-md border border-destructive/30 bg-destructive/5 text-destructive transition-all hover:border-destructive/50 hover:bg-destructive/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive/30"
             >
               <Trash2 className="size-3.5" strokeWidth={2} />
             </button>
@@ -273,16 +286,11 @@ function KeyActionRow({
           </label>
         )}
 
-        <label className="flex items-center gap-1.5 text-[11.5px] font-medium text-text-secondary">
-          <CalendarDays className="size-3.5" strokeWidth={2} />
-          <input
-            type="date"
-            value={action.dueDate}
-            onChange={(event) => onChange({ dueDate: event.target.value })}
-            aria-label={`Fecha límite de la acción ${position}`}
-            className="h-8 rounded-md border border-border bg-surface px-2 text-[12px] font-medium text-text-primary outline-none transition-all focus:border-primary focus:ring-2 focus:ring-primary/25"
-          />
-        </label>
+        <DueDateField
+          value={action.dueDate}
+          onChange={(dueDate) => onChange({ dueDate })}
+          label={`Fecha límite de la acción ${position}`}
+        />
 
         {driveProgress && (
           <label className="ml-auto flex items-center gap-1.5 text-[11.5px] font-medium text-text-secondary">
@@ -316,6 +324,67 @@ function KeyActionRow({
         )}
       </div>
     </div>
+  );
+}
+
+/** "yyyy-mm-dd" ↔ Date en hora local: evita el corrimiento de un día que da
+ *  `new Date(string)` al interpretarlo en UTC. */
+function parseDueDate(value: string): Date | undefined {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return undefined;
+  const [, year, month, day] = match;
+  return new Date(Number(year), Number(month) - 1, Number(day));
+}
+
+function formatDueDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+/** El plazo para dar por cumplido el hito (o la cantidad): dicho con
+ *  "Fecha límite" en vez de un input desnudo, para que no se confunda con
+ *  cuándo se creó o se registró la acción. */
+function DueDateField({
+  value,
+  onChange,
+  label,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  label: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = parseDueDate(value);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          className="flex h-8 items-center gap-1.5 rounded-md border border-border bg-surface px-2 text-[12px] font-medium text-text-primary outline-none transition-all hover:border-primary/40 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/25"
+        >
+          <CalendarDays className="size-3.5 text-text-secondary" strokeWidth={2} />
+          <span className="text-text-secondary">Fecha límite:</span>
+          <span className={cn(!selected && "text-text-secondary")}>
+            {selected ? formatDueDate(selected).split("-").reverse().join("/") : "sin definir"}
+          </span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto p-0" align="start">
+        <Calendar
+          mode="single"
+          locale={es}
+          selected={selected}
+          onSelect={(date) => {
+            onChange(date ? formatDueDate(date) : "");
+            setOpen(false);
+          }}
+        />
+      </PopoverContent>
+    </Popover>
   );
 }
 

@@ -18,6 +18,11 @@ import {
   type AmbitionLevel,
 } from "./aiObjectiveGenerator";
 import type { Objective } from "./cicloBuilderTypes";
+import { buildObjectiveChildren } from "./aiObjectiveChildren";
+import {
+  DEFAULT_OBJECTIVE_MODEL_RULES,
+  type ObjectiveModelRules,
+} from "./objectiveModel";
 
 export type { AmbitionLevel } from "./aiObjectiveGenerator";
 export { AMBITION_META, AMBITION_ORDER } from "./aiObjectiveGenerator";
@@ -283,7 +288,15 @@ function pickSeeds(focuses: readonly BriefFocus[], count: number, text: string):
  */
 export function generateObjectiveSet(
   brief: AiObjectiveBrief,
-  options: { useContextAsObjective: boolean }
+  options: {
+    useContextAsObjective: boolean;
+    /** Las reglas del ciclo: qué cuelga de cada objetivo y si mueve el avance. */
+    rules?: ObjectiveModelRules;
+    /** Los objetivos de la empresa de los que cuelga esta tanda, en orden. */
+    alignTo?: readonly string[];
+    /** Cuántos hijos por objetivo. `0` es "ninguno" y `null` deja decidir al modelo. */
+    childrenCount?: number | null;
+  }
 ): Objective[] {
   const ambition = brief.ambition ?? "retador";
   const total = brief.count ?? 1;
@@ -311,7 +324,55 @@ export function generateObjectiveSet(
     generateObjectiveFromContext(seed, ambition)
   );
 
-  return [...fromContext, ...fromSeeds];
+  return [...fromContext, ...fromSeeds].map((objective, index) =>
+    dressForModel(objective, index, options)
+  );
+}
+
+/**
+ * Le pone al objetivo lo que su modelo exige: de qué cuelga y qué cuelga de él.
+ *
+ * Se hace aquí y no en el generador porque son dos preguntas distintas: el
+ * generador decide qué se mide y hasta dónde —eso no cambia entre modelos—,
+ * y esto decide la forma que el ciclo pide. Sin este paso un OKR nace inválido.
+ */
+function dressForModel(
+  objective: Objective,
+  index: number,
+  options: {
+    rules?: ObjectiveModelRules;
+    alignTo?: readonly string[];
+    childrenCount?: number | null;
+  }
+): Objective {
+  const rules = options.rules ?? DEFAULT_OBJECTIVE_MODEL_RULES;
+  const alignTo = options.alignTo ?? [];
+
+  // Con varios objetivos de la empresa elegidos se reparten en orden: el
+  // primero al primero, y vuelta a empezar. Repartir es lo que hace que la
+  // tanda cubra el norte entero en vez de amontonarse en su primera línea.
+  const alignedTo = alignTo.length === 0 ? null : alignTo[index % alignTo.length];
+
+  // Un modelo que no cuelga nada que mida —KPI— igual admite un plan de
+  // seguimiento: se escribe como acciones y nunca toca el avance, que sigue
+  // saliendo de la cifra del indicador.
+  const isFollowUpPlan = rules.children === "none";
+  const kind = isFollowUpPlan ? "actions" : rules.children;
+  const driveProgress =
+    !isFollowUpPlan && (rules.children === "results" || rules.childrenDriveProgress);
+  const count =
+    options.childrenCount ??
+    (rules.childrenRequired && !isFollowUpPlan ? (rules.children === "results" ? 3 : 2) : 0);
+  const keyActions = buildObjectiveChildren(objective, count, kind, driveProgress);
+
+  return {
+    ...objective,
+    alignedTo,
+    keyActions,
+    // Solo se marca cuando de verdad hay hijos repartiendo la meta: dejarlo
+    // encendido con la lista vacía hace que la tarjeta pida lo que no tiene.
+    keyActionsDriveProgress: keyActions.length > 0 && driveProgress,
+  };
 }
 
 /** Una línea que resume el brief, para la cabecera de la revisión. */

@@ -63,6 +63,15 @@ import {
 
 const PAGE_SIZES = [10, 25, 50] as const;
 
+const cascadeItemNoTransform = {
+  hidden: { opacity: 0 },
+  show: {
+    opacity: 1,
+    transition: { duration: 0.25, ease: [0.16, 1, 0.3, 1] },
+  },
+};
+
+
 function formatCount(n: number) {
   return new Intl.NumberFormat("es-CO").format(n);
 }
@@ -640,7 +649,7 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
             </div>
           </motion.div>
 
-          <motion.div variants={cascadeItem} className="flex-1 min-h-0 flex flex-col border-y border-border/60">
+          <motion.div variants={cascadeItemNoTransform} className="flex-1 min-h-0 flex flex-col border-y border-border/60">
             {filteredCiclos.length === 0 ? (
               <div className="p-8">
                 <EmptyState
@@ -903,7 +912,7 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
             </div>
           </motion.div>
 
-          <motion.div variants={cascadeItem} className="flex-1 min-h-0 flex flex-col border-y border-border/60">
+          <motion.div variants={cascadeItemNoTransform} className="flex-1 min-h-0 flex flex-col border-y border-border/60">
             {filteredUsuarios.length === 0 ? (
               <div className="p-8">
                 <EmptyState

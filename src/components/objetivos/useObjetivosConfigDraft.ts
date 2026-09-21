@@ -3,7 +3,9 @@ import { toast } from "sonner";
 import type { ConfigTab, PermissionDefinition } from "./objetivosConfigParts";
 import {
   ESTADOS_FIJOS_OBJETIVO,
+  conRangoEnProgreso,
   estadosConPermisoNegativo,
+  estadosFijosParaConfig,
   getObjetivosConfig,
   nivelesDesdeEstados,
   setObjetivosConfig,
@@ -225,6 +227,14 @@ export function useObjetivosConfigDraft({ open, initialTab, onSaved }: UseObjeti
   );
 
   /**
+   * Los estados fijos como se muestran en la tarjeta de solo lectura. No es la
+   * constante a secas porque el rango de "En progreso" sale de las bandas que
+   * se están editando: mover "Cumplido" de 100 a 90 tiene que verse en la
+   * tarjeta de arriba sin guardar ni reabrir.
+   */
+  const estadosFijos = React.useMemo(() => estadosFijosParaConfig(estados), [estados]);
+
+  /**
    * Los niveles que se muestran y se guardan: los de la escala propia, o la
    * copia de las bandas de cumplimiento cuando esa opción está encendida. La
    * escala propia no se pierde mientras tanto —sigue en `niveles`—, así que
@@ -298,6 +308,9 @@ export function useObjetivosConfigDraft({ open, initialTab, onSaved }: UseObjeti
       colorHex:
         EDITABLE_COLOR_VARIANTS[estadosEditables.length % EDITABLE_COLOR_VARIANTS.length].hex,
       descripcion: "Estado personalizado para seguimiento de objetivos.",
+      // Al cierre por defecto: una banda nueva no debería encoger "En
+      // progreso" sin que quien la creó lo haya pedido.
+      aplicaEn: "al-cierre",
     };
     setEstados((prev) => [...prev, newEstado]);
     toast.success("Nuevo estado agregado");
@@ -368,7 +381,9 @@ export function useObjetivosConfigDraft({ open, initialTab, onSaved }: UseObjeti
     }
 
     setObjetivosConfig({
-      estados,
+      // "En progreso" llega hasta la primera banda en curso, así que se
+      // recalcula aquí: nadie edita ese rango, sale de lo que quedó guardado.
+      estados: conRangoEnProgreso(estados),
       // Se guarda la copia ya resuelta: quien lee niveles no tiene por qué
       // saber si vinieron de una escala propia o de las bandas.
       niveles: nivelesVisibles,
@@ -386,6 +401,7 @@ export function useObjetivosConfigDraft({ open, initialTab, onSaved }: UseObjeti
     hasSwitchedTab,
     estados,
     estadosEditables,
+    estadosFijos,
     estadoNegativo,
     niveles: nivelesVisibles,
     allowNegativeResults,

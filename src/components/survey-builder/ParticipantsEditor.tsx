@@ -101,16 +101,6 @@ interface ParticipantsEditorProps {
    * for callers whose audience flow makes a different order the natural
    * one (e.g. the ciclo builder, depending on who writes the objectives). */
   modesOrder?: readonly ParticipantMode[];
-  /**
-   * Extra content rendered under "Toda la empresa"'s own auto-include
-   * switch, only while that switch is on. A survey has nothing to put here;
-   * a ciclo uses it for its "does this person's progress still count"
-   * policy — a concept this shared editor has no business knowing about.
-   */
-  companyAutoIncludeExtra?: React.ReactNode;
-  /** Same slot as `companyAutoIncludeExtra`, for the "Por grupos" panel's
-   * own switch. */
-  groupsAutoIncludeExtra?: React.ReactNode;
 }
 
 /** Reads a single cell by header, tolerating the column being absent. */
@@ -236,8 +226,6 @@ export function ParticipantsEditor({
   onSelectionChange,
   copy,
   modesOrder,
-  companyAutoIncludeExtra,
-  groupsAutoIncludeExtra,
 }: ParticipantsEditorProps) {
   const launchPhrase = copy?.launchPhrase ?? "lanzar la encuesta";
   const [files, setFiles] = React.useState<File[]>([]);
@@ -564,7 +552,6 @@ export function ParticipantsEditor({
             launchPhrase={launchPhrase}
             autoInclude={participants.companyAutoInclude}
             onAutoIncludeChange={(companyAutoInclude) => onChange({ companyAutoInclude })}
-            extraContent={companyAutoIncludeExtra}
           />
         )}
 
@@ -586,7 +573,6 @@ export function ParticipantsEditor({
             autoInclude={participants.groupsAutoInclude}
             onAutoIncludeChange={(groupsAutoInclude) => onChange({ groupsAutoInclude })}
             onSelectionChange={onSelectionChange}
-            autoIncludeExtra={groupsAutoIncludeExtra}
           />
         )}
 
@@ -887,7 +873,6 @@ function CompanySummary({
   onAutoIncludeChange,
   launchPhrase,
   bleed,
-  extraContent,
 }: {
   autoInclude: boolean;
   onAutoIncludeChange: (value: boolean) => void;
@@ -895,9 +880,6 @@ function CompanySummary({
   launchPhrase: string;
   /** El relleno del panel, en negativo: ver `TableBleedBox`. */
   bleed?: string;
-  /** See `ParticipantsEditorProps.companyAutoIncludeExtra`. Shown only while
-   * `autoInclude` is on — it has nothing to configure once sync is off. */
-  extraContent?: React.ReactNode;
 }) {
   const [segmentBy, setSegmentBy] = React.useState<SegmentKey>("area");
   const [sortKey, setSortKey] = React.useState<"segment" | "count" | null>("count");
@@ -1003,10 +985,9 @@ function CompanySummary({
       <AutoIncludeToggle
         checked={autoInclude}
         onCheckedChange={onAutoIncludeChange}
-        title="Sincronizar automáticamente con la empresa"
-        description={`Seguimos el directorio de colaboradores: quien se una a la empresa después de ${launchPhrase} entra solo a la lista, y quien sea desvinculado se quita automáticamente.`}
+        title="Sincronizar con la empresa"
+        description={`Sigue el directorio: quien se una después de ${launchPhrase} entra solo. Quien se desvincule queda inactivo, con sus objetivos disponibles para consulta pero sin contar en el avance.`}
       />
-      {autoInclude && extraContent}
 
       <div className="flex flex-col gap-4 pt-2">
         <div className="flex items-center justify-between gap-3">
@@ -1095,9 +1076,8 @@ export function GroupsPanel({
   onAutoIncludeChange,
   onSelectionChange,
   copy,
-  disabledGroups,
+  groupBadges,
   bleed,
-  autoIncludeExtra,
 }: {
   segmentBy: SegmentKey;
   onSegmentByChange: (value: SegmentKey) => void;
@@ -1118,15 +1098,14 @@ export function GroupsPanel({
    * panel is shared with the ciclo builder, where nobody is being asked to
    * answer a survey. */
   copy?: { lead?: string; launchPhrase?: string };
-  /** Groups that can't be picked here, with the reason shown in their row.
-   * Used by the ciclo builder, where a group already carrying a set of
-   * objectives can't be handed a second one. */
-  disabledGroups?: { ids: ReadonlySet<string>; reason: string };
+  /** Groups worth flagging with a note in their row — informational only, it
+   * never blocks the checkbox. Used by the ciclo builder to mark a group that
+   * already carries a set of objectives: picking it again is allowed, and
+   * the drawer resolves the resulting weight overlap the same way it already
+   * does for an individual reached through more than one assignment. */
+  groupBadges?: { ids: ReadonlySet<string>; reason: string };
   /** El relleno del panel, en negativo: ver `TableBleedBox`. */
   bleed?: string;
-  /** See `ParticipantsEditorProps.groupsAutoIncludeExtra`. Shown only while
-   * `autoInclude` is on. */
-  autoIncludeExtra?: React.ReactNode;
 }) {
   const groups = React.useMemo(
     () => [...segmentCounts(segmentBy).entries()].sort((a, b) => b[1] - a[1]),
@@ -1222,9 +1201,7 @@ export function GroupsPanel({
   const cells = groupsTableCells({
     formatCount,
     disabledReasonFor: (group) =>
-      disabledGroups?.ids.has(group) === true && !selectedSet.has(group)
-        ? disabledGroups.reason
-        : null,
+      groupBadges?.ids.has(group) === true ? groupBadges.reason : null,
   });
 
   return (
@@ -1233,14 +1210,12 @@ export function GroupsPanel({
         <AutoIncludeToggle
           checked={autoInclude}
           onCheckedChange={onAutoIncludeChange}
-          title="Sincronizar automáticamente con la agrupación"
-          description={`Los grupos siguen la configuración del sistema (área, líder u otro criterio): quien entre o salga de uno de los seleccionados después de ${
+          title="Sincronizar con la agrupación"
+          description={`Sigue el organigrama: quien entre a un grupo después de ${
             copy?.launchPhrase ?? "lanzar la encuesta"
-          } se agrega o se quita solo de la lista, sin que tengas que hacerlo a mano.`}
+          } se agrega. Quien salga queda inactivo, con sus objetivos disponibles para consulta pero sin contar en el avance.`}
         />
       )}
-
-      {autoInclude && autoIncludeExtra}
 
       {copy?.lead && (
         <p className="max-w-2xl text-[13px] leading-relaxed text-muted-foreground">{copy.lead}</p>
@@ -1421,23 +1396,17 @@ export function GroupsPanel({
                 {shown.map((row) => {
                   const [group] = row;
                   const isSelected = selectedSet.has(group);
-                  const isDisabled = disabledGroups?.ids.has(group) === true && !isSelected;
                   return (
                     <TableRow
                       key={group}
                       data-state={isSelected ? "selected" : undefined}
-                      aria-disabled={isDisabled || undefined}
-                      onClick={() => !isDisabled && onToggleGroup(group)}
-                      className={cn(
-                        "border-border/60 transition-colors",
-                        isDisabled ? "cursor-not-allowed opacity-55" : "cursor-pointer"
-                      )}
+                      onClick={() => onToggleGroup(group)}
+                      className="cursor-pointer border-border/60 transition-colors"
                     >
                       <TableCell className="w-[50px] pl-4 pr-0">
                         <div className="flex items-center">
                           <Checkbox
                             checked={isSelected}
-                            disabled={isDisabled}
                             onCheckedChange={() => onToggleGroup(group)}
                             onClick={(event) => event.stopPropagation()}
                             aria-label={`Seleccionar grupo ${group}`}

@@ -12,6 +12,7 @@ import {
   type ObjectiveSet,
 } from "@/components/ciclo-builder";
 import {
+  aplicaEnDe,
   findEstadoForPercent,
   findNivelForPercent,
   type NivelDesempenoConfig,
@@ -119,19 +120,27 @@ export function personLastUpdate(person: TrackedPerson): ObjectiveUpdate | null 
 // ── Estados y niveles ──────────────────────────────────────────────────────
 
 /**
- * Los estados de la configuración se solapan a propósito: "En progreso" y
- * "No cumplió parcialmente" cubren el mismo 1–69 %, porque uno describe un
- * ciclo abierto y el otro uno ya cerrado. Aquí se decide cuál mitad aplica.
+ * Los estados de la configuración se solapan a propósito: "En progreso" y las
+ * bandas de veredicto cubren el mismo tramo, porque uno describe un ciclo
+ * abierto y las otras uno ya cerrado. Aquí se decide cuál mitad aplica.
+ *
+ * Los dos fijos son del ciclo vivo por definición —"Por iniciar" y "En
+ * progreso" describen el arranque del avance, no cómo cerró—. De las demás lo
+ * decide la empresa con `aplicaEn`: "Cumplido" se ve apenas se alcanza, pero
+ * "No cumplió" espera al cierre, porque a mitad de ciclo todavía puede cumplir.
  */
 const LIVE_ONLY_ESTADOS = new Set(["por-iniciar", "en-progreso"]);
-const CLOSED_ONLY_ESTADOS = new Set(["no-cumplio", "no-cumplio-parcialmente"]);
 
 export function estadosForStatus(
   estados: readonly ObjetivoEstadoConfig[],
   status: CicloStatus
 ): readonly ObjetivoEstadoConfig[] {
-  const excluded = status === "closed" ? LIVE_ONLY_ESTADOS : CLOSED_ONLY_ESTADOS;
-  return estados.filter((estado) => !excluded.has(estado.id));
+  if (status === "closed") {
+    return estados.filter((estado) => !LIVE_ONLY_ESTADOS.has(estado.id));
+  }
+  return estados.filter(
+    (estado) => LIVE_ONLY_ESTADOS.has(estado.id) || aplicaEnDe(estado) === "en-curso"
+  );
 }
 
 /**
