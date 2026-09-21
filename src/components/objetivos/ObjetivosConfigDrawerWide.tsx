@@ -77,7 +77,7 @@ const NAV_ITEMS: readonly NavItem[] = [
   },
   {
     id: "estados",
-    label: "Estados de los objetivos",
+    label: "Estados configurables de objetivos",
     hint: "El flujo, las bandas de cumplimiento y los resultados negativos.",
     icon: Target,
   },
@@ -287,7 +287,7 @@ export function ObjetivosConfigDrawerWide({
               <DrawerSection
                 icon={Target}
                 tone="brand"
-                title="Estados de los objetivos"
+                title="Estados configurables de objetivos"
                 hint="El nombre, el rango, el color y en qué momento del ciclo puede aparecer cada banda."
                 badge={`${estadosEditables.length} de ${MAX_ESTADOS}`}
                 stickyHeader

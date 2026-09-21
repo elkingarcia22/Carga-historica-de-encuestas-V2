@@ -68,7 +68,7 @@ export function MirroredNivelesNotice({
             description="Copiado del estado de cumplimiento con el mismo nombre."
             colorHex={nivel.colorHex}
             range={{ min: nivel.minPorcentaje, max: nivel.maxPorcentaje }}
-            lockReason="Este nivel copia una banda de cumplimiento. Se edita desde “Estados de los objetivos”."
+            lockReason="Este nivel copia una banda de cumplimiento. Se edita desde “Estados configurables de objetivos”."
           />
         ))}
       </div>
