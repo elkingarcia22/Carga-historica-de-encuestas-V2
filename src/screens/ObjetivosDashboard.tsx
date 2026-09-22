@@ -5,11 +5,14 @@ import {
   EyeOff,
   ListChecks,
   Search,
-  X
+  X,
+  LayoutList,
+  Table as TableIcon
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import {
   TableBody,
   TableCell,
@@ -46,9 +49,11 @@ import {
   formatCicloDate,
   type CicloActionId,
 } from "@/components/ciclo-list";
+import { CICLO_ACTIONS_BY_ESTADO } from "@/components/ciclo-list/cicloListActions";
 import { USUARIOS_COLUMNS, usuariosTableCells } from "@/components/objetivos";
 import { Checkbox } from "@/components/ui/checkbox";
 import { EmptyState } from "@/components/feedback";
+import { StatusBadge } from "@/components/status-badge";
 import { ConfirmDialog } from "@/components/overlays";
 import { CicloResults } from "@/screens/CicloResults";
 import { CargaObjetivosDrawer } from "@/components/carga-objetivos";
@@ -58,6 +63,7 @@ import {
   hasAnyFilter,
   matchesFilters,
   toggleFilterValue,
+  mapEstadoToStatusState,
   type CicloListFilters,
 } from "@/components/ciclo-list/cicloListFilters";
 
@@ -147,6 +153,7 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
   const [isConfigDrawerOpen, setIsConfigDrawerOpen] = React.useState(false);
 
   const [searchTerm, setSearchTerm] = React.useState("");
+  const [viewMode, setViewMode] = React.useState<"table" | "list">("table");
   const [isSearchExpanded, setIsSearchExpanded] = React.useState(false);
   const searchInputRef = React.useRef<HTMLInputElement>(null);
 
@@ -615,6 +622,25 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
               {/* Junto al buscador y a los embudos de las columnas: filtrar
                   cambia qué filas se miran, configurar cambia cómo se mira la
                   tabla, y se contestan en el mismo momento. */}
+                            <div className="flex bg-muted p-0.5 rounded-lg border border-border/50 items-center">
+                <button
+                  type="button"
+                  onClick={() => setViewMode("table")}
+                  className={cn("p-1.5 rounded-md transition-all", viewMode === "table" ? "bg-surface shadow-sm text-primary" : "text-muted-foreground hover:text-text-primary")}
+                  title="Vista tabla"
+                >
+                  <TableIcon className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode("list")}
+                  className={cn("p-1.5 rounded-md transition-all", viewMode === "list" ? "bg-surface shadow-sm text-primary" : "text-muted-foreground hover:text-text-primary")}
+                  title="Vista lista"
+                >
+                  <LayoutList className="w-4 h-4" />
+                </button>
+              </div>
+
               <TableConfigButton config={ciclosConfig} noun="ciclos" />
 
               <div
@@ -678,7 +704,7 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
                   }
                 />
               </div>
-            ) : (
+            ) : viewMode === "table" ? (
               <div className="relative w-full flex-1 min-h-0">
                 {/* Una `<table>` a secas y no el `Table` del sistema: ese la
                     envuelve en un `div` con `overflow-x` propio, y el
@@ -747,6 +773,50 @@ export const ObjetivosDashboard: React.FC<ObjetivosDashboardProps> = ({
                     />
                   </TableBody>
                 </table>
+              </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 min-h-0 bg-surface">
+                {shownCiclos.map((ciclo) => {
+                  const selected = selectedCiclos.has(ciclo.id);
+                  return (
+                    <div key={ciclo.id} className={cn("flex flex-col sm:flex-row sm:items-center gap-4 py-3 px-4 rounded-xl border transition-colors cursor-pointer", selected ? "border-primary/50 bg-primary/5 ring-1 ring-primary/20" : "border-border/60 bg-surface hover:border-primary/30")} onClick={() => handleToggleCiclo(ciclo.id)}>
+                      <div className="flex items-center gap-3" onClick={e => e.stopPropagation()}>
+                        <Checkbox checked={selected} onCheckedChange={() => handleToggleCiclo(ciclo.id)} disabled={dateEditCicloId === ciclo.id} />
+                      </div>
+                      <div className="flex flex-col gap-0.5 min-w-[220px] flex-1">
+                        <button
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (ciclo.estado === "Borrador") onEditCiclo?.(ciclo);
+                            else onViewResults?.(ciclo);
+                          }}
+                          disabled={
+                            dateEditCicloId === ciclo.id ||
+                            (!CICLO_ACTIONS_BY_ESTADO[ciclo.estado]?.includes("results") &&
+                              ciclo.estado !== "Borrador")
+                          }
+                          className="text-left font-bold text-text-primary text-[13px] transition-colors hover:text-primary hover:underline disabled:cursor-default disabled:no-underline disabled:hover:text-text-primary w-fit"
+                        >
+                          {ciclo.nombre}
+                        </button>
+                        <span className="text-muted-foreground text-[12px] font-medium">{ciclo.periodo} • {ciclo.fechaInicio} a {ciclo.fechaCierre}</span>
+                      </div>
+                      
+                      <div className="w-[120px] flex shrink-0 items-center">
+                        <StatusBadge state={mapEstadoToStatusState(ciclo.estado)} labels={{ [mapEstadoToStatusState(ciclo.estado)]: ciclo.estado }} />
+                      </div>
+                      
+                      <div className="w-[180px] shrink-0 flex flex-col gap-1.5">
+                        <div className="flex justify-between items-center text-[10px] text-muted-foreground font-bold tracking-wider">
+                          <span className="uppercase">Avance</span>
+                          <span>{ciclo.avance}</span>
+                        </div>
+                        <Progress value={Math.min(ciclo.progreso, 100)} className="h-1.5 w-full [&>div]:transition-none" />
+                      </div>
+                    </div>
+                  );
+                })}
+                <LazyRowsSentinel lazy={ciclosLazy} colSpan={1} noun="ciclos" />
               </div>
             )}
           </motion.div>

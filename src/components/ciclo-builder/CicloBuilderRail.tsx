@@ -293,7 +293,8 @@ export function CicloBuilderRail({
    * en `CicloResultsActionRail`): estas se retiran del todo mientras hay
    * selección, no se quedan atenuadas.
    */
-  const hasAnySelection = hasParticipantsSelection || assignmentSelection !== null;
+  const hasAnySelection =
+    (hasParticipantsSelection && onDeleteParticipantsSelection != null) || assignmentSelection !== null;
 
   return (
     <>
@@ -482,8 +483,6 @@ export function CicloBuilderRail({
                       }}
                     />
                   </AnimatedActionItem>
-
-                  <div className="-mx-1 my-2 w-px self-stretch bg-white/10" />
                 </>
               )}
 
@@ -521,7 +520,6 @@ export function CicloBuilderRail({
                       />
                     </AnimatedActionItem>
                   )}
-                  <div className="-mx-1 my-2 w-px self-stretch bg-white/10" />
                 </>
               )}
 

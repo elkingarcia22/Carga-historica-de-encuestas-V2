@@ -1,4 +1,5 @@
 import { ListChecks, UserRound, UsersRound } from "lucide-react";
+import { FilterMenu, SortableHeader, type SortDir, type SortKey } from "@/components/survey-builder/CollaboratorTableParts";
 import type { TableColumnCells, TableColumnSpec } from "@/components/data-display";
 import type { ObjectiveSetKind } from "./cicloBuilderTypes";
 import type { AssignmentRow } from "./assignmentRows";
@@ -28,9 +29,27 @@ export const assignmentColumns = (kind: ObjectiveSetKind): readonly TableColumnS
   { id: "estado", label: "Estado" },
 ];
 
+
+export type AssignmentSortKey = "destinatario" | "objetivos" | "peso";
+
+export interface AssignmentCellsDeps {
+  sortKey: AssignmentSortKey | null;
+  sortDir: SortDir;
+  onToggleSort: (key: AssignmentSortKey) => void;
+  agrupaciones: readonly string[];
+  agrupacionFilter: ReadonlySet<string>;
+  onToggleAgrupacion: (value: string) => void;
+  onClearAgrupacion: () => void;
+  estados: readonly string[];
+  estadoFilter: ReadonlySet<string>;
+  onToggleEstado: (value: string) => void;
+  onClearEstado: () => void;
+}
+
 export function assignmentTableCells(
   kind: ObjectiveSetKind,
-  showValidation: boolean
+  showValidation: boolean,
+  deps: AssignmentCellsDeps
 ): TableColumnCells<AssignmentRow> {
   const isGroup = kind === "grupal";
   const Icon = isGroup ? UsersRound : UserRound;
@@ -38,7 +57,14 @@ export function assignmentTableCells(
   return {
     destinatario: {
       headClassName: "min-w-[220px]",
-      head: isGroup ? "Grupo" : "Persona",
+      head: (
+        <SortableHeader
+          label={isGroup ? "Grupo" : "Persona"}
+          active={deps.sortKey === "destinatario"}
+          direction={deps.sortDir}
+          onToggle={() => deps.onToggleSort("destinatario")}
+        />
+      ),
       cell: (row) => (
         <span className="flex min-w-0 items-center gap-2.5">
           <span
@@ -56,12 +82,27 @@ export function assignmentTableCells(
     },
     agrupacion: {
       headClassName: "min-w-[170px]",
-      head: "Agrupación",
+      head: (
+        <FilterMenu
+          label="Agrupación"
+          options={deps.agrupaciones}
+          selected={deps.agrupacionFilter}
+          onToggle={deps.onToggleAgrupacion}
+          onClear={deps.onClearAgrupacion}
+        />
+      ),
       cell: (row) => <AssignmentOriginTag summary={row.summary} />,
     },
     objetivos: {
       headClassName: "w-[120px]",
-      head: "Objetivos",
+      head: (
+        <SortableHeader
+          label="Objetivos"
+          active={deps.sortKey === "objetivos"}
+          direction={deps.sortDir}
+          onToggle={() => deps.onToggleSort("objetivos")}
+        />
+      ),
       cell: (row) => (
         <span className="flex items-center gap-1.5 text-[12.5px] font-semibold text-text-secondary">
           <ListChecks className="size-3.5 text-text-muted" strokeWidth={2} />
@@ -71,7 +112,14 @@ export function assignmentTableCells(
     },
     peso: {
       headClassName: "w-[180px]",
-      head: "Peso repartido",
+      head: (
+        <SortableHeader
+          label="Peso repartido"
+          active={deps.sortKey === "peso"}
+          direction={deps.sortDir}
+          onToggle={() => deps.onToggleSort("peso")}
+        />
+      ),
       cell: (row) => (
         <AssignmentWeightMeter
           weight={row.summary.weight}
@@ -82,7 +130,15 @@ export function assignmentTableCells(
     },
     estado: {
       headClassName: "min-w-[150px]",
-      head: "Estado",
+      head: (
+        <FilterMenu
+          label="Estado"
+          options={deps.estados}
+          selected={deps.estadoFilter}
+          onToggle={deps.onToggleEstado}
+          onClear={deps.onClearEstado}
+        />
+      ),
       cell: (row) => (
         <AssignmentStatusPill issue={row.summary.issue} showValidation={showValidation} />
       ),

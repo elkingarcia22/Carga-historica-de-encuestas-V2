@@ -194,7 +194,9 @@ export function ObjectiveSetsEditor({
    * eso el estado de lo marcado vive aquí arriba y no dentro de ninguna de las
    * dos. Cambiar de vista con tres grupos marcados los deja marcados.
    */
-  const [view, setView] = React.useState<AssignmentView>("asignacion");
+  const [view, setView] = React.useState<AssignmentView>(
+    kind === "individual" ? "lista" : "asignacion"
+  );
 
   const copy = COPY[kind];
   const isGroup = kind === "grupal";
@@ -545,18 +547,33 @@ export function ObjectiveSetsEditor({
                 ariaLabel="Cómo ver lo asignado"
                 size="sm"
                 className="w-auto shrink-0"
-                options={[
-                  {
-                    value: "asignacion",
-                    label: `Agrupaciones (${sets.length})`,
-                    icon: Layers,
-                  },
-                  {
-                    value: "lista",
-                    label: `${isGroup ? "Lista de grupos" : "Lista de colaboradores"} (${rows.length})`,
-                    icon: Rows3,
-                  },
-                ]}
+                options={
+                  isGroup
+                    ? [
+                        {
+                          value: "asignacion",
+                          label: `Agrupaciones (${sets.length})`,
+                          icon: Layers,
+                        },
+                        {
+                          value: "lista",
+                          label: `Lista de grupos (${rows.length})`,
+                          icon: Rows3,
+                        },
+                      ]
+                    : [
+                        {
+                          value: "lista",
+                          label: `Lista de colaboradores (${rows.length})`,
+                          icon: Rows3,
+                        },
+                        {
+                          value: "asignacion",
+                          label: `Agrupaciones (${sets.length})`,
+                          icon: Layers,
+                        },
+                      ]
+                }
                 value={view}
                 onChange={(next) => setView(next as AssignmentView)}
               />
